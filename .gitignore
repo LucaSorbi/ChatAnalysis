@@ -1,0 +1,142 @@
+# =============================================================================
+# Python
+# =============================================================================
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+.eggs/
+*.whl
+.installed.cfg
+MANIFEST
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / packaging
+pip-log.txt
+pip-delete-this-directory.txt
+
+# Unit test / coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.tox/
+.nox/
+coverage.xml
+*.cover
+*.py,cover
+nosetests.xml
+
+# Type checkers
+.mypy_cache/
+.dmypy.json
+dmypy.json
+.pytype/
+.pyre/
+pyrightconfig.json
+
+# Jupyter
+.ipynb_checkpoints/
+*.ipynb
+
+# =============================================================================
+# IDE / OS
+# =============================================================================
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
+desktop.ini
+*.lnk
+
+# =============================================================================
+# Dati forensi reali — MAI versionare
+# =============================================================================
+# Database WhatsApp reali
+msgstore*.db
+wa*.db
+backup.db
+
+# Export Cellebrite reali
+*.ufdr
+*.ufd
+
+# File cifrati WhatsApp
+*.crypt12
+*.crypt14
+*.crypt15
+
+# Backup Android reali
+*.ab
+*.tar
+*.bak
+
+# Directory con dati reali — aggiungere qui
+# real_data/
+# evidence/
+# case_*/
+
+# =============================================================================
+# Output del profiler — potenzialmente sensibili
+# =============================================================================
+# I file di output generati dal profiler contengono statistiche aggregate
+# che possono rivelare struttura dei dati. Non versionare per default.
+# ECCEZIONE: .gitkeep permette di versionare la directory vuota.
+output/*
+!output/.gitkeep
+
+# =============================================================================
+# Modelli AI scaricati localmente
+# =============================================================================
+models/
+*.bin
+*.safetensors
+*.gguf
+*.ggml
+*.pt
+*.pth
+*.onnx
+
+# =============================================================================
+# Variabili d'ambiente e segreti
+# =============================================================================
+.env
+.env.*
+!.env.example
+*.secret
+secrets/
+
+# =============================================================================
+# Database generati / temporanei
+# =============================================================================
+*.sqlite
+*.sqlite3
+# eccezione: i database sintetici in test_data/ sono versionati
+!test_data/**/*.db
+!test_data/**/*.sqlite
+
+# =============================================================================
+# Log e temporanei
+# =============================================================================
+*.log
+*.tmp
+*.temp
+*.pid
+.cache/
+
+# =============================================================================
+# NOTA: test_data/ contiene esclusivamente dati sintetici ed è versionato.
+# Aggiungere qui eventuali sottodirectory con dati reali se vengono create.
+# =============================================================================

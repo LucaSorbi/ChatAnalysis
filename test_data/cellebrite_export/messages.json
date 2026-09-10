@@ -1,0 +1,1602 @@
+[
+  {
+    "id": "msg_00000",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2024-10-31T16:50:00+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Ho comprato la roba 💊",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00001",
+    "chat_id": "chat_2",
+    "sender": "+1 212 5550101",
+    "timestamp": "2025-05-13T13:42:44+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ci vediamo domani alle 10?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00002",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-03-25T04:44:20+00:00",
+    "type": "text",
+    "content": {
+      "text": "Non mi rispondere sul telefono",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": true,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00003",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2024-02-20T17:38:15+00:00",
+    "type": "text",
+    "content": {
+      "text": "Mandami la foto quando sei pronto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00004",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-07-05T16:10:19+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Ci vediamo domani alle 10?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00005",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-09-01T08:12:06+00:00",
+    "type": "text",
+    "content": {
+      "text": "Tutto ok dalla mia parte",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00006",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-09-01T06:11:28+00:00",
+    "type": "text",
+    "content": {
+      "text": "Porta il pacco al solito posto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00007",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-01-25T01:15:35+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00008",
+    "chat_id": "chat_1",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-05-05T05:24:52+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ho comprato la roba 💊",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00009",
+    "chat_id": "chat_3",
+    "sender": "+39 347 9876543",
+    "timestamp": "2025-06-13T07:19:48+00:00",
+    "type": "text",
+    "content": {
+      "text": null,
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00010",
+    "chat_id": "chat_2",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-09-22T04:26:32+00:00",
+    "type": "text",
+    "content": {
+      "text": "Mandami la foto quando sei pronto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00011",
+    "chat_id": "chat_2",
+    "sender": "+39 347 9876543",
+    "timestamp": "2025-06-14T09:41:03+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ho comprato la roba 💊",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00012",
+    "chat_id": "chat_1",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-03-16T15:46:48+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ho comprato la roba 💊",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00013",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-08-17T14:32:09+00:00",
+    "type": "text",
+    "content": {
+      "text": "Tutto ok dalla mia parte",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00014",
+    "chat_id": "chat_2",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-12-23T20:50:15+00:00",
+    "type": "text",
+    "content": {
+      "text": "https://t.me/examplegroup",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00015",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-03-17T17:57:35+00:00",
+    "type": "text",
+    "content": {
+      "text": "Mandami la foto quando sei pronto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00016",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-04-10T04:26:25+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Non mi rispondere sul telefono",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00017",
+    "chat_id": "chat_3",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-07-23T03:27:30+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Ci vediamo domani alle 10?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00018",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-01-07T04:04:02+00:00",
+    "type": "text",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00019",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-10-28T13:00:04+00:00",
+    "type": "text",
+    "content": {
+      "text": "https://t.me/examplegroup",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00020",
+    "chat_id": "chat_1",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-03-25T18:07:35+00:00",
+    "type": "text",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00021",
+    "chat_id": "chat_2",
+    "sender": "group_participant_A",
+    "timestamp": "2024-09-03T10:37:06+00:00",
+    "type": "image",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00022",
+    "chat_id": "chat_3",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-01-30T17:38:04+00:00",
+    "type": "image",
+    "content": {
+      "text": "Non scrivere qui, usa l'altra app",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00023",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-04-11T20:53:42+00:00",
+    "type": "text",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00024",
+    "chat_id": "chat_3",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-01-18T19:41:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Hai visto il nuovo posto in via Roma?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00025",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-11-10T15:01:25+00:00",
+    "type": "image",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00026",
+    "chat_id": "chat_1",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-02-11T17:49:43+00:00",
+    "type": "text",
+    "content": {
+      "text": "Mandami la foto quando sei pronto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00027",
+    "chat_id": "chat_3",
+    "sender": "+39 347 9876543",
+    "timestamp": "2025-01-04T07:57:05+00:00",
+    "type": "image",
+    "content": {
+      "text": "Tutto ok dalla mia parte",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00028",
+    "chat_id": "chat_3",
+    "sender": "+39 347 9876543",
+    "timestamp": "2025-03-11T16:05:28+00:00",
+    "type": "text",
+    "content": {
+      "text": "Non scrivere qui, usa l'altra app",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00029",
+    "chat_id": "chat_1",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-09-02T20:16:21+00:00",
+    "type": "image",
+    "content": {
+      "text": "Non scrivere qui, usa l'altra app",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00030",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2025-06-07T11:15:04+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00031",
+    "chat_id": "chat_2",
+    "sender": "group_participant_A",
+    "timestamp": "2025-05-07T16:04:46+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ci vediamo domani alle 10?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00032",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2025-02-28T03:47:06+00:00",
+    "type": "image",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00033",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2025-03-24T01:00:37+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00034",
+    "chat_id": "chat_3",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-04-06T21:25:18+00:00",
+    "type": "image",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00035",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-02-10T08:35:32+00:00",
+    "type": "text",
+    "content": {
+      "text": "https://t.me/examplegroup",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00036",
+    "chat_id": "chat_2",
+    "sender": "+1 212 5550101",
+    "timestamp": "2025-02-25T13:50:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00037",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-03-18T01:41:21+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00038",
+    "chat_id": "chat_3",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-04-29T12:57:13+00:00",
+    "type": "image",
+    "content": {
+      "text": null,
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": true,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00039",
+    "chat_id": "chat_1",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-11-22T17:18:50+00:00",
+    "type": "image",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00040",
+    "chat_id": "chat_2",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-09-29T07:54:45+00:00",
+    "type": "image",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00041",
+    "chat_id": "chat_3",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-07-26T20:35:45+00:00",
+    "type": "text",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": true,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00042",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-01-26T09:05:56+00:00",
+    "type": "text",
+    "content": {
+      "text": "Tutto ok dalla mia parte",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00043",
+    "chat_id": "chat_2",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-09-03T14:05:15+00:00",
+    "type": "audio",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00044",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-05-15T13:07:37+00:00",
+    "type": "audio",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00045",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-05-14T22:19:28+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Ok confermato per stasera",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00046",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2025-01-26T16:01:57+00:00",
+    "type": "image",
+    "content": {
+      "text": "Hai visto il nuovo posto in via Roma?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00047",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-03-13T10:23:18+00:00",
+    "type": "image",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00048",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2025-02-26T06:47:22+00:00",
+    "type": "image",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00049",
+    "chat_id": "chat_2",
+    "sender": "+39 347 9876543",
+    "timestamp": "2025-05-05T12:02:47+00:00",
+    "type": "text",
+    "content": {
+      "text": "Il prezzo è cambiato, ora costa di più",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00050",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-10-20T16:25:28+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ho comprato la roba 💊",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00051",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-03-25T23:57:07+00:00",
+    "type": "image",
+    "content": {
+      "text": "Porta il pacco al solito posto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00052",
+    "chat_id": "chat_1",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-03-13T01:29:28+00:00",
+    "type": "text",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00053",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-02-27T03:33:19+00:00",
+    "type": "text",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00054",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-05-05T03:11:22+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ok confermato per stasera",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00055",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-04-01T00:53:57+00:00",
+    "type": "image",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00056",
+    "chat_id": "chat_3",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-05-29T18:53:46+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00057",
+    "chat_id": "chat_1",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-10-10T10:03:16+00:00",
+    "type": "text",
+    "content": {
+      "text": "Non mi rispondere sul telefono",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00058",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-04-08T07:37:36+00:00",
+    "type": "image",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00059",
+    "chat_id": "chat_2",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-08-16T14:32:19+00:00",
+    "type": "image",
+    "content": {
+      "text": null,
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00060",
+    "chat_id": "chat_3",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-06-02T16:41:03+00:00",
+    "type": "image",
+    "content": {
+      "text": "Porta il pacco al solito posto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00061",
+    "chat_id": "chat_3",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-06-08T20:58:58+00:00",
+    "type": "image",
+    "content": {
+      "text": "https://t.me/examplegroup",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00062",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2025-04-28T19:54:07+00:00",
+    "type": "image",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00063",
+    "chat_id": "chat_2",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-02-19T22:00:35+00:00",
+    "type": "text",
+    "content": {
+      "text": null,
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00064",
+    "chat_id": "chat_3",
+    "sender": "+39 320 5554433",
+    "timestamp": "2025-05-16T01:29:51+00:00",
+    "type": "image",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00065",
+    "chat_id": "chat_2",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-05-24T09:42:17+00:00",
+    "type": "text",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00066",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-04-04T23:54:16+00:00",
+    "type": "text",
+    "content": {
+      "text": "Non mi rispondere sul telefono",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00067",
+    "chat_id": "chat_3",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-06-29T16:53:12+00:00",
+    "type": "image",
+    "content": {
+      "text": "Mandami la foto quando sei pronto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00068",
+    "chat_id": "chat_3",
+    "sender": "group_participant_A",
+    "timestamp": "2024-08-03T23:11:56+00:00",
+    "type": "text",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00069",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-06-02T21:47:29+00:00",
+    "type": "image",
+    "content": {
+      "text": "",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00070",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2024-12-17T16:31:34+00:00",
+    "type": "text",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": true,
+      "starred": true
+    }
+  },
+  {
+    "id": "msg_00071",
+    "chat_id": "chat_1",
+    "sender": "+1 212 5550101",
+    "timestamp": "2025-03-23T04:55:14+00:00",
+    "type": "text",
+    "content": {
+      "text": "Non scrivere qui, usa l'altra app",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00072",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2025-02-13T17:34:04+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ho comprato la roba 💊",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00073",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-08-21T19:00:52+00:00",
+    "type": "text",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00074",
+    "chat_id": "chat_2",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-02-06T13:30:00+00:00",
+    "type": "image",
+    "content": {
+      "text": "",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00075",
+    "chat_id": "chat_3",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-10-17T10:06:52+00:00",
+    "type": "text",
+    "content": {
+      "text": "Il prezzo è cambiato, ora costa di più",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": true,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00076",
+    "chat_id": "chat_3",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-09-07T18:31:43+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ok confermato per stasera",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00077",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-02-21T12:48:51+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ci vediamo domani alle 10?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00078",
+    "chat_id": "chat_3",
+    "sender": "group_participant_A",
+    "timestamp": "2024-09-12T19:08:13+00:00",
+    "type": "image",
+    "content": {
+      "text": "Hai visto il nuovo posto in via Roma?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00079",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-04-03T03:07:28+00:00",
+    "type": "text",
+    "content": {
+      "text": "👍",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00080",
+    "chat_id": "chat_3",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-07-05T19:40:55+00:00",
+    "type": "image",
+    "content": {
+      "text": "Hai visto il nuovo posto in via Roma?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00081",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-07-23T21:48:45+00:00",
+    "type": "text",
+    "content": {
+      "text": "Il prezzo è cambiato, ora costa di più",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00082",
+    "chat_id": "chat_1",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-03-01T14:20:14+00:00",
+    "type": "text",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": true,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00083",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-05-25T23:02:05+00:00",
+    "type": "text",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00084",
+    "chat_id": "chat_2",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-08-31T09:26:08+00:00",
+    "type": "text",
+    "content": {
+      "text": null,
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00085",
+    "chat_id": "chat_2",
+    "sender": "group_participant_A",
+    "timestamp": "2024-10-26T11:39:10+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00086",
+    "chat_id": "chat_3",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-05-07T12:50:28+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Porta il pacco al solito posto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00087",
+    "chat_id": "chat_1",
+    "sender": "+1 212 5550101",
+    "timestamp": "2024-07-05T20:24:33+00:00",
+    "type": "text",
+    "content": {
+      "text": "Hai visto il nuovo posto in via Roma?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": true,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00088",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2024-07-25T06:44:46+00:00",
+    "type": "text",
+    "content": {
+      "text": "Tutto ok dalla mia parte",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00089",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-01-29T12:26:32+00:00",
+    "type": "image",
+    "content": {
+      "text": "Hai visto il nuovo posto in via Roma?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": true,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00090",
+    "chat_id": "chat_1",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-11-24T05:37:05+00:00",
+    "type": "text",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00091",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2025-02-06T19:44:55+00:00",
+    "type": "text",
+    "content": {
+      "text": "Il prezzo è cambiato, ora costa di più",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00092",
+    "chat_id": "chat_3",
+    "sender": "+39 320 5554433",
+    "timestamp": "2024-01-28T17:16:18+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ho comprato la roba 💊",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00093",
+    "chat_id": "chat_3",
+    "sender": "+1 212 5550101",
+    "timestamp": "2025-06-27T07:51:14+00:00",
+    "type": "image",
+    "content": {
+      "text": "Attenzione ci sono controlli",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00094",
+    "chat_id": "chat_2",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-07-27T08:51:30+00:00",
+    "type": "text",
+    "content": {
+      "text": "Quanto vuoi per 50?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00095",
+    "chat_id": "chat_1",
+    "sender": "+39 347 9876543",
+    "timestamp": "2024-01-03T09:54:58+00:00",
+    "type": "audio",
+    "content": {
+      "text": "",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00096",
+    "chat_id": "chat_2",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-05-12T05:21:54+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ok confermato per stasera",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00097",
+    "chat_id": "chat_2",
+    "sender": "+1 212 5550101",
+    "timestamp": "2025-06-01T07:43:29+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ciao come stai?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00098",
+    "chat_id": "chat_1",
+    "sender": "group_participant_A",
+    "timestamp": "2025-06-11T13:15:37+00:00",
+    "type": "text",
+    "content": {
+      "text": "",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "msg_00099",
+    "chat_id": "chat_1",
+    "sender": "+39 333 1234567",
+    "timestamp": "2024-03-25T23:06:10+00:00",
+    "type": "audio",
+    "content": {
+      "text": "Mandami la foto quando sei pronto",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  }
+]

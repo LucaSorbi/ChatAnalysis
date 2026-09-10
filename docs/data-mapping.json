@@ -1,0 +1,440 @@
+{
+  "_meta": {
+    "version": "1.0",
+    "generated_at": "2026-09-09",
+    "phase": "Fase 2 — Analisi semantica (sola lettura)",
+    "note": "Nessun dato originale e stato modificato"
+  },
+  "sources": [
+    {
+      "source_name": "msgstore_db",
+      "source_file": "whatsapp_export/msgstore.db",
+      "source_type": "sqlite",
+      "origin": "Backup WhatsApp nativo (Android)",
+      "record_count": 504,
+      "timestamp_range": {
+        "min": "2024-01-01T10:39:39Z",
+        "max": "2025-06-27T00:00:00Z"
+      },
+      "timestamp_anomaly_count": 3,
+      "tables": {
+        "messages": {
+          "row_count": 504,
+          "primary_key": "_id",
+          "whatsapp_message_id": "key_id",
+          "chat_field": "key_remote_jid",
+          "sender_field": "key_remote_jid",
+          "direction_field": "key_from_me",
+          "group_sender_field": "remote_resource",
+          "timestamp_field": "timestamp",
+          "timestamp_format": "unix_ms",
+          "text_field": "data",
+          "message_type_field": "media_wa_type",
+          "media_ref_field": "media_url",
+          "deleted_field": "deleted",
+          "forwarded_field": "forwarded",
+          "starred_field": "starred",
+          "reply_field": "quoted_row_id",
+          "status_field": "status",
+          "media_type_enum": {
+            "0": "text",
+            "1": "image",
+            "2": "audio",
+            "3": "video"
+          },
+          "deleted_values": {
+            "0": "not_deleted",
+            "1": "deleted"
+          },
+          "forwarded_values": {
+            "0": "not_forwarded",
+            "1": "forwarded"
+          },
+          "key_from_me_values": {
+            "0": "incoming",
+            "1": "outgoing"
+          }
+        },
+        "chat_list": {
+          "row_count": 3,
+          "primary_key": "_id",
+          "chat_jid_field": "key_remote_jid",
+          "last_message_field": "message_table_id",
+          "group_name_field": "subject",
+          "creation_field": "creation"
+        },
+        "media_refs": {
+          "row_count": 115,
+          "primary_key": "_id",
+          "message_fk_field": "message_row_id",
+          "file_path_field": "file_path",
+          "file_size_field": "file_size",
+          "media_type_field": "media_type",
+          "uuid_field": "media_job_uuid",
+          "media_type_enum": {
+            "1": "image",
+            "2": "audio",
+            "3": "video"
+          },
+          "note": "file_path e identico a messages.media_url per gli stessi messaggi (ridondante)"
+        }
+      }
+    },
+    {
+      "source_name": "wa_db",
+      "source_file": "whatsapp_export/wa.db",
+      "source_type": "sqlite",
+      "origin": "Database contatti WhatsApp nativo (Android)",
+      "record_count": 4,
+      "tables": {
+        "contacts": {
+          "row_count": 4,
+          "primary_key": "_id",
+          "jid_field": "jid",
+          "display_name_field": "display_name",
+          "phone_field": "phone_number",
+          "status_field": "status",
+          "join_key": "jid -> messages.key_remote_jid in msgstore.db"
+        }
+      }
+    },
+    {
+      "source_name": "cellebrite_csv",
+      "source_file": "cellebrite_export/messages.csv",
+      "source_type": "csv",
+      "origin": "Cellebrite UFED — estrazione fisica/logica",
+      "record_count": 302,
+      "timestamp_range": {
+        "min": "2024-01-02T05:25:36",
+        "max": "2025-06-28T06:46:33"
+      },
+      "timestamp_note": "Formato YYYY-MM-DD HH:MM:SS senza timezone — probabilmente UTC",
+      "fields": {
+        "id": "assente (nessun ID univoco per record)",
+        "chat": "ChatId (opaco: chat_1, chat_2, chat_3)",
+        "sender": "From (numero internazionale o alias)",
+        "recipient": "To (numero internazionale o alias)",
+        "direction": "Direction (Outgoing/Incoming)",
+        "timestamp": "TimeStamp",
+        "text": "Body",
+        "media_ref": "Attachments (path Cellebrite: Files\\IMG_XXXX.jpg)",
+        "message_type": "MessageType (Text, Image)",
+        "status": "Status (Delivered, Received, Sent, Read)",
+        "deleted": "Deleted (True/False)",
+        "forwarded": "Forwarded (True/False)",
+        "app": "ApplicationId (sempre com.whatsapp)",
+        "chat_id": "ChatId"
+      },
+      "chat_id_distribution": {
+        "chat_1": 104,
+        "chat_2": 107,
+        "chat_3": 91
+      },
+      "duplicate_count": 1,
+      "duplicate_type": "exact",
+      "duplicate_rows": [
+        5,
+        300
+      ]
+    },
+    {
+      "source_name": "cellebrite_json",
+      "source_file": "cellebrite_export/messages.json",
+      "source_type": "json_array",
+      "origin": "Cellebrite — formato strutturato alternativo",
+      "record_count": 100,
+      "timestamp_range": {
+        "min": "2024-01-03T09:54:58+00:00",
+        "max": "2025-06-27T07:51:14+00:00"
+      },
+      "timestamp_note": "ISO 8601 con timezone esplicita +00:00",
+      "schema": {
+        "id": "msg_NNNNN",
+        "chat_id": "chat_1 | chat_2 | chat_3 (opachi)",
+        "sender": "numero E.164 o alias",
+        "timestamp": "ISO 8601 +00:00",
+        "type": "text | image | audio",
+        "content.text": "testo del messaggio (sempre presente)",
+        "content.media_path": "path media (sempre null nel campione)",
+        "metadata.deleted": "boolean",
+        "metadata.forwarded": "boolean",
+        "metadata.starred": "boolean"
+      },
+      "type_distribution": {
+        "text": 58,
+        "image": 28,
+        "audio": 14
+      },
+      "chat_id_distribution": {
+        "chat_1": 40,
+        "chat_2": 38,
+        "chat_3": 22
+      },
+      "duplicate_count": 0
+    },
+    {
+      "source_name": "cellebrite_xml",
+      "source_file": "cellebrite_export/report.xml",
+      "source_type": "xml_ufdr",
+      "origin": "Cellebrite — report UFDR ufficiale",
+      "record_count": 50,
+      "timestamp_range": {
+        "min": "2024-01-01T11:57:44+00:00",
+        "max": "2025-06-23T03:35:03+00:00"
+      },
+      "timestamp_note": "ISO 8601 con timezone esplicita +00:00",
+      "root_element": "DumpFile",
+      "message_element": "Message",
+      "schema": {
+        "Message[id]": "attributo intero progressivo 0-49",
+        "Timestamp": "ISO 8601 +00:00",
+        "Sender": "numero E.164 o alias",
+        "Body": "testo (null per messaggi media)",
+        "Deleted": "true | false"
+      },
+      "device_info_fields": [
+        "Model",
+        "OS",
+        "IMEI"
+      ],
+      "imei_note": "IMEI presente nel report XML — NON includere nei log o report",
+      "duplicate_count": 0
+    }
+  ],
+  "cross_source_analysis": {
+    "timestamp_overlap": {
+      "db_csv": 0,
+      "db_json": 0,
+      "db_xml": 0,
+      "csv_json": 0,
+      "csv_xml": 0,
+      "json_xml": 0,
+      "all_four": 0,
+      "conclusion": "Nessun timestamp condiviso — le sorgenti sono dataset distinti"
+    },
+    "relationship_type": "C — dataset parzialmente sovrapposti",
+    "cellebrite_internal_relationship": "estrazioni diverse dello stesso dataset Cellebrite (CSV=full, JSON=subset, XML=curated)",
+    "db_vs_cellebrite": "fonti indipendenti — nessuna chiave comune diretta",
+    "potential_link_keys": [
+      {
+        "key": "phone_number_e164",
+        "db_field": "key_remote_jid (normalizzare JID -> E.164)",
+        "csv_field": "From / To",
+        "json_field": "sender",
+        "xml_field": "Sender",
+        "reliability": "alta (dopo normalizzazione)"
+      },
+      {
+        "key": "timestamp_utc",
+        "db_field": "timestamp (unix_ms / 1000 -> UTC)",
+        "csv_field": "TimeStamp (assumere UTC)",
+        "json_field": "timestamp (ISO 8601 +00:00)",
+        "xml_field": "Timestamp (ISO 8601 +00:00)",
+        "reliability": "non utilizzabile (0 overlap nel campione)"
+      },
+      {
+        "key": "body_hash",
+        "db_field": "SHA256(data)",
+        "csv_field": "SHA256(Body)",
+        "json_field": "SHA256(content.text)",
+        "xml_field": "SHA256(Body)",
+        "reliability": "media (solo per messaggi con testo)"
+      }
+    ]
+  },
+  "media_mapping": {
+    "primary_mechanism": {
+      "db_field": "messages.media_url",
+      "value_format": "WhatsApp Images/IMG_NNNNN.jpg | WhatsApp Audio/AUD_NNNNN.opus | WhatsApp Video/VID_NNNNN.mp4",
+      "disk_path_resolution": "base_dir + '/' + media_url",
+      "redundant_field": "media_refs.file_path (stesso valore)"
+    },
+    "cellebrite_csv_mechanism": {
+      "db_field": "Attachments",
+      "value_format": "Files\\IMG_NNNN.jpg",
+      "note": "Schema diverso: directory 'Files\\' vs 'WhatsApp Images/', padding diverso nel nome"
+    },
+    "cellebrite_json_mechanism": {
+      "db_field": "content.media_path",
+      "note": "Sempre null nel campione — nessun riferimento media disponibile"
+    },
+    "cellebrite_xml_mechanism": {
+      "note": "Nessun tag per allegati media nel report XML"
+    },
+    "stats": {
+      "media_refs_total": 115,
+      "disk_files_total": 35,
+      "refs_with_matching_file": 2,
+      "refs_without_file": 113,
+      "orphan_files_on_disk": 33,
+      "note": "Incongruenza dovuta al campione sintetico"
+    },
+    "cardinality": {
+      "message_to_media": "1:1 (un messaggio ha al massimo un file media)",
+      "message_to_media_refs": "1:1 (un record per media_refs per messaggio)"
+    }
+  },
+  "participants": {
+    "known_contacts": [
+      {
+        "jid": "[REDACTED_1]",
+        "display_name": "Contatto 1",
+        "note": "Presente in wa.db"
+      },
+      {
+        "jid": "[REDACTED_2]",
+        "display_name": "Contatto 2",
+        "note": "Presente in wa.db"
+      },
+      {
+        "jid": "[REDACTED_3]",
+        "display_name": "Contatto 3",
+        "note": "Presente in wa.db"
+      },
+      {
+        "jid": "[REDACTED_4]",
+        "display_name": "Contatto 4",
+        "note": "Presente in wa.db"
+      }
+    ],
+    "unresolved_alias": [
+      {
+        "alias": "group_participant_A",
+        "sources": [
+          "cellebrite_csv",
+          "cellebrite_json",
+          "cellebrite_xml",
+          "msgstore_db.remote_resource"
+        ],
+        "note": "Non mappabile a JID o numero senza tabella di risoluzione"
+      }
+    ],
+    "owner_detection": {
+      "db_method": "key_from_me = 1 indica messaggio inviato dal proprietario del device",
+      "csv_method": "Direction = Outgoing",
+      "json_method": "assente (campo sender include solo numeri)"
+    }
+  },
+  "chats": {
+    "db_chats": [
+      {
+        "jid_type": "private",
+        "count": 2,
+        "identified_by": "key_remote_jid ending in @s.whatsapp.net"
+      },
+      {
+        "jid_type": "group",
+        "count": 1,
+        "identified_by": "key_remote_jid ending in @g.us"
+      }
+    ],
+    "cellebrite_chats": [
+      {
+        "cellebrite_id": "chat_1",
+        "record_count_csv": 104,
+        "record_count_json": 40,
+        "db_jid": "sconosciuto"
+      },
+      {
+        "cellebrite_id": "chat_2",
+        "record_count_csv": 107,
+        "record_count_json": 38,
+        "db_jid": "sconosciuto"
+      },
+      {
+        "cellebrite_id": "chat_3",
+        "record_count_csv": 91,
+        "record_count_json": 22,
+        "db_jid": "sconosciuto"
+      }
+    ],
+    "open_question": "Mapping ChatId Cellebrite -> JID WhatsApp non disponibile nel campione"
+  },
+  "duplicates": [
+    {
+      "source": "msgstore_db",
+      "table": "messages",
+      "count": 1,
+      "type": "exact",
+      "key_field": "key_id",
+      "duplicate_key_value": "KEY_000010",
+      "row_ids": [
+        11,
+        501
+      ],
+      "differing_fields": [
+        "_id"
+      ],
+      "dedup_strategy": "keep min(_id)"
+    },
+    {
+      "source": "cellebrite_csv",
+      "count": 1,
+      "type": "exact",
+      "all_fields_identical": true,
+      "row_indices": [
+        5,
+        300
+      ],
+      "dedup_strategy": "keep first occurrence"
+    }
+  ],
+  "timestamp_analysis": {
+    "canonical_field": "msgstore_db.messages.timestamp",
+    "canonical_format": "unix_ms",
+    "canonical_target": "datetime UTC aware",
+    "conversion": "ts_ms / 1000 -> datetime.fromtimestamp(ts_sec, tz=UTC)",
+    "anomalies": [
+      {
+        "_id": 502,
+        "timestamp": 0,
+        "decoded": "1970-01-01T00:00:00Z",
+        "type": "zero_epoch"
+      },
+      {
+        "_id": 504,
+        "timestamp": -1000,
+        "decoded": "before_epoch",
+        "type": "negative"
+      },
+      {
+        "_id": "n.d.",
+        "timestamp": 2082758400000,
+        "decoded": "2035-01-01T00:00:00Z",
+        "type": "future"
+      }
+    ],
+    "csv_timezone": "unknown — probabile UTC, da verificare su campione reale",
+    "json_timezone": "UTC esplicito (+00:00)",
+    "xml_timezone": "UTC esplicito (+00:00)"
+  },
+  "open_questions": [
+    "Come normalizzare ChatId Cellebrite (chat_1, chat_2, chat_3) al JID WhatsApp?",
+    "Cosa rappresenta esattamente l'alias group_participant_A?",
+    "La timezone del CSV Cellebrite e UTC o locale del device?",
+    "Perche il CSV ha 69 messaggi eliminati e il DB solo 14?",
+    "Esistono messaggi di tipo sistema nel DB (chiamate, notifiche di gruppo)?",
+    "Il campo key_id e l'ID globale WhatsApp nei dati reali?",
+    "Quanti messaggi ci sono in ciascuna chat (distribuzione per key_remote_jid)?"
+  ],
+  "decisions": {
+    "confirmed": [
+      "D1: msgstore.db e la sorgente primaria",
+      "D2: wa.db per risoluzione nomi contatti",
+      "D3: messages.timestamp come timestamp canonico",
+      "D4: key_id come chiave identita messaggio",
+      "D5: media_wa_type per il tipo di messaggio",
+      "D6: CSV Cellebrite come sorgente per messaggi eliminati",
+      "D7: media_url come campo primario per riferimenti media",
+      "D8: key_from_me=1 identifica il mittente come proprietario del device"
+    ],
+    "pending_verification": [
+      "V1: Normalizzazione ChatId Cellebrite -> JID",
+      "V2: Timezone CSV (UTC vs locale)",
+      "V3: Significato dei 69 Deleted in CSV",
+      "V4: Risoluzione alias group_participant_A",
+      "V5: Validita campione media (113/115 mancanti)",
+      "V6: Tipi messaggio mancanti (chiamate, documenti, posizioni)"
+    ]
+  }
+}

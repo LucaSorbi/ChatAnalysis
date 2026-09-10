@@ -1,0 +1,57 @@
+[build-system]
+requires = ["setuptools>=72"]
+build-backend = "setuptools.backends.legacy:build"
+
+[project]
+name = "whatsapp-forensic-importer"
+version = "0.1.0"
+description = "Forensic data importer per export WhatsApp (backup nativo + Cellebrite)"
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+# Dipendenze runtime — solo quelle effettivamente usate dal codice attuale
+dependencies = [
+    # csv_analyzer.py: rilevamento encoding robusto
+    "charset-normalizer>=3.4",
+    # sqlite_analyzer.py: parsing timestamp ISO/unix
+    "python-dateutil>=2.9",
+]
+
+[project.optional-dependencies]
+# media_analyzer.py: lettura dimensioni immagini — opzionale, usato con try/except
+image = ["Pillow>=10.0"]
+
+# Dipendenze di sviluppo (test, linting futuro)
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "pytest-cov>=5.0",
+]
+
+# ---------------------------------------------------------------------------
+# Setuptools: scoperta automatica dei package
+# ---------------------------------------------------------------------------
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["profiler*", "importer*"]
+exclude = ["tests*", "test_data*"]
+
+# ---------------------------------------------------------------------------
+# pytest
+# ---------------------------------------------------------------------------
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+python_files = ["test_*.py"]
+python_classes = ["Test*"]
+python_functions = ["test_*"]
+addopts = [
+    "-v",
+    "--tb=short",
+]
+# Marker registrati
+markers = [
+    "unit: test unitari (nessuna I/O su filesystem reale)",
+    "integration: test di integrazione (usa test_data/)",
+    "slow: test che richiedono molto tempo",
+]
