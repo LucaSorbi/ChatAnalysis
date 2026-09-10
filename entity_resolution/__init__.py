@@ -13,6 +13,7 @@ from __future__ import annotations
 
 from entity_resolution.base import BaseEntityResolver
 from entity_resolution.models import (
+    ActorCompatibility,
     CandidateEntity,
     DuplicateCandidate,
     EntityReference,
@@ -24,6 +25,7 @@ from entity_resolution.models import (
 from entity_resolution.resolver import DeterministicEntityResolver
 
 __all__ = [
+    "ActorCompatibility",
     "BaseEntityResolver",
     "CandidateEntity",
     "DeterministicEntityResolver",

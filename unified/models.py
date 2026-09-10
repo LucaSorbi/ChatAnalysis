@@ -22,6 +22,7 @@ from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
 
+from core.immutability import freeze_structural
 from normalization.models import (
     CanonicalMessageType,
     NormalizedRecord,
@@ -61,8 +62,7 @@ class Participant:
             raise ValueError("participant_id non può essere vuoto.")
         if not self.identifier or not str(self.identifier).strip():
             raise ValueError("identifier non può essere vuoto.")
-        if not isinstance(self.metadata, MappingProxyType):
-            object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "metadata", freeze_structural(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -99,8 +99,7 @@ class Chat:
             raise ValueError(f"chat_type '{self.chat_type}' non valido. Valori ammessi: 'direct', 'group', 'unknown'.")
         if not isinstance(self.participants, tuple):
             object.__setattr__(self, "participants", tuple(self.participants))
-        if not isinstance(self.metadata, MappingProxyType):
-            object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "metadata", freeze_structural(self.metadata))
 
 
 @dataclass(frozen=True)
@@ -185,5 +184,4 @@ class UnifiedMessage:
             raise ValueError(f"message_type deve essere un CanonicalMessageType, ricevuto {type(self.message_type)}.")
         if not isinstance(self.duplicate_candidate_ids, tuple):
             object.__setattr__(self, "duplicate_candidate_ids", tuple(self.duplicate_candidate_ids))
-        if not isinstance(self.metadata, MappingProxyType):
-            object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        object.__setattr__(self, "metadata", freeze_structural(self.metadata))

@@ -137,7 +137,9 @@ class TestEntityResolutionIntegration:
         # Tutti i record sorgente coinvolti sono accessibili
         for d in dups:
             assert len(d.records) >= 2
-            assert d.confidence in (EvidenceLevel.EXACT, EvidenceLevel.STRONG)
+            assert d.confidence in (EvidenceLevel.STRONG, EvidenceLevel.WEAK)
+            assert d.confidence != EvidenceLevel.EXACT
+
 
     def test_group_jid_isolated_and_local_user_present(self, resolution_result):
         """

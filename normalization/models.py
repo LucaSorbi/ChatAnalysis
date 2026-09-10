@@ -25,6 +25,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
+from core.immutability import freeze_structural
 from importer.models import RawRecord
 from validation.models import ValidationResult
 
@@ -151,6 +152,6 @@ class NormalizedRecord:
         if not isinstance(self.message_type, CanonicalMessageType):
             raise ValueError(f"message_type deve essere un CanonicalMessageType, ricevuto {type(self.message_type)}.")
 
-        # Congela metadata se passato come dict
-        if not isinstance(self.metadata, MappingProxyType):
-            object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        # Congela ricorsivamente i metadati per deep immutability
+        object.__setattr__(self, "metadata", freeze_structural(self.metadata))
+

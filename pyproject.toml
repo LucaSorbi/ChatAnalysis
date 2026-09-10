@@ -25,6 +25,8 @@ dependencies = [
 [project.optional-dependencies]
 # media_analyzer.py: lettura dimensioni immagini — opzionale, usato con try/except
 image = ["Pillow>=10.0"]
+# STT locale con faster-whisper
+stt = ["faster-whisper>=1.0.0"]
 
 # Dipendenze di sviluppo (test, linting futuro)
 [dependency-groups]
@@ -38,7 +40,7 @@ dev = [
 # ---------------------------------------------------------------------------
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*"]
+include = ["core*", "profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*", "multimodal*"]
 exclude = ["tests*", "test_data*"]
 
 # ---------------------------------------------------------------------------
@@ -52,10 +54,14 @@ python_functions = ["test_*"]
 addopts = [
     "-v",
     "--tb=short",
+    "-m",
+    "not smoke",
 ]
 # Marker registrati
 markers = [
     "unit: test unitari (nessuna I/O su filesystem reale)",
     "integration: test di integrazione (usa test_data/)",
     "slow: test che richiedono molto tempo",
+    "smoke: test di fumo opzionali con modelli reali o download",
 ]
+

@@ -32,6 +32,7 @@ from normalization.models import (
     TimestampTzStatus,
 )
 from normalization.normalizer import RecordNormalizer
+from normalization.phone import canonicalize_phone_syntax
 
 __all__ = [
     "BaseNormalizer",
@@ -41,4 +42,6 @@ __all__ = [
     "NormalizedTimestamp",
     "RecordNormalizer",
     "TimestampTzStatus",
+    "canonicalize_phone_syntax",
 ]
+

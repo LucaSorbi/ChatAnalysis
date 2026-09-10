@@ -39,6 +39,7 @@ from importer.whatsapp_wa import WhatsAppWaDbImporter
 from normalization.models import NormalizedRecord, TimestampTzStatus
 from normalization.normalizer import RecordNormalizer
 from unified.builder import UnifiedModelBuilder
+from unified.context import UnifiedBuildContext
 from unified.models import Chat, Participant, UnifiedMessage
 from validation.validator import RecordValidator
 
@@ -89,8 +90,9 @@ def pipeline_data():
     # Esegui Entity Resolution Foundation
     resolution = resolver.resolve(all_normalized)
 
-    # Assembla UnifiedMessage
-    builder = UnifiedModelBuilder(resolution=resolution)
+    # Assembla UnifiedMessage con UnifiedBuildContext
+    context = UnifiedBuildContext.from_records(all_normalized, resolution=resolution)
+    builder = UnifiedModelBuilder(context=context)
     unified_messages = builder.build_all(all_normalized)
 
     return {

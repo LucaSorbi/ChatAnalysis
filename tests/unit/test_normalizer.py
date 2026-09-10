@@ -212,7 +212,7 @@ class TestActorNormalization:
         """
         rec = make_raw_record(
             "msgstore_db",
-            raw_fields={"key_remote_jid": "123456789@s.whatsapp.net"},
+            raw_fields={"key_remote_jid": "123456789@s.whatsapp.net", "key_from_me": 0},
         )
         norm = normalizer.normalize(make_val_result(rec))
         assert norm.actor_from is not None
@@ -286,6 +286,20 @@ class TestMessageTypeNormalization:
         assert normalizer.normalize(make_val_result(rec_a)).message_type == CanonicalMessageType.AUDIO
         assert normalizer.normalize(make_val_result(rec_t)).message_type == CanonicalMessageType.TEXT
 
+    def test_xml_types_unknown_in_absence_of_type_evidence(self, normalizer):
+        """
+        Requisito B3: Cellebrite XML non contiene un tag Type esplicito.
+        Assenza di evidenza tipologica != TEXT certo -> UNKNOWN, raw_message_type=None.
+        """
+        rec = make_raw_record(
+            "cellebrite_xml",
+            raw_fields={"Sender": "+39001", "Body": "Messaggio di test", "Deleted": "false"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.message_type == CanonicalMessageType.UNKNOWN
+        assert norm.raw_message_type is None
+
+
 
 # ---------------------------------------------------------------------------
 # Test Streaming & Provenance (B1, B2, B15)
@@ -326,3 +340,100 @@ class TestStreamingAndProvenance:
         # RawRecord integro e inalterato
         assert dict(rec.raw_fields) == fields_before
         assert norm.raw_record is rec
+
+
+# ---------------------------------------------------------------------------
+# Test ChatId Extraction (B1)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestChatIdExtraction:
+
+    def test_cellebrite_csv_chat_id_present(self, normalizer):
+        """ChatId presente in CSV viene estratto preservando il valore source-level."""
+        rec = make_raw_record("cellebrite_csv", raw_fields={"ChatId": "chat_1", "From": "+39001"})
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.chat_id == "chat_1"
+        assert norm.raw_record.raw_fields["ChatId"] == "chat_1"
+
+    def test_cellebrite_csv_chat_id_empty_or_absent(self, normalizer):
+        """ChatId vuoto o assente produce chat_id=None."""
+        rec_empty = make_raw_record("cellebrite_csv", raw_fields={"ChatId": "   "})
+        rec_none = make_raw_record("cellebrite_csv", raw_fields={})
+        assert normalizer.normalize(make_val_result(rec_empty)).chat_id is None
+        assert normalizer.normalize(make_val_result(rec_none)).chat_id is None
+
+    def test_no_entity_resolution_on_chat_id_in_normalization(self, normalizer):
+        """chat_1 NON viene trasformato in JID o risolto ad alcuna entità in Normalization."""
+        rec = make_raw_record("cellebrite_csv", raw_fields={"ChatId": "chat_2"})
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.chat_id == "chat_2"
+        assert "@" not in str(norm.chat_id)
+
+
+# ---------------------------------------------------------------------------
+# Test key_from_me Tri-State (B2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestKeyFromMeTriState:
+
+    def test_key_from_me_1_outgoing_local_user(self, normalizer):
+        """key_from_me == 1 -> outgoing / sender LOCAL_USER."""
+        rec = make_raw_record(
+            "msgstore_db",
+            raw_fields={"key_from_me": 1, "key_remote_jid": "+390000000001@s.whatsapp.net"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.actor_from is not None
+        assert norm.actor_from.raw_value == "LOCAL_USER"
+        assert norm.actor_from.actor_type == "local_user"
+        assert norm.actor_to is not None
+        assert norm.actor_to.actor_type == "jid"
+
+    def test_key_from_me_0_incoming_local_user(self, normalizer):
+        """key_from_me == 0 -> incoming / recipient LOCAL_USER."""
+        rec = make_raw_record(
+            "msgstore_db",
+            raw_fields={"key_from_me": 0, "key_remote_jid": "+390000000001@s.whatsapp.net"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.actor_to is not None
+        assert norm.actor_to.raw_value == "LOCAL_USER"
+        assert norm.actor_to.actor_type == "local_user"
+        assert norm.actor_from is not None
+        assert norm.actor_from.actor_type == "jid"
+
+    def test_key_from_me_none_unresolved(self, normalizer):
+        """key_from_me is None -> NON inferire LOCAL_USER; attori rimangono None."""
+        rec = make_raw_record(
+            "msgstore_db",
+            raw_fields={"key_from_me": None, "key_remote_jid": "+390000000001@s.whatsapp.net"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.actor_from is None
+        assert norm.actor_to is None
+        assert norm.raw_record.raw_fields["key_from_me"] is None
+
+    def test_key_from_me_2_unresolved(self, normalizer):
+        """key_from_me == 2 (valore inatteso) -> NON inferire LOCAL_USER; attori rimangono None."""
+        rec = make_raw_record(
+            "msgstore_db",
+            raw_fields={"key_from_me": 2, "key_remote_jid": "+390000000001@s.whatsapp.net"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.actor_from is None
+        assert norm.actor_to is None
+        assert norm.raw_record.raw_fields["key_from_me"] == 2
+
+    def test_key_from_me_unexpected_string_unresolved(self, normalizer):
+        """key_from_me stringa inattesa -> NON inferire LOCAL_USER; attori rimangono None."""
+        rec = make_raw_record(
+            "msgstore_db",
+            raw_fields={"key_from_me": "UNKNOWN", "key_remote_jid": "+390000000001@s.whatsapp.net"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.actor_from is None
+        assert norm.actor_to is None
+        assert norm.raw_record.raw_fields["key_from_me"] == "UNKNOWN"
+

@@ -17,6 +17,7 @@ from enum import Enum
 from types import MappingProxyType
 from typing import Any
 
+from core.immutability import freeze_structural
 from normalization.models import NormalizedActor, NormalizedRecord
 
 
@@ -30,12 +31,25 @@ class EvidenceLevel(str, Enum):
     UNRESOLVED = "UNRESOLVED"    # Entità o riferimento non risolto (es. group_participant_A, ChatId senza mapping)
 
 
+class ActorCompatibility(str, Enum):
+    """
+    Risultato della verifica di compatibilità semantica tra attori:
+    - MATCH: evidenza positiva di corrispondenza
+    - UNKNOWN: informazione insufficiente (non interpretabile come prova di identità)
+    - INCOMPATIBLE: evidenza di incompatibilità certa
+    """
+    MATCH = "MATCH"
+    UNKNOWN = "UNKNOWN"
+    INCOMPATIBLE = "INCOMPATIBLE"
+
+
 class EvidenceType(str, Enum):
     """
     Tipologia di evidenza deterministica utilizzata per il collegamento.
     """
-    JID_EXACT = "JID_EXACT"                      # JID WhatsApp completo identico tra due sorgenti
-    PHONE_CANONICAL = "PHONE_CANONICAL"          # Numero telefonico canonicalizzato identico
+    IDENTIFIER_OBSERVED = "IDENTIFIER_OBSERVED"# Identificatore singolo osservato in un solo riferimento (nessun match cross-record)
+    JID_EXACT = "JID_EXACT"                      # JID WhatsApp completo identico tra due sorgenti o record
+    PHONE_CANONICAL = "PHONE_CANONICAL"          # Numero telefonico canonicalizzato identico tra più riferimenti
     PHONE_JID_LOCAL = "PHONE_JID_LOCAL"          # Numero telefonico coincidente con local part numerico del JID
     GROUP_JID_EXACT = "GROUP_JID_EXACT"          # JID gruppo WhatsApp (@g.us) tracciato come chat/gruppo
     LOCAL_USER_EXACT = "LOCAL_USER_EXACT"        # Identificativo proprietario dispositivo (LOCAL_USER)
@@ -83,6 +97,9 @@ class ResolutionEvidence:
     reason: str
     source_records: tuple[tuple[str, str], ...]  # Tupla di (source_name, source_record_id)
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "source_records", tuple(tuple(x) for x in self.source_records))
+
 
 @dataclass(frozen=True)
 class CandidateEntity:
@@ -114,9 +131,9 @@ class CandidateEntity:
         object.__setattr__(self, "candidate_id", candidate_id)
         object.__setattr__(self, "candidate_identifier", ident)
         object.__setattr__(self, "entity_type", entity_type)
-        object.__setattr__(self, "references", references)
-        object.__setattr__(self, "evidence_chain", evidence_chain)
-        object.__setattr__(self, "display_names", display_names)
+        object.__setattr__(self, "references", tuple(references))
+        object.__setattr__(self, "evidence_chain", tuple(evidence_chain))
+        object.__setattr__(self, "display_names", tuple(display_names))
 
     @property
     def canonical_identifier(self) -> str:
@@ -135,6 +152,9 @@ class DuplicateCandidate:
     reason: str
     confidence: EvidenceLevel
 
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "records", tuple(tuple(x) for x in self.records))
+
 
 @dataclass(frozen=True)
 class ResolutionResult:
@@ -148,5 +168,11 @@ class ResolutionResult:
     metadata: MappingProxyType[str, Any] = MappingProxyType({})
 
     def __post_init__(self) -> None:
-        if not isinstance(self.metadata, MappingProxyType):
-            object.__setattr__(self, "metadata", MappingProxyType(dict(self.metadata)))
+        if not isinstance(self.candidate_entities, tuple):
+            object.__setattr__(self, "candidate_entities", tuple(self.candidate_entities))
+        if not isinstance(self.unresolved_references, tuple):
+            object.__setattr__(self, "unresolved_references", tuple(self.unresolved_references))
+        if not isinstance(self.duplicate_candidates, tuple):
+            object.__setattr__(self, "duplicate_candidates", tuple(self.duplicate_candidates))
+        object.__setattr__(self, "metadata", freeze_structural(self.metadata))
+

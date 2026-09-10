@@ -103,7 +103,7 @@ class NormalizedActor:
 1. **Numeri telefonici internazionali (`actor_type='phone'`)**:
    - Riconosciuti dalla presenza del prefisso `+` seguito da cifre e separatori convenzionali.
    - Normalizzazione: rimozione sintattica e lossless di spazi, trattini e parentesi (es. `+39 000 0000001` $\rightarrow$ `+390000000001`).
-   - **Distinzione fondamentale**: questa trasformazione è una *canonicalizzazione sintattica dei separatori* e **NON** costituisce una validazione formale ITU-T E.164 (non viene verificata la conformità del piano di numerazione né impiegata la libreria `phonenumbers`). Nessun prefisso nazionale viene mai dedotto o aggiunto in caso di assenza.
+   - **Distinzione fondamentale**: questa trasformazione è una *canonicalizzazione sintattica dei separatori* implementata in `canonicalize_phone_syntax(value)` e **NON** costituisce una validazione formale ITU-T E.164 (non viene verificata la conformità del piano di numerazione né impiegata la libreria `phonenumbers`). Nessun prefisso nazionale viene mai dedotto o aggiunto in caso di assenza.
 2. **JID WhatsApp (`actor_type='jid'`)**:
    - Riconosciuti dalla presenza del carattere `@` (es. `+390000000001@s.whatsapp.net` o `00000000001-0000000000@g.us`).
    - Normalizzazione: scomposizione deterministica e lossless in `jid_local` e `jid_domain`.
@@ -112,6 +112,31 @@ class NormalizedActor:
    - Valori come `group_participant_A` NON sono numeri di telefono. Vengono preservati intatti come alias testuali.
 4. **Identificatori chat (`actor_type='chat_id'`)**:
    - Valori come `chat_1` vengono marcati esplicitamente come identificatori di sessione/chat.
+
+### 4.2 Canonicalizzazione Sintattica dei Numeri Telefonici (`canonicalize_phone_syntax`)
+La funzione `normalization.phone.canonicalize_phone_syntax(value)` costituisce il **single source of truth** per la pulizia della sintassi telefonica nell'intera pipeline:
+- **Prefisso internazionale obbligatorio e univoco**: la stringa pulita deve contenere esattamente un solo carattere `+` e questo deve trovarsi in posizione iniziale (`s.count("+") == 1 and s.startswith("+")`). Valori con `+` multipli (es. `++390000000001`, `+39+00000001`) o senza `+` (es. `390000000001`) restituiscono categoricamente `None`.
+- **Caratteri ammessi**: solo cifre e separatori consentiti (`+0123456789 -()`). Presenza di lettere o caratteri non consentiti (es. `+39abc123`) restituisce `None`.
+- **Lunghezza minima**: almeno 5 cifre decimali dopo il prefisso `+`.
+- **Formato canonico restituito**: `"+" + stringa_di_sole_cifre`.
+- **Nessuna validazione ITU-T E.164**: non viene impiegata alcuna libreria esterna (`phonenumbers`); la funzione opera unicamente come canonicalizzatore sintattico lossless per rimozione separatori e validazione di formato base.
+
+### 4.3 Gestione Tri-State di `key_from_me` (WhatsApp `msgstore.db`)
+La determinazione della direzione e degli attori per `msgstore.db` adotta una logica rigorosamente tri-state:
+- `key_from_me == 1`: messaggio in uscita $\rightarrow$ `actor_from = LOCAL_USER`, `actor_to = remote_jid`.
+- `key_from_me == 0`: messaggio in entrata $\rightarrow$ `actor_from = remote_jid`, `actor_to = LOCAL_USER`.
+- Valori non conformi (`None`, `2`, stringhe impreviste): direzione non determinabile $\rightarrow$ `actor_from = None`, `actor_to = None`. **Nessuna inferenza fittizia di `LOCAL_USER`**.
+
+### 4.4 Estrazione Fedele di `ChatId` (Cellebrite CSV)
+In conformità con il principio di preservazione forense:
+- Il valore della colonna `ChatId` (es. `chat_1`, `chat_2`) viene estratto direttamente come `chat_id` di `NormalizedRecord`.
+- Non viene eseguita alcuna conversione euristica o associazione non verificata verso i JID di `msgstore.db`.
+
+### 4.5 Modulo Neutrale di Immutabilità Profonda (`core/immutability.py`)
+Per evitare inversioni architetturali (ad es. import di utility da layer downstream come `importer` verso modelli core), la funzione `freeze_structural()` è collocata nel modulo neutrale `core/immutability.py`:
+- `freeze_structural()` congela ricorsivamente dizionari (in `MappingProxyType`), liste/insiemi (in `tuple`) e primitivi immutabili.
+- Re-esportata in `importer.models` con alias `_freeze_structural` per garantire piena retrocompatibilità senza rompere i contratti esistenti.
+- Utilizzata uniformemente su tutti i modelli della pipeline (`RawRecord`, `NormalizedRecord`, `CandidateEntity`, `ResolutionResult`, `Participant`, `Chat`, `UnifiedMessage`, `UnifiedBuildContext`).
 
 ---
 
@@ -140,7 +165,7 @@ Qualsiasi valore non interpretabile o assente produce `is_deleted = None`, senza
 | **`msgstore.db`** | `media_wa_type: int` | `0` (389)<br>`1` (72)<br>`2` (31)<br>`3` (12) | `TEXT`<br>`IMAGE`<br>`AUDIO`<br>`VIDEO` | Codici interi standard documentati del database WhatsApp Android |
 | **`messages.csv`** | `MessageType: str` | `"Text"` (277)<br>`"Image"` (25) | `TEXT`<br>`IMAGE` | Stringhe estratte da Cellebrite UFED Reader |
 | **`messages.json`** | `type: str` | `"text"` (58)<br>`"image"` (28)<br>`"audio"` (14) | `TEXT`<br>`IMAGE`<br>`AUDIO` | Proprietà tipologica dell'array JSON Cellebrite |
-| **`report.xml`** | Nessun tag `Type` esplicito | 50 elementi sotto `<InstantMessages>` | `TEXT` (`raw_message_type=None`) | Messaggi istantanei con contenuto testuale nel tag `<Body>` |
+| **`report.xml`** | Nessun tag `Type` esplicito | 50 elementi sotto `<InstantMessages>` | `UNKNOWN` (`raw_message_type=None`) | In assenza di evidenza esplicita di tipo (es. tag `<Type>`), viene mappato conservativamente a `UNKNOWN` |
 | **`wa.db`** | N/A (rubrica) | Record contatti | `UNKNOWN` (`raw_message_type=None`) | Non sono messaggi |
 | **Qualsiasi sorgente** | Valore sconosciuto o non mappato | Non osservato | `UNKNOWN` | Fallback conservativo: `raw_message_type` preservato |
 

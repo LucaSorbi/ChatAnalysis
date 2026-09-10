@@ -335,6 +335,18 @@ class TestCanImportNegative:
             result = importer.can_import(path)
             assert isinstance(result, bool)
 
+    def test_programmatic_error_propagates_in_can_import(self, importer, tmp_path, monkeypatch):
+        """Un bug programmatico inatteso (es. TypeError) in can_import NON deve essere mascherato."""
+        valid_file = tmp_path / "test.db"
+        valid_file.touch()
+
+        def _buggy_schema(conn):
+            raise TypeError("Bug programmatico inatteso")
+
+        monkeypatch.setattr(importer, "_has_required_schema", _buggy_schema)
+        with pytest.raises(TypeError, match="Bug programmatico inatteso"):
+            importer.can_import(valid_file)
+
 
 # ---------------------------------------------------------------------------
 # import_records — source errors

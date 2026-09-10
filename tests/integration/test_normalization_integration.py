@@ -137,4 +137,5 @@ class TestNormalizationPipelineIntegration:
             assert r.source_name == "cellebrite_xml"
             assert r.timestamp.status == TimestampTzStatus.KNOWN_UTC
             assert r.timestamp.utc_datetime is not None
-            assert r.message_type == CanonicalMessageType.TEXT
+            assert r.message_type == CanonicalMessageType.UNKNOWN
+

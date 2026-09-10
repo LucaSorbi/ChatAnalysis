@@ -22,89 +22,88 @@ from __future__ import annotations
 
 from collections import defaultdict
 from types import MappingProxyType
-from typing import Any, Iterable, Iterator
+from typing import Any, Iterable, Iterator, Sequence
 
 from entity_resolution.models import CandidateEntity, DuplicateCandidate, ResolutionResult
 from normalization.models import NormalizedActor, NormalizedRecord
+from unified.context import UnifiedBuildContext
 from unified.models import Chat, Participant, UnifiedMessage
 
 
 class UnifiedModelBuilder:
     """
     Builder che assembla istanze di UnifiedMessage da NormalizedRecord.
+    Utilizza un UnifiedBuildContext immutabile per il lookup di metadati ed entità.
     """
 
     def __init__(
         self,
         resolution: ResolutionResult | None = None,
         chat_metadata: dict[str, dict[str, Any]] | None = None,
+        context: UnifiedBuildContext | None = None,
     ) -> None:
         """
-        Inizializza il builder con l'eventuale risultato di Entity Resolution
-        e metadati aggiuntivi opzionali sulle chat.
+        Inizializza il builder con un UnifiedBuildContext oppure crea un contesto
+        predefinito da ResolutionResult e chat_metadata.
         """
-        self.resolution = resolution
-        self._chat_titles: dict[str, str] = {}
-        if chat_metadata:
-            for cid, meta in chat_metadata.items():
-                if "title" in meta and meta["title"]:
-                    self._chat_titles[cid] = str(meta["title"])
+        if context is not None:
+            self.context = context
+        else:
+            self.context = UnifiedBuildContext.create(
+                resolution=resolution,
+                chat_metadata=chat_metadata,
+            )
+        self.resolution = self.context.resolution
 
-        # Indici di risoluzione
-        self._ref_to_candidate: dict[tuple[str, str, str], CandidateEntity] = {}
-        self._ident_to_candidate: dict[str, CandidateEntity] = {}
-        self._duplicate_map: dict[tuple[str, str], list[str]] = defaultdict(list)
-
-        if resolution is not None:
-            self._index_resolution(resolution)
-
-    def _index_resolution(self, resolution: ResolutionResult) -> None:
+    @classmethod
+    def from_records(
+        cls,
+        records: Sequence[NormalizedRecord],
+        resolution: ResolutionResult | None = None,
+        chat_metadata: dict[str, dict[str, Any]] | None = None,
+    ) -> UnifiedModelBuilder:
         """
-        Indicizza CandidateEntity e DuplicateCandidate per lookup deterministico O(1).
+        Factory che pre-analizza una sequenza indicizzabile/replayable di record per estrarre
+        metadati contestuali (es. titoli delle chat dai record 'chat') e assembla un UnifiedModelBuilder.
+        Richiede Sequence[NormalizedRecord] (es. list o tuple).
         """
-        for cand in resolution.candidate_entities:
-            self._ident_to_candidate[cand.candidate_identifier] = cand
-            for ref in cand.references:
-                key = (ref.source_name, ref.source_record_id, ref.actor_role)
-                self._ref_to_candidate[key] = cand
+        context = UnifiedBuildContext.from_records(
+            records=records,
+            resolution=resolution,
+            chat_metadata=chat_metadata,
+        )
+        return cls(context=context)
 
-        for dup in resolution.duplicate_candidates:
-            for rec_key in dup.records:
-                self._duplicate_map[rec_key].append(dup.candidate_id)
+    @property
+    def _chat_titles(self) -> MappingProxyType[str, str]:
+        return self.context.chat_titles
+
+    @property
+    def _ref_to_candidate(self) -> MappingProxyType[tuple[str, str, str], CandidateEntity]:
+        return self.context.ref_to_candidate
+
+    @property
+    def _ident_to_candidate(self) -> MappingProxyType[str, CandidateEntity]:
+        return self.context.ident_to_candidate
+
+    @property
+    def _duplicate_map(self) -> MappingProxyType[tuple[str, str], tuple[str, ...]]:
+        return self.context.duplicate_map
 
     def build_stream(
         self, records: Iterable[NormalizedRecord]
     ) -> Iterator[UnifiedMessage]:
         """
         Elabora in streaming una sequenza di NormalizedRecord e produce UnifiedMessage.
-        I record non di tipo 'message' (es. 'chat', 'contact', 'media_ref') vengono utilizzati
-        per arricchire i metadati contestuali (es. titoli chat) senza produrre UnifiedMessage.
+        È un generatore puro a singolo passaggio: non esegue scansioni condizionali né
+        muta lo stato interno durante lo streaming.
+        I record non di tipo 'message' (es. 'chat', 'contact', 'media_ref') vengono saltati.
         """
-        # Se records è già una collezione indicizzabile, pre-indicizza i record 'chat'
-        if isinstance(records, (list, tuple)):
-            for rec in records:
-                if rec.record_type == "chat":
-                    raw_f = rec.raw_record.raw_fields
-                    subj = raw_f.get("subject")
-                    remote_jid = raw_f.get("key_remote_jid")
-                    if remote_jid and subj:
-                        self._chat_titles[str(remote_jid).strip()] = str(subj).strip()
-
         for rec in records:
-            # 1. Se il record è un contenitore di chat, memorizza i metadati descrittivi
-            if rec.record_type == "chat":
-                raw_f = rec.raw_record.raw_fields
-                subj = raw_f.get("subject")
-                remote_jid = raw_f.get("key_remote_jid")
-                if remote_jid and subj:
-                    self._chat_titles[str(remote_jid).strip()] = str(subj).strip()
-                continue
-
-            # 2. Se non è un messaggio, passa oltre (es. 'contact', 'media_ref')
             if rec.record_type != "message":
                 continue
 
-            # 3. Costruzione partecipante mittente
+            # 1. Costruzione partecipante mittente
             sender = self._build_participant(
                 actor=rec.actor_from,
                 role="sender",
@@ -112,7 +111,7 @@ class UnifiedModelBuilder:
                 source_record_id=rec.source_record_id,
             )
 
-            # 4. Costruzione partecipante destinatario
+            # 2. Costruzione partecipante destinatario
             recipient = self._build_participant(
                 actor=rec.actor_to,
                 role="recipient",
@@ -120,18 +119,17 @@ class UnifiedModelBuilder:
                 source_record_id=rec.source_record_id,
             )
 
-            # 5. Costruzione contenitore di chat
+            # 3. Costruzione contenitore di chat
             chat = self._build_chat(
                 rec=rec,
                 sender=sender,
                 recipient=recipient,
             )
 
-            # 6. Lookup duplicati candidati
-            rec_key = (rec.source_name, rec.source_record_id)
-            dup_ids = tuple(sorted(self._duplicate_map.get(rec_key, [])))
+            # 4. Lookup deterministico duplicati candidati
+            dup_ids = self.context.get_duplicate_ids(rec.source_name, rec.source_record_id)
 
-            # 7. Identificatore deterministico del messaggio
+            # 5. Identificatore deterministico del messaggio
             message_id = f"unified:{rec.source_name}:{rec.source_record_id}"
 
             yield UnifiedMessage(
@@ -158,17 +156,9 @@ class UnifiedModelBuilder:
     def build_all(self, records: Iterable[NormalizedRecord]) -> list[UnifiedMessage]:
         """
         Materializza tutti i messaggi unificati in una lista.
-        Pre-indicizza i metadati dei contenitori di chat per garantire l'arricchimento completo.
+        Implementato rigorosamente come list(self.build_stream(records)).
         """
-        rec_list = list(records) if not isinstance(records, (list, tuple)) else records
-        for rec in rec_list:
-            if rec.record_type == "chat":
-                raw_f = rec.raw_record.raw_fields
-                subj = raw_f.get("subject")
-                remote_jid = raw_f.get("key_remote_jid")
-                if remote_jid and subj:
-                    self._chat_titles[str(remote_jid).strip()] = str(subj).strip()
-        return list(self.build_stream(rec_list))
+        return list(self.build_stream(records))
 
     def _build_participant(
         self,
@@ -184,32 +174,67 @@ class UnifiedModelBuilder:
         if actor is None:
             return None
 
-        # Caso LOCAL_USER: proprietario del dispositivo
+        # Caso LOCAL_USER (B5): ruolo tecnico del proprietario del dispositivo
         if actor.actor_type == "local_user" or actor.raw_value == "LOCAL_USER":
-            cand = self._ident_to_candidate.get("LOCAL_USER")
+            cand = self.context.get_candidate_by_ident("LOCAL_USER")
             cand_id = cand.candidate_id if cand else None
             return Participant(
-                participant_id="participant:LOCAL_USER",
+                participant_id="participant:local_user:LOCAL_USER",
                 identifier="LOCAL_USER",
-                display_name="LOCAL_USER",
+                display_name=None,
                 entity_candidate_id=cand_id,
                 is_local_user=True,
-                metadata=MappingProxyType({"actor_type": "local_user", "role": role}),
+                metadata=MappingProxyType({
+                    "actor_type": "local_user",
+                    "role": role,
+                    "technical_role": True,
+                }),
             )
 
         # Lookup CandidateEntity per reference esatta (source_name, record_id, role)
-        ref_key = (source_name, source_record_id, role)
-        cand = self._ref_to_candidate.get(ref_key)
+        cand = self.context.get_candidate_by_ref(source_name, source_record_id, role)
 
         # Se non trovato per reference, tenta lookup per valore normalizzato
         if cand is None and actor.raw_value:
             lookup_val = actor.normalized_phone or actor.raw_value
-            cand = self._ident_to_candidate.get(lookup_val)
+            cand = self.context.get_candidate_by_ident(lookup_val)
 
+        # Caso B4 & B2: Se l'entità risolta è di tipo 'group' o il JID è @g.us, NON deve essere promossa a persona!
+        is_group_actor = (
+            (cand is not None and cand.entity_type == "group")
+            or (actor.jid_domain == "g.us")
+            or (bool(actor.raw_value and actor.raw_value.endswith("@g.us")))
+        )
+        if is_group_actor:
+            group_ident = (cand.candidate_identifier if cand else actor.raw_value) or "unknown_group"
+            return Participant(
+                participant_id=f"participant:group:{group_ident}",
+                identifier=group_ident,
+                display_name=None,  # Evita assegnazione di display_name persona
+                entity_candidate_id=cand.candidate_id if cand else None,
+                is_local_user=False,
+                metadata=MappingProxyType({
+                    "actor_type": actor.actor_type,
+                    "raw_value": actor.raw_value,
+                    "group_jid_as_actor": True,
+                    "is_group": True,
+                }),
+            )
+
+        # Caso B1 & B2: Entità persona risolta (JID individuale o telefono canonicalizzato)
         if cand is not None:
             display_name = cand.display_names[0] if cand.display_names else None
+            if cand.entity_type == "jid":
+                part_id = f"participant:jid:{cand.candidate_identifier}"
+            elif cand.entity_type == "phone":
+                part_id = f"participant:phone:{cand.candidate_identifier}"
+            elif cand.entity_type == "local_user":
+                part_id = "participant:local_user:LOCAL_USER"
+            else:
+                part_id = f"participant:{cand.entity_type}:{cand.candidate_identifier}"
+
             return Participant(
-                participant_id=f"participant:{cand.candidate_id}",
+                participant_id=part_id,
                 identifier=cand.candidate_identifier,
                 display_name=display_name,
                 entity_candidate_id=cand.candidate_id,
@@ -221,10 +246,11 @@ class UnifiedModelBuilder:
                 }),
             )
 
-        # Fallback non risolto: identità deterministica basata su sorgente e valore
+        # Caso B3: Fallback attore non risolto (es. group_participant_A o attore senza correlazione)
+        # Identificatore scoped alla source-reference per non fondere occorrenze distinte
         val = actor.normalized_phone or actor.raw_value or "unknown"
         return Participant(
-            participant_id=f"participant:{source_name}:{val}",
+            participant_id=f"participant:unresolved:{source_name}:{source_record_id}:{role}",
             identifier=val,
             display_name=None,
             entity_candidate_id=None,
@@ -251,7 +277,7 @@ class UnifiedModelBuilder:
             raw_cid = str(chat_id_val).strip()
             is_group = "@g.us" in raw_cid
             chat_type = "group" if is_group else ("direct" if "@s.whatsapp.net" in raw_cid else "unknown")
-            title = self._chat_titles.get(raw_cid)
+            title = self.context.get_chat_title(raw_cid)
 
             participants: list[Participant] = []
             if sender:
@@ -268,16 +294,23 @@ class UnifiedModelBuilder:
                 metadata=MappingProxyType({"raw_chat_id": raw_cid}),
             )
 
-        # Fallback 1-to-1 se destinatario noto
+        # Fallback quando chat_id è assente
         if recipient is not None:
+            # Se non è determinabile se la chat è 1-to-1 o gruppo, chat_type deve essere 'unknown'
+            # a meno che l'identificatore non sia un JID individuale WhatsApp (@s.whatsapp.net)
+            is_direct = recipient.identifier.endswith("@s.whatsapp.net")
+            chat_type = "direct" if is_direct else "unknown"
             participants = (sender, recipient) if sender else (recipient,)
             return Chat(
-                chat_id=f"chat:{rec.source_name}:direct:{recipient.identifier}",
-                chat_type="direct",
+                chat_id=f"chat:{rec.source_name}:peer:{recipient.identifier}",
+                chat_type=chat_type,
                 title=recipient.display_name,
                 participants=participants,
                 source_name=rec.source_name,
-                metadata=MappingProxyType({"direct_peer": recipient.identifier}),
+                metadata=MappingProxyType({
+                    "peer_identifier": recipient.identifier,
+                    "inferred_from_recipient": True,
+                }),
             )
 
         return None

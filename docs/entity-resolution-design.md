@@ -45,12 +45,13 @@ class EvidenceLevel(str, Enum):
 
 ```python
 class EvidenceType(str, Enum):
-    JID_EXACT = "JID_EXACT"                      # Stesso JID completo presente in due o più sorgenti
-    PHONE_CANONICAL = "PHONE_CANONICAL"          # Stesso numero telefonico canonicalizzato
-    PHONE_JID_LOCAL = "PHONE_JID_LOCAL"          # Corrispondenza deterministica tra telefono e local part JID
-    UNRESOLVED_ALIAS = "UNRESOLVED_ALIAS"        # Alias pseudonimizzato senza metadati di collegamento
-    UNRESOLVED_CHAT_ID = "UNRESOLVED_CHAT_ID"    # Identificatore di sessione/chat privo di mapping dimostrabile
-    UNRESOLVED_HEURISTIC = "UNRESOLVED_HEURISTIC"# Euristica debole rifiutata per prevenire false unificazioni
+    IDENTIFIER_OBSERVED = "IDENTIFIER_OBSERVED"  # Singolo identificatore osservato senza riscontro cross-reference (WEAK)
+    JID_EXACT = "JID_EXACT"                      # Stesso JID completo presente in due o più sorgenti (EXACT)
+    PHONE_CANONICAL = "PHONE_CANONICAL"          # Stesso numero telefonico canonicalizzato presente in due o più sorgenti (STRONG)
+    PHONE_JID_LOCAL = "PHONE_JID_LOCAL"          # Corrispondenza deterministica tra telefono e local part JID (STRONG)
+    UNRESOLVED_ALIAS = "UNRESOLVED_ALIAS"        # Alias pseudonimizzato senza metadati di collegamento (UNRESOLVED)
+    UNRESOLVED_CHAT_ID = "UNRESOLVED_CHAT_ID"    # Identificatore di sessione/chat privo di mapping dimostrabile (UNRESOLVED)
+    UNRESOLVED_HEURISTIC = "UNRESOLVED_HEURISTIC"# Euristica debole rifiutata per prevenire false unificazioni (UNRESOLVED)
 ```
 
 ### 2.3 Strutture Dati Immutabili
@@ -59,10 +60,10 @@ class EvidenceType(str, Enum):
 - **`ResolutionEvidence`**: documenta il legame tra record:
   - `evidence_type`, `evidence_level`, `matched_value`, `reason`, `source_records` (tupla di `(source_name, source_record_id)`).
 - **`CandidateEntity`**: raggruppa riferimenti ed evidenze:
-  - `candidate_id` (`entity_candidate:<n>`), `canonical_identifier`, `entity_type`, `references`, `evidence_chain`, `display_names`.
+  - `candidate_id` (`entity_candidate:<n>`), `canonical_identifier`, `entity_type`, `references` (tupla), `evidence_chain` (tupla), `display_names` (tupla).
 - **`DuplicateCandidate`**: raggruppa record candidati duplicati:
-  - `candidate_id` (`duplicate_candidate:<n>`), `records` (tupla di coordinate sorgente), `reason`, `confidence`.
-- **`ResolutionResult`**: output complessivo immutabile contenente entità candidate, riferimenti non risolti, candidati duplicati e metadati di esecuzione.
+  - `candidate_id` (`duplicate_candidate:<n>`), `records` (tupla di coordinate sorgente), `reason`, `confidence` (`STRONG` o `WEAK`, mai `EXACT`).
+- **`ResolutionResult`**: output complessivo immutabile con deep immutability su `metadata` (`freeze_structural`).
 
 ---
 
@@ -70,19 +71,26 @@ class EvidenceType(str, Enum):
 
 L'implementazione `DeterministicEntityResolver` in `entity_resolution/resolver.py` applica una gerarchia rigorosa di regole:
 
-### 3.1 WhatsApp JID ↔ `wa.db` Contacts (Priorità 1 — `EXACT`)
-- Nel dataset reale sintetico, i JID `+390000000001@s.whatsapp.net` e `+390000000002@s.whatsapp.net` compaiono identici sia nella tabella `messages` di `msgstore.db` (colonna `key_remote_jid`) sia nella tabella `contacts` di `wa.db` (colonna `jid`).
-- L'associazione avviene sull'**identificatore completo esatto**.
-- Non si ricorre a fuzzy matching sui nomi né a inferenze sul display name. Il `display_name` (es. "Contatto_001") viene arricchito nell'entità come metadato descrittivo, lasciando intatti i record sorgente.
+### 3.1 WhatsApp JID ↔ `wa.db` Contacts (Priorità 1)
+- Nel dataset reale sintetico, i JID `+390000000001@s.whatsapp.net` e `+390000000002@s.whatsapp.net` compaiono sia nella tabella `messages` di `msgstore.db` (colonna `key_remote_jid`) sia nella tabella `contacts` di `wa.db` (colonna `jid`).
+- Se il JID è riscontrato in **due o più riferimenti**, viene associato con evidenza `EvidenceType.JID_EXACT` e livello `EvidenceLevel.EXACT`.
+- Se il JID compare in **un singolo riferimento isolato**, viene registrata l'evidenza `EvidenceType.IDENTIFIER_OBSERVED` con livello `EvidenceLevel.WEAK`.
+- Il `display_name` (es. "Contatto_001") viene arricchito nell'entità come metadato descrittivo, lasciando intatti i record sorgente.
 
-### 3.2 Corrispondenza Telefonica Canonica (Priorità 2 — `STRONG`)
-- I mittenti e destinatari espressi con prefisso internazionale nelle esportazioni Cellebrite (CSV, JSON, XML) e nella colonna `phone_number` di `wa.db` (es. `+39 000 0000001` $\rightarrow$ `+390000000001`) vengono associati via `EvidenceType.PHONE_CANONICAL`.
+### 3.2 Corrispondenza Telefonica Canonica (Priorità 2)
+- I mittenti e destinatari canonicalizzati via `canonicalize_phone_syntax` nelle esportazioni Cellebrite (CSV, JSON, XML) e nella colonna `phone_number` di `wa.db` (es. `+39 000 0000001` $\rightarrow$ `+390000000001`):
+  - In presenza di **2 o più riferimenti**, vengono associati via `EvidenceType.PHONE_CANONICAL` con livello `EvidenceLevel.STRONG`.
+  - In presenza di **un solo riferimento**, producono `EvidenceType.IDENTIFIER_OBSERVED` con livello `EvidenceLevel.WEAK`.
 
 ### 3.3 Collegamento Telefono ↔ JID Local Part (Priorità 3 — `STRONG`)
 - Se la parte locale di un JID (es. `+390000000001`) coincide in modo esatto con un numero telefonico canonico, i riferimenti vengono uniti nell'entità del JID, registrando sia l'evidenza `JID_EXACT` sia l'evidenza `PHONE_JID_LOCAL`.
 - Nessun prefisso nazionale mancante viene mai inventato o forzato.
 
-### 3.4 Trattamento dei Riferimenti Non Risolti
+### 3.4 Trattamento LOCAL_USER
+- Il dispositivo forense genera `LOCAL_USER` come ruolo tecnico di direzione (inviato/ricevuto).
+- Viene istanziata una `CandidateEntity` con `candidate_identifier="LOCAL_USER"`, `display_names=()` (nessun display name sintetico forzato) e metadato `technical_role=True`.
+
+### 3.5 Trattamento dei Riferimenti Non Risolti
 1. **Alias di gruppo (`group_participant_A`)**:
    - Nel dataset non esiste alcuna evidenza strutturale che leghi `group_participant_A` a un numero telefonico o a un JID specifico.
    - Viene categoricamente preservato come **`UNRESOLVED`** (`EvidenceType.UNRESOLVED_ALIAS`).
@@ -101,9 +109,32 @@ L'implementazione `DeterministicEntityResolver` in `entity_resolution/resolver.p
 ## 4. Rilevamento Non-Distruttivo dei Duplicati (`DuplicateCandidate`)
 
 In ambito forense, **nessun dato originale può essere eliminato o sovrascritto**.
-La deduplicazione in questa fase consiste nell'identificazione trasparente di gruppi di record identici:
-- Vengono analizzati i messaggi che condividono il medesimo testo (`text_content`), un timestamp coincidente e un mittente compatibile;
-- Tali record vengono raggruppati in un'istanza di `DuplicateCandidate` con livello di confidenza `EXACT` o `STRONG`;
+La deduplicazione in questa fase consiste nell'identificazione trasparente di gruppi di record candidati duplicati:
+- **Disabilitazione per timestamp assente**: se il timestamp è `ABSENT`, il rilevamento duplicati è rigorosamente disabilitato per quel record (nessun clustering cieco sul solo testo).
+- **Separazione temporale rigorosa**: i record `KNOWN_UTC` e `NAIVE_UNKNOWN` sono indicizzati su chiavi temporali distinte e **non vengono mai confrontati tra loro** per prevenire collisioni spurie dovute all'assenza di fuso orario.
+- **Compatibilità positiva del mittente (Tri-State `ActorCompatibility`)**:
+  Per superare il rischio di considerare compatibili due record solo per assenza di contraddizione, l'analisi degli attori distingue tre stati categorici:
+  - `MATCH`: entrambi hanno un identificatore forte identico (stesso JID, stesso telefono canonicalizzato, entrambi `LOCAL_USER`, oppure stesso alias nella medesima sorgente).
+  - `INCOMPATIBLE`: identificatori forti palesemente discordanti (telefoni diversi, JID diversi, `LOCAL_USER` vs contatto remoto certo).
+  - `UNKNOWN`: uno o entrambi i record mancano di mittente, hanno alias opaco, oppure presentano lo stesso alias testuale ma provengono da sorgenti eterogenee non correlate.
+  *Regola di esclusione*: record con mittenti `INCOMPATIBLE` **non possono mai formare** un `DuplicateCandidate`.
+- **Compatibilità del tipo di messaggio**:
+  - `MATCH`: stesso tipo di messaggio canonico noto (es. entrambi `TEXT`, entrambi `IMAGE`).
+  - `INCOMPATIBLE`: tipi incompatibili (es. `TEXT` vs `AUDIO`, `IMAGE` vs `CALL`). Record incompatibili non possono mai formare duplicati.
+  - `UNKNOWN`: tipi non specificati o generici (`UNKNOWN`, `OTHER`).
+- **Livello di confidenza e motivazione forense**:
+  - `EvidenceLevel.STRONG`: assegnato **esclusivamente** a duplicati cross-source che soddisfano simultaneamente:
+    1. Timeline con fuso orario accertato `KNOWN_UTC`;
+    2. Compatibilità mittente positiva (`ActorCompatibility.MATCH`) su tutti i record del cluster;
+    3. Compatibilità del tipo messaggio positiva (`MATCH`);
+    4. Testo identico.
+  - `EvidenceLevel.WEAK`: assegnato in tutti gli altri casi ammissibili:
+    1. Duplicati interni alla medesima sorgente;
+    2. Duplicati su timeline priva di timezone (`NAIVE_UNKNOWN`);
+    3. Duplicati con mittente `UNKNOWN` (es. alias identico cross-sorgente);
+    4. Duplicati con tipo messaggio `UNKNOWN`.
+    Il campo `reason` di ogni `DuplicateCandidate` con confidenza `WEAK` esplicita in modo trasparente tutti i fattori di debolezza del segnale (es. `naive timestamp`, `actor signal uncertainty`).
+  - **Mai `EXACT`**: riservato a identità strutturali perfette; non viene mai impiegato per deduplicazioni cross-source basate su correlazioni di testo/timestamp.
 - **Tutti i record originali rimangono presenti e inalterati** sia in `RawRecord` che in `NormalizedRecord`.
 
 ---

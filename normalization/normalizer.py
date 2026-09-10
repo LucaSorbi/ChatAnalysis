@@ -31,6 +31,7 @@ from normalization.models import (
     NormalizedTimestamp,
     TimestampTzStatus,
 )
+from normalization.phone import canonicalize_phone_syntax
 from validation.models import ValidationResult
 
 
@@ -221,15 +222,15 @@ class RecordNormalizer(BaseNormalizer):
             is_group = bool(remote_jid and "@g.us" in str(remote_jid))
 
             if key_from_me == 1:
-                # Inviato dal proprietario del dispositivo
+                # Inviato dal proprietario del dispositivo (outgoing)
                 actor_from = NormalizedActor(raw_value="LOCAL_USER", actor_type="local_user")
                 if not is_group and remote_jid:
                     actor_to = self._normalize_single_actor(remote_jid)
                 else:
                     actor_to = None
                 return actor_from, actor_to
-            else:
-                # Ricevuto dal proprietario del dispositivo
+            elif key_from_me == 0:
+                # Ricevuto dal proprietario del dispositivo (incoming)
                 actor_to = NormalizedActor(raw_value="LOCAL_USER", actor_type="local_user")
                 if remote_res and str(remote_res).strip():
                     actor_from = self._normalize_single_actor(remote_res)
@@ -238,6 +239,11 @@ class RecordNormalizer(BaseNormalizer):
                 else:
                     actor_from = None
                 return actor_from, actor_to
+            else:
+                # Tri-state rigoroso: qualsiasi altro valore (None, valore numerico diverso da 0/1, tipo inatteso)
+                # NON deve produrre inferenze arbitrarie su LOCAL_USER né interpretare come incoming.
+                # Preserva il dato raw in raw_record; i ruoli attore rimangono non valorizzati (None).
+                return None, None
 
         elif source_name == "wa_db":
             actor_from = self._normalize_single_actor(raw.get("jid") or raw.get("phone_number"))
@@ -268,13 +274,17 @@ class RecordNormalizer(BaseNormalizer):
     ) -> str | None:
         """
         Estrae l'identificatore del contenitore di chat/conversazione se presente.
+        Preserva fedelmente il valore source-level (es. 'chat_1', 'chat_2') senza risolverlo.
         """
         if source_name == "msgstore_db":
             val = raw.get("key_remote_jid")
-            return str(val) if val is not None and str(val).strip() else None
+            return str(val).strip() if val is not None and str(val).strip() else None
         elif source_name == "cellebrite_json":
             val = raw.get("chat_id")
-            return str(val) if val is not None and str(val).strip() else None
+            return str(val).strip() if val is not None and str(val).strip() else None
+        elif source_name == "cellebrite_csv":
+            val = raw.get("ChatId")
+            return str(val).strip() if val is not None and str(val).strip() else None
         return None
 
     def _normalize_single_actor(self, val: Any) -> NormalizedActor | None:
@@ -319,17 +329,14 @@ class RecordNormalizer(BaseNormalizer):
                 chat_id=s,
             )
 
-        # 4. Numero telefonico internazionale con prefisso '+'
-        if s.startswith("+"):
-            clean_digits = "".join(c for c in s if c.isdigit())
-            # Verifica che contenga solo cifre, spazi o separatori
-            valid_chars = set("+0123456789 -()")
-            if set(s).issubset(valid_chars) and len(clean_digits) >= 5:
-                return NormalizedActor(
-                    raw_value=s,
-                    actor_type="phone",
-                    normalized_phone="+" + clean_digits,
-                )
+        # 4. Numero telefonico internazionale con prefisso '+' (single source of truth)
+        canon_phone = canonicalize_phone_syntax(s)
+        if canon_phone is not None:
+            return NormalizedActor(
+                raw_value=s,
+                actor_type="phone",
+                normalized_phone=canon_phone,
+            )
 
         # 5. Fallback identificativo non classificato
         return NormalizedActor(
@@ -435,9 +442,9 @@ class RecordNormalizer(BaseNormalizer):
             return CanonicalMessageType.UNKNOWN, raw_t
 
         elif source_name == "cellebrite_xml":
-            # Nel formato XML UFDR osservato non esiste un tag Type esplicito.
-            # I messaggi in InstantMessages sono messaggi istantanei (tipicamente text).
-            return CanonicalMessageType.TEXT, None
+            # Nel formato XML UFDR osservato non esiste un tag Type esplicito né indicatore forte.
+            # Assenza di evidenza tipologica != TEXT certo -> UNKNOWN, raw_message_type=None.
+            return CanonicalMessageType.UNKNOWN, None
 
         return CanonicalMessageType.UNKNOWN, None
 

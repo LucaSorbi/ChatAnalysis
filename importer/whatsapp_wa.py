@@ -149,9 +149,9 @@ class WhatsAppWaDbImporter(BaseImporter):
                 return self._has_required_schema(conn)
             finally:
                 conn.close()
-        except Exception:
-            # Qualsiasi errore di apertura o query (file corrotto, non SQLite, permessi, ecc.)
-            # → non è una sorgente gestibile da questo importer
+        except (sqlite3.Error, OSError):
+            # Errori I/O, permessi, file non SQLite, o DB corrotto/non apribile
+            # → non è una sorgente gestibile da questo importer. Bug programmatici inattesi propagano.
             return False
 
     def _has_required_schema(self, conn: sqlite3.Connection) -> bool:

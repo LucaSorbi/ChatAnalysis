@@ -43,6 +43,8 @@ def make_norm_record(
     text_content: str | None = None,
     iso_timestamp: str | None = None,
     raw_fields: dict | None = None,
+    timestamp: NormalizedTimestamp | None = None,
+    message_type: CanonicalMessageType = CanonicalMessageType.TEXT,
 ) -> NormalizedRecord:
     raw = RawRecord(
         source_name=source_name,
@@ -54,16 +56,18 @@ def make_norm_record(
         metadata={},
     )
     val = ValidationResult(record=raw, issues=())
-    ts = (
-        NormalizedTimestamp(
+    if timestamp is not None:
+        ts = timestamp
+    elif iso_timestamp:
+        ts = NormalizedTimestamp(
             status=TimestampTzStatus.KNOWN_UTC,
             utc_datetime=datetime.fromisoformat(iso_timestamp),
             iso_string=iso_timestamp,
             raw_value=iso_timestamp,
         )
-        if iso_timestamp
-        else NormalizedTimestamp(status=TimestampTzStatus.ABSENT, raw_value=None)
-    )
+    else:
+        ts = NormalizedTimestamp(status=TimestampTzStatus.ABSENT, raw_value=None)
+
     return NormalizedRecord(
         raw_record=raw,
         validation_result=val,
@@ -73,7 +77,7 @@ def make_norm_record(
         timestamp=ts,
         actor_from=actor_from,
         actor_to=actor_to,
-        message_type=CanonicalMessageType.TEXT,
+        message_type=message_type,
         raw_message_type="Text",
         is_deleted=False,
         raw_deleted="0",
@@ -188,9 +192,9 @@ class TestDeterministicEntityResolver:
         ent = res.candidate_entities[0]
         assert ent.canonical_identifier == "+390000000001@s.whatsapp.net"
         assert len(ent.references) == 2
-        # Contiene sia evidenza JID che evidenza PHONE_JID_LOCAL
+        # Contiene sia evidenza IDENTIFIER_OBSERVED che evidenza PHONE_JID_LOCAL
         ev_types = {ev.evidence_type for ev in ent.evidence_chain}
-        assert EvidenceType.JID_EXACT in ev_types
+        assert EvidenceType.IDENTIFIER_OBSERVED in ev_types
         assert EvidenceType.PHONE_JID_LOCAL in ev_types
 
     def test_group_participant_alias_remains_unresolved(self, resolver):
@@ -361,3 +365,216 @@ class TestDeterministicEntityResolver:
         res = resolver.resolve([r_chat, r_media])
         assert len(res.candidate_entities) == 0
         assert len(res.unresolved_references) == 0
+
+    # ------------------------------------------------------------------
+    # C1 & C2: Singolo identificatore osservato vs Match effettivo
+    # ------------------------------------------------------------------
+
+    def test_single_jid_observed_produces_identifier_observed_weak(self, resolver):
+        """Un JID osservato in un solo record produce IDENTIFIER_OBSERVED con livello WEAK."""
+        actor = NormalizedActor(
+            raw_value="single@s.whatsapp.net",
+            actor_type="jid",
+            jid_local="single",
+            jid_domain="s.whatsapp.net",
+        )
+        r = make_norm_record("msgstore_db", "1", actor_from=actor)
+        res = resolver.resolve([r])
+        assert len(res.candidate_entities) == 1
+        ent = res.candidate_entities[0]
+        assert ent.candidate_identifier == "single@s.whatsapp.net"
+        assert len(ent.evidence_chain) == 1
+        ev = ent.evidence_chain[0]
+        assert ev.evidence_type == EvidenceType.IDENTIFIER_OBSERVED
+        assert ev.evidence_level == EvidenceLevel.WEAK
+
+    def test_same_jid_twice_same_source_produces_jid_exact(self, resolver):
+        """Stesso JID presente due volte nella stessa sorgente -> JID_EXACT / EXACT."""
+        actor = NormalizedActor(
+            raw_value="user@s.whatsapp.net",
+            actor_type="jid",
+            jid_local="user",
+            jid_domain="s.whatsapp.net",
+        )
+        r1 = make_norm_record("msgstore_db", "1", actor_from=actor)
+        r2 = make_norm_record("msgstore_db", "2", actor_from=actor)
+        res = resolver.resolve([r1, r2])
+        assert len(res.candidate_entities) == 1
+        ent = res.candidate_entities[0]
+        assert any(ev.evidence_type == EvidenceType.JID_EXACT and ev.evidence_level == EvidenceLevel.EXACT for ev in ent.evidence_chain)
+
+    def test_single_phone_observed_produces_identifier_observed_weak(self, resolver):
+        """Un numero telefonico osservato in un solo record produce IDENTIFIER_OBSERVED / WEAK."""
+        actor = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        r = make_norm_record("cellebrite_csv", "1", actor_from=actor)
+        res = resolver.resolve([r])
+        assert len(res.candidate_entities) == 1
+        ent = res.candidate_entities[0]
+        assert ent.candidate_identifier == "+3901"
+        assert len(ent.evidence_chain) == 1
+        ev = ent.evidence_chain[0]
+        assert ev.evidence_type == EvidenceType.IDENTIFIER_OBSERVED
+        assert ev.evidence_level == EvidenceLevel.WEAK
+
+    def test_phone_present_in_multiple_records_produces_phone_canonical_strong(self, resolver):
+        """Numero telefonico presente in più record produce PHONE_CANONICAL / STRONG."""
+        actor = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        r1 = make_norm_record("cellebrite_csv", "1", actor_from=actor)
+        r2 = make_norm_record("cellebrite_csv", "2", actor_from=actor)
+        res = resolver.resolve([r1, r2])
+        assert len(res.candidate_entities) == 1
+        ent = res.candidate_entities[0]
+        assert any(ev.evidence_type == EvidenceType.PHONE_CANONICAL and ev.evidence_level == EvidenceLevel.STRONG for ev in ent.evidence_chain)
+
+    # ------------------------------------------------------------------
+    # C3, C4, C5: DuplicateCandidate Hardening
+    # ------------------------------------------------------------------
+
+    def test_duplicate_candidate_disabled_when_timestamp_absent(self, resolver):
+        """C4: Se il timestamp è ABSENT, NON creare DuplicateCandidate su sola base testuale."""
+        actor = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        r1 = make_norm_record("src1", "1", actor_from=actor, text_content="ok", iso_timestamp=None)
+        r2 = make_norm_record("src2", "2", actor_from=actor, text_content="ok", iso_timestamp=None)
+        res = resolver.resolve([r1, r2])
+        assert len(res.duplicate_candidates) == 0
+
+    def test_duplicate_candidate_naive_unknown_vs_known_utc_not_matched(self, resolver):
+        """C3: NAIVE_UNKNOWN e KNOWN_UTC NON appartengono alla stessa timeline -> nessun DuplicateCandidate."""
+        actor = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        dt = datetime(2024, 4, 23, 20, 30, 15)
+        ts_utc = NormalizedTimestamp(
+            status=TimestampTzStatus.KNOWN_UTC,
+            utc_datetime=dt.replace(tzinfo=timezone.utc),
+            iso_string="2024-04-23T20:30:15+00:00",
+        )
+        ts_naive = NormalizedTimestamp(
+            status=TimestampTzStatus.NAIVE_UNKNOWN,
+            naive_datetime=dt,
+            iso_string="2024-04-23T20:30:15",
+        )
+        r_utc = make_norm_record("src_utc", "1", actor_from=actor, text_content="Messaggio identico", timestamp=ts_utc)
+        r_naive = make_norm_record("src_naive", "2", actor_from=actor, text_content="Messaggio identico", timestamp=ts_naive)
+
+        res = resolver.resolve([r_utc, r_naive])
+        assert len(res.duplicate_candidates) == 0
+
+    def test_duplicate_candidate_incompatible_senders_separated(self, resolver):
+        """C3: Record con mittenti esplicitamente incompatibili non formano DuplicateCandidate."""
+        a1 = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        a2 = NormalizedActor(raw_value="+3902", actor_type="phone", normalized_phone="+3902")
+        r1 = make_norm_record("src1", "1", actor_from=a1, text_content="Ciao!", iso_timestamp="2024-04-23T20:30:15+00:00")
+        r2 = make_norm_record("src2", "2", actor_from=a2, text_content="Ciao!", iso_timestamp="2024-04-23T20:30:15+00:00")
+
+        res = resolver.resolve([r1, r2])
+        assert len(res.duplicate_candidates) == 0
+
+    def test_duplicate_candidate_incompatible_message_types_separated(self, resolver):
+        """C3: Record con tipi di messaggio noti e incompatibili non formano DuplicateCandidate."""
+        actor = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        r1 = make_norm_record("src1", "1", actor_from=actor, text_content="foto", iso_timestamp="2024-04-23T20:30:15+00:00", message_type=CanonicalMessageType.TEXT)
+        r2 = make_norm_record("src2", "2", actor_from=actor, text_content="foto", iso_timestamp="2024-04-23T20:30:15+00:00", message_type=CanonicalMessageType.IMAGE)
+
+        res = resolver.resolve([r1, r2])
+        assert len(res.duplicate_candidates) == 0
+
+    def test_duplicate_candidate_confidence_is_strong_never_exact(self, resolver):
+        """C5: La confidenza di DuplicateCandidate cross-source per testo+timestamp è STRONG, mai EXACT."""
+        actor = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        r1 = make_norm_record("csv", "1", actor_from=actor, text_content="Identico", iso_timestamp="2024-04-23T20:30:15+00:00")
+        r2 = make_norm_record("json", "2", actor_from=actor, text_content="Identico", iso_timestamp="2024-04-23T20:30:15+00:00")
+
+        res = resolver.resolve([r1, r2])
+        assert len(res.duplicate_candidates) == 1
+        dup = res.duplicate_candidates[0]
+        assert dup.confidence == EvidenceLevel.STRONG
+        assert dup.confidence != EvidenceLevel.EXACT
+
+    # ------------------------------------------------------------------
+    # FASE A: Tri-State Actor Compatibility & Duplicate Candidate Hardening
+    # ------------------------------------------------------------------
+
+    def test_actor_compatibility_tristate_direct(self, resolver):
+        """
+        Fase A1: Verifica diretta di _check_actor_compatibility:
+        - MATCH: stesso canonical phone, stesso JID, entrambi LOCAL_USER, stesso alias stessa sorgente.
+        - INCOMPATIBLE: telefoni diversi, JID diversi, LOCAL_USER vs remoto.
+        - UNKNOWN: alias cross-sorgente, mittente mancante, actor_type sconosciuto.
+        """
+        from entity_resolution.models import ActorCompatibility
+
+        a_phone1 = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        a_phone2 = NormalizedActor(raw_value="+3902", actor_type="phone", normalized_phone="+3902")
+        a_jid1 = NormalizedActor(raw_value="u1@s.whatsapp.net", actor_type="jid", jid_local="u1", jid_domain="s.whatsapp.net")
+        a_jid2 = NormalizedActor(raw_value="u2@s.whatsapp.net", actor_type="jid", jid_local="u2", jid_domain="s.whatsapp.net")
+        a_local = NormalizedActor(raw_value="LOCAL_USER", actor_type="local_user")
+        a_alias_src1 = NormalizedActor(raw_value="Alice", actor_type="alias", alias="Alice")
+        a_alias_src2 = NormalizedActor(raw_value="Alice", actor_type="alias", alias="Alice")
+        a_unknown = NormalizedActor(raw_value="???", actor_type="unknown")
+
+        r_p1 = make_norm_record("src1", "1", actor_from=a_phone1)
+        r_p1_bis = make_norm_record("src2", "2", actor_from=a_phone1)
+        r_p2 = make_norm_record("src2", "3", actor_from=a_phone2)
+        r_j1 = make_norm_record("src1", "4", actor_from=a_jid1)
+        r_j2 = make_norm_record("src2", "5", actor_from=a_jid2)
+        r_loc = make_norm_record("src1", "6", actor_from=a_local)
+        r_al1 = make_norm_record("src1", "7", actor_from=a_alias_src1)
+        r_al1_same = make_norm_record("src1", "8", actor_from=a_alias_src1)
+        r_al2 = make_norm_record("src2", "9", actor_from=a_alias_src2)
+        r_unk = make_norm_record("src1", "10", actor_from=a_unknown)
+        r_none = make_norm_record("src1", "11", actor_from=None)
+
+        # MATCH
+        assert resolver._check_actor_compatibility(r_p1.actor_from, r_p1_bis.actor_from, r_p1.source_name, r_p1_bis.source_name) == ActorCompatibility.MATCH
+        assert resolver._check_actor_compatibility(r_j1.actor_from, r_j1.actor_from, r_j1.source_name, r_j1.source_name) == ActorCompatibility.MATCH
+        assert resolver._check_actor_compatibility(r_loc.actor_from, r_loc.actor_from, r_loc.source_name, r_loc.source_name) == ActorCompatibility.MATCH
+        assert resolver._check_actor_compatibility(r_al1.actor_from, r_al1_same.actor_from, r_al1.source_name, r_al1_same.source_name) == ActorCompatibility.MATCH
+
+        # INCOMPATIBLE
+        assert resolver._check_actor_compatibility(r_p1.actor_from, r_p2.actor_from, r_p1.source_name, r_p2.source_name) == ActorCompatibility.INCOMPATIBLE
+        assert resolver._check_actor_compatibility(r_j1.actor_from, r_j2.actor_from, r_j1.source_name, r_j2.source_name) == ActorCompatibility.INCOMPATIBLE
+        assert resolver._check_actor_compatibility(r_loc.actor_from, r_p1.actor_from, r_loc.source_name, r_p1.source_name) == ActorCompatibility.INCOMPATIBLE
+        assert resolver._check_actor_compatibility(r_loc.actor_from, r_j1.actor_from, r_loc.source_name, r_j1.source_name) == ActorCompatibility.INCOMPATIBLE
+
+        # UNKNOWN
+        assert resolver._check_actor_compatibility(r_al1.actor_from, r_al2.actor_from, r_al1.source_name, r_al2.source_name) == ActorCompatibility.UNKNOWN
+        assert resolver._check_actor_compatibility(r_p1.actor_from, r_none.actor_from, r_p1.source_name, r_none.source_name) == ActorCompatibility.UNKNOWN
+        assert resolver._check_actor_compatibility(r_none.actor_from, r_none.actor_from, r_none.source_name, r_none.source_name) == ActorCompatibility.UNKNOWN
+        assert resolver._check_actor_compatibility(r_p1.actor_from, r_unk.actor_from, r_p1.source_name, r_unk.source_name) == ActorCompatibility.UNKNOWN
+
+    def test_duplicate_candidate_actor_unknown_produces_weak_confidence(self, resolver):
+        """
+        Fase A1 & A3: DuplicateCandidate con mittente UNKNOWN (es. alias identico cross-source)
+        non può avere confidenza STRONG, ma solo WEAK con motivazione esplicita.
+        """
+        a1 = NormalizedActor(raw_value="Alice", actor_type="alias", alias="Alice")
+        a2 = NormalizedActor(raw_value="Alice", actor_type="alias", alias="Alice")
+        r1 = make_norm_record("src1", "1", actor_from=a1, text_content="Ciao mondo", iso_timestamp="2024-04-23T20:30:15+00:00")
+        r2 = make_norm_record("src2", "2", actor_from=a2, text_content="Ciao mondo", iso_timestamp="2024-04-23T20:30:15+00:00")
+
+        res = resolver.resolve([r1, r2])
+        assert len(res.duplicate_candidates) == 1
+        dup = res.duplicate_candidates[0]
+        assert dup.confidence == EvidenceLevel.WEAK
+        assert "actor signal uncertainty" in dup.reason
+
+    def test_duplicate_candidate_naive_unknown_timestamp_produces_weak_confidence(self, resolver):
+        """
+        Fase A3: DuplicateCandidate su timeline NAIVE_UNKNOWN ha confidenza WEAK.
+        """
+        actor = NormalizedActor(raw_value="+3901", actor_type="phone", normalized_phone="+3901")
+        dt = datetime(2024, 4, 23, 20, 30, 15)
+        ts_naive = NormalizedTimestamp(
+            status=TimestampTzStatus.NAIVE_UNKNOWN,
+            naive_datetime=dt,
+            iso_string="2024-04-23T20:30:15",
+        )
+        r1 = make_norm_record("csv1", "1", actor_from=actor, text_content="Ciao naive", timestamp=ts_naive)
+        r2 = make_norm_record("csv2", "2", actor_from=actor, text_content="Ciao naive", timestamp=ts_naive)
+
+        res = resolver.resolve([r1, r2])
+        assert len(res.duplicate_candidates) == 1
+        dup = res.duplicate_candidates[0]
+        assert dup.confidence == EvidenceLevel.WEAK
+        assert "naive timestamp" in dup.reason
+
+

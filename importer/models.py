@@ -28,22 +28,10 @@ from types import MappingProxyType
 from typing import Any
 
 
-def _freeze_structural(val: Any) -> Any:
-    """
-    Rende ricorsivamente immutabile una struttura dati (deep immutability strutturale).
+from core.immutability import freeze_structural
 
-    - mapping (dict, MappingProxyType) -> MappingProxyType con valori ricorsivamente congelati
-    - sequence (list, tuple) -> tuple con elementi ricorsivamente congelati
-    - scalari (str, int, float, bool, None, bytes) -> invariati
+_freeze_structural = freeze_structural
 
-    Nessuna normalizzazione semantica viene effettuata: chiavi, valori, ordine e tipi
-    vengono rigorosamente preservati.
-    """
-    if isinstance(val, (dict, MappingProxyType)):
-        return MappingProxyType({k: _freeze_structural(v) for k, v in val.items()})
-    elif isinstance(val, (list, tuple)):
-        return tuple(_freeze_structural(item) for item in val)
-    return val
 
 
 @dataclass(frozen=True)

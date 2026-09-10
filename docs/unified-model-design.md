@@ -34,9 +34,14 @@ $$\text{DATI ORIGINALI} \longrightarrow \text{IMPORTER} \longrightarrow \text{Ra
 
 ### 2.1 `Participant`
 Rappresenta un attore mittente o destinatario associato a una conversazione:
-* `participant_id: str`: ID deterministico (es. `participant:entity_candidate:1` o `participant:LOCAL_USER`).
+* `participant_id: str`: ID deterministico e non ambiguo con prefisso di tipo:
+  - Entità JID risolta: `participant:jid:<canonical_jid>`
+  - Entità telefonica risolta: `participant:phone:<canonical_phone>`
+  - Ruolo tecnico locale: `participant:local_user:LOCAL_USER`
+  - Gruppo come attore: `participant:group:<group_jid>` (con `group_jid_as_actor=True`, `display_name=None`)
+  - Partecipante unresolved: `participant:unresolved:<source_name>:<source_record_id>:<role>` (scoping rigoroso per evitare collisioni spurie tra attori non risolti di sorgenti o record diversi).
 * `identifier: str`: identificatore normalizzato (numero telefonico canonicalizzato, JID, alias, o `LOCAL_USER`).
-* `display_name: str | None`: nome descrittivo desunto deterministicamente (es. da `wa.db` contacts), se disponibile.
+* `display_name: str | None`: nome descrittivo desunto deterministicamente (es. da `wa.db` contacts), se disponibile (sempre `None` per `LOCAL_USER` e gruppi come attori).
 * `entity_candidate_id: str | None`: puntatore al cluster di risoluzione identità (`CandidateEntity.candidate_id`), se risolto.
 * `is_local_user: bool`: flag che segnala se l'attore è il proprietario del dispositivo sottoposto ad acquisizione forense.
 * `metadata: MappingProxyType[str, Any]`: metadati immutabili.
@@ -73,30 +78,58 @@ Rappresentazione immutabile e verificabile del singolo messaggio:
 
 ---
 
-## 3. Costruzione e Pipeline (`unified/builder.py`)
+## 3. Costruzione e Pipeline (`unified/builder.py`, `unified/context.py`)
 
-La classe `UnifiedModelBuilder` gestisce l'assemblaggio dei messaggi unificati:
-
+### 3.1 Disaccoppiamento del Contesto (`UnifiedBuildContext`) e Semantica One-Shot
+Per garantire la purezza funzionale e l'indipendenza dall'ordine di arrivo dei record, il layer introduce `UnifiedBuildContext`:
 1. **Indicizzazione della Risoluzione**:
    - Pre-indicizza le `CandidateEntity` per reference `(source_name, source_record_id, actor_role)` e per identificatore normalizzato per garantire lookup deterministico $O(1)$.
-   - Pre-indicizza i `DuplicateCandidate` per collegare istantaneamente ogni messaggio al suo cluster di duplicazione.
+   - Pre-indicizza i `DuplicateCandidate` per collegare istantaneamente ogni messaggio ai candidati duplicati.
 2. **Pre-scansione Contenitori Chat**:
-   - Pre-indicizza i record descrittori `chat` (come le righe di `chat_list` in `msgstore.db`) per recuperare i titoli delle conversazioni e gli oggetti di gruppo.
-3. **Elaborazione e Streaming**:
-   - Filtra i record non di tipo messaggio (`contact`, `chat`, `media_ref`) senza emettere messaggi unificati spuri.
-   - Assembla mittente e destinatario valorizzando `is_local_user` e `entity_candidate_id`.
-   - Assegna `chat_type='group'` quando `chat_id` contiene `@g.us`, o `chat_type='direct'` per conversazioni 1-to-1.
-   - Fornisce sia interfaccia streaming (`build_stream`) che materializzata (`build_all`).
+   - Pre-scansiona i record descrittori `chat` (come le 3 righe di `chat_list` in `msgstore.db`) prima della fase di emissione dei messaggi, registrando i titoli delle conversazioni e gli oggetti dei gruppi.
+   - Tutti gli indici e le mappe sono congelati con immutabilità profonda (`freeze_structural` da `core.immutability`).
+3. **Semantica One-Shot e Trasparenza Iteratori**:
+   - `UnifiedBuildContext.from_records(records: Sequence[NormalizedRecord])`: richiede esplicitamente una sequenza ri-iterabile e indicizzabile.
+   - `UnifiedBuildContext.from_records_and_stream(records: Iterable[NormalizedRecord]) -> tuple[UnifiedBuildContext, list[NormalizedRecord]]`: helper trasparente per flussi generatore monouso; consuma il flusso in un singolo passaggio, istanzia il contesto e restituisce la lista di record per la successiva costruzione dei messaggi.
+4. **Elaborazione e Streaming**:
+   - `build_stream(records)` è un generatore puro a singolo passaggio: non effettua scansioni condizionali, non accumula record in memoria e non muta lo stato interno durante l'iterazione.
+   - `build_all(records)` è implementato semplicemente e rigorosamente come `list(self.build_stream(records))`.
+   - Viene garantita la totale equivalenza tra streaming e materializzazione: `list(builder.build_stream(records)) == builder.build_all(records)`.
+
+### 3.2 Regole di Costruzione Forense
+- **Attori non risolti**: attori privi di identificatore telefonico o JID (es. `group_participant_A`) mantengono `display_name = None`, `entity_candidate_id = None`, metadato `{"unresolved": True}` e `participant_id = "participant:unresolved:<source_name>:<record_id>:<role>"`.
+- **Tracciamento LOCAL_USER**: il proprietario del dispositivo forense ha `participant_id = "participant:local_user:LOCAL_USER"`, `identifier = "LOCAL_USER"`, `display_name = None` (nessun nome sintetico improprio), `is_local_user = True` e metadato con `technical_role = True`.
+- **Gruppi come attori**: se un record ha come actor un JID di gruppo (`@g.us`), non viene mai promosso a persona (nessun `display_name` fasullo); riceve `participant_id = "participant:group:<group_jid>"`, `group_jid_as_actor = True`, `is_group = True` e collegamento facoltativo all'entità gruppo.
+- **Chat per sorgenti eterogenee**:
+  - `chat_1` in Cellebrite CSV possiede `chat_type = "unknown"` (nessuna presunzione di chat diretta o gruppo).
+  - Record senza `chat_id` e con destinatario generico: `chat_type = "unknown"`. Solo in presenza di JID individuale esplicito (`@s.whatsapp.net`) viene assegnato `chat_type = "direct"`.
+  - Record con `@g.us` in `chat_id`: `chat_type = "group"`.
+  - Record UFDR XML privi di chat/session: `chat = None`.
 
 ---
 
 ## 4. Metriche di Verifica sui Dataset Sintetici Reali
 
+### 4.1 Conteggi e Provenance per Sorgente
 | Sorgente | Record Raw Totali | Record Messaggio | UnifiedMessage Generati | Stato Timestamp Prevalente | Note |
 | :--- | :--- | :--- | :--- | :--- | :--- |
-| `msgstore.db` | 622 | 504 | 504 | `KNOWN_UTC` | 18 record `chat`, 100 `media_ref` utilizzati come contesto |
+| `msgstore.db` | 622 | 504 | 504 | `KNOWN_UTC` (502) / `ABSENT` (2) | 3 record `chat`, 115 `media_ref` utilizzati come contesto |
 | `wa.db` | 4 | 0 | 0 | N/A | 4 record `contact` impiegati per Entity Resolution |
-| `messages.csv` | 302 | 302 | 302 | `NAIVE_UNKNOWN` | Nessuna assunzione di timezone; timestamp preservati |
-| `messages.json` | 100 | 100 | 100 | `KNOWN_UTC` | Parsing streaming `ijson`, mittenti mappati |
-| `report.xml` | 50 | 50 | 50 | `KNOWN_UTC` | Parsing protetto `defusedxml` |
+| `messages.csv` | 302 | 302 | 302 | `NAIVE_UNKNOWN` (301) / `ABSENT` (1) | Nessuna assunzione di timezone; timestamp preservati |
+| `messages.json` | 100 | 100 | 100 | `KNOWN_UTC` (100) | Parsing streaming `ijson`, mittenti mappati |
+| `report.xml` | 50 | 50 | 50 | `KNOWN_UTC` (50) | Parsing protetto `defusedxml`, nessun tag chat in UFDR |
 | **TOTALE** | **1078** | **956** | **956** | - | **0 messaggi persi, 100% provenance preservata** |
+
+### 4.2 Dettaglio Distribuzione Fusi Orari
+- **`msgstore_db`** (504): `KNOWN_UTC`: 502, `ABSENT`: 2 (record 502 ts=0, record 504 ts=-1000), `NAIVE_UNKNOWN`: 0.
+- **`cellebrite_csv`** (302): `NAIVE_UNKNOWN`: 301, `ABSENT`: 1 (riga 15 stringa vuota), `KNOWN_UTC`: 0.
+- **`cellebrite_json`** (100): `KNOWN_UTC`: 100, `NAIVE_UNKNOWN`: 0, `ABSENT`: 0.
+- **`cellebrite_xml`** (50): `KNOWN_UTC`: 50, `NAIVE_UNKNOWN`: 0, `ABSENT`: 0.
+- **Totale complessivo**: `KNOWN_UTC`: 652, `NAIVE_UNKNOWN`: 301, `ABSENT`: 3 (Somma: 956 messaggi).
+
+### 4.3 Dettaglio Distribuzione Tipi Chat
+- **`msgstore_db`** (504): `direct`: 334, `group`: 170, `unknown`: 0, `chat=None`: 0.
+- **`cellebrite_csv`** (302): `direct`: 0, `group`: 0, `unknown`: 302 (`chat_1`, `chat_2`, `chat_3`), `chat=None`: 0.
+- **`cellebrite_json`** (100): `direct`: 0, `group`: 0, `unknown`: 100, `chat=None`: 0.
+- **`cellebrite_xml`** (50): `direct`: 0, `group`: 0, `unknown`: 0, `chat=None`: 50 (nessun contenitore chat in export UFDR).
+- **Totale complessivo**: `direct`: 334, `group`: 170, `unknown`: 402, `chat=None`: 50 (Somma: 956 messaggi).
