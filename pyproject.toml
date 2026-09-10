@@ -38,7 +38,7 @@ dev = [
 # ---------------------------------------------------------------------------
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["profiler*", "importer*"]
+include = ["profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*"]
 exclude = ["tests*", "test_data*"]
 
 # ---------------------------------------------------------------------------

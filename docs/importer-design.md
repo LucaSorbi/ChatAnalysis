@@ -1,8 +1,8 @@
 # Importer Layer — Design Document
 
-**Fase**: 3 — Layer di ingestion  
+**Fase**: 3 — Structured Ingestion Layer  
 **Data**: 2026-09-10  
-**Stato**: Importer concreti validati — `WhatsAppMsgstoreImporter` (msgstore.db), `WhatsAppWaDbImporter` (wa.db), `CellebriteCsvImporter` (messages.csv) e `CellebriteJsonImporter` (messages.json)
+**Stato**: Structured ingestion layer completed (layer di ingestion strutturata completato) — copre tutti i 5 input strutturati del progetto: `WhatsAppMsgstoreImporter` (msgstore.db), `WhatsAppWaDbImporter` (wa.db), `CellebriteCsvImporter` (messages.csv), `CellebriteJsonImporter` (messages.json) e `CellebriteXmlImporter` (report.xml). Gli asset multimodali (audio, immagini, video) sono stati profilati ma NON sono ancora gestiti dal layer di ingestion (nessuna pipeline STT/OCR/media processing implementata in questa fase).
 
 ---
 
@@ -455,18 +455,21 @@ Poiché le esportazioni forensi costituiscono input non fidato proveniente dall'
 - **Dipendenza**: `defusedxml>=0.7.1` in `pyproject.toml` (libreria pura Python, ~25 KB).
 
 ### 10.3 Streaming Incrementale e Rilascio Memoria
-- L'importer impiega `defusedxml.ElementTree.iterparse(source, events=("end",), forbid_dtd=True)`.
+- L'importer impiega `defusedxml.ElementTree.iterparse(source, events=("start", "end"), forbid_dtd=True, forbid_entities=True, forbid_external=True)`.
 - Nessun caricamento dell'intero albero DOM in memoria.
-- Evento utilizzato: `"end"` su elemento `Message`. Al completamento dell'elemento, i campi vengono mappati nel `RawRecord`, emessi via `yield`, e la memoria dell'elemento viene immediatamente liberata invocando `elem.clear()`.
-- Il consumo di memoria è contenuto e non proporzionale al numero complessivo dei messaggi nel report.
+- Tracciamento della gerarchia tramite stack degli elementi.
+- Al completamento dell'elemento `Message` (evento `"end"`):
+  1. I campi vengono mappati ed estratti nel `RawRecord`;
+  2. `elem.clear()` e `parent.remove(elem)` vengono eseguiti **PRIMA** del `yield`, azzerando sia la memoria dell'elemento sia l'accumulo di riferimenti a nodi vuoti nel genitore `InstantMessages` durante la sospensione del generatore.
+- Il consumo di memoria è rigorosamente incrementale, determinato unicamente dal buffer del parser e dal record correntemente processato (nessuna pretesa teorica non dimostrata $O(1)$).
 
 ### 10.4 Identificatori e Mappatura RawRecord
 - `source_name`: `"cellebrite_xml"`
 - `source_path`: percorso assoluto del file `report.xml`
 - `source_record_id`: priorità 1 all'attributo nativo `id` (`str(elem.attrib["id"])`, es. `"0"`, `"1"`, ...). Se assente, fallback strutturale deterministico `f"message:{idx}"` (0-based).
 - `record_type`: `"message"`
-- `raw_fields`: mappatura gerarchica fedele con `@attributes`, `Timestamp`, `Sender`, `Body`, `Deleted`. Elementi ripetuti preservati come liste ordinate. Tutte le strutture annidate sono congelate ricorsivamente tramite `_freeze_structural()`.
-- `media_reference`: `None` per i messaggi testuali standard di `report.xml`. Se in future estrazioni è presente un tag esplicito (`Attachment`, `Media`), viene estratto in modo sicuro.
+- `raw_fields`: mappatura gerarchica fedele con `@attributes`, `Timestamp`, `Sender`, `Body`, `Deleted`. Elementi ripetuti preservati come liste ordinate. Tutte le strutture annidate sono congelate ricorsivamente tramite `_freeze_structural()`. In presenza di namespace XML, viene preservata fedelmente l'identità originale tramite notazione Clark (`"{uri}Tag"`), evitando collisioni e mantenendo tag semplici per XML senza namespace.
+- `media_reference`: `None` per il formato XML Cellebrite UFDR osservato (nessun nodo media o allegato presente nel campione). Nessuna euristica speculativa anticipata su tag ipotetici non osservati (`Attachment`, `Media`); eventuali tag sconosciuti restano comunque integri in `raw_fields`.
 - `metadata`: `{"table": "InstantMessages", "format": "xml_ufdr", "xml_index": idx, "importer": "CellebriteXmlImporter", "importer_version": "0.1.0"}`
 
 ### 10.5 Preservazione Tipi Nativi XML e Differenze Cross-Source

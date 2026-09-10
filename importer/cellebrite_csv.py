@@ -30,7 +30,7 @@ Nessuna scrittura, creazione di file temporanei o modifica del file originale.
 Streaming
 ---------
 import_records() genera RawRecord riga per riga tramite csv.DictReader,
-garantendo un footprint di memoria costante O(1).
+garantendo un'elaborazione incrementale con consumo proporzionale alla singola riga.
 
 Questioni aperte (esplicitamente non risolte a questo layer):
 ------------------------------------------------------------

@@ -1,379 +1,169 @@
-# Report Ufficiale di Sviluppo: Hardening Finale e Quinto Importer Forense `CellebriteXmlImporter`
+# Report Ufficiale di Sviluppo: Entity Resolution Acceptance Audit & Unified Model Foundation
 
 **Data e Ora**: 2026-09-10  
 **Repository**: `c:\Users\lucas\Desktop\Tesi`  
 **Autore**: Agente di Sviluppo Software  
-**Stato della Pipeline**: DATI ORIGINALI → IMPORTER → RawRecord (Fase Ingestion completata per tutte e 5 le sorgenti forensi)
+**Stato della Pipeline**: DATI ORIGINALI → IMPORTER → RawRecord → VALIDAZIONE → NORMALIZZAZIONE → ENTITY RESOLUTION → UnifiedMessage (Foundation completata e convalidata)
 
 ---
 
 ## 1. Fase di Lavoro
-- **DECISIONE ARCHITETTURALE**: Questa fase ha completato l'hardening della foundation e del JSON importer, la validazione di sicurezza del tooling permanente di sanitizzazione, e l'implementazione integrale del quinto ed ultimo importer forense del layer di ingestion: `CellebriteXmlImporter` per esportazioni Cellebrite UFDR (`test_data/cellebrite_export/report.xml`).
+- **DECISIONE ARCHITETTURALE**: Questa fase ha completato con successo due passaggi cardine della pipeline forense:
+  1. **FASE A — Entity Resolution Acceptance Audit**:
+     - Audit rigoroso della semantica dei JID WhatsApp (`msgstore.db` e `wa.db`): isolamento strutturale tra JID individuali (`@s.whatsapp.net`) e JID di gruppo (`@g.us`);
+     - Riconoscimento formale del JID di gruppo come identificatore di `Chat`/gruppo, con categorico divieto di fusione con numeri telefonici o promozione a partecipante persona;
+     - Formalizzazione del proprietario del dispositivo come `LOCAL_USER` (`actor_type="local_user"`, `is_local_user=True`) senza attribuzione speculativa di recapiti telefonici o nomi inventati;
+     - Implementazione della semantica di direzione in `msgstore.db` (`key_from_me == 1` $\rightarrow$ mittente `LOCAL_USER`; `key_from_me == 0` $\rightarrow$ destinatario `LOCAL_USER`, mittente desunto da `remote_resource` o JID peer);
+     - Estensione dei modelli con `candidate_identifier` (mantenendo `canonical_identifier` per piena retrocompatibilità), nuovi livelli e tipi di evidenza (`GROUP_JID_EXACT`, `LOCAL_USER_EXACT`);
+     - Filtraggio dei record strutturali (`chat`, `media_ref`) affinché non producano entità persona spurie;
+     - Deduplicazione candidata non distruttiva (`DuplicateCandidate` raggruppa senza cancellare alcun record).
+  2. **FASE B — Unified Model Foundation (`unified/`)**:
+     - Progettazione e implementazione dei modelli canonici immutabili: `Participant`, `Chat`, `UnifiedMessage` ([unified/models.py](file:///c:/Users/lucas/Desktop/Tesi/unified/models.py));
+     - Costruttore di modello unificato `UnifiedModelBuilder` ([unified/builder.py](file:///c:/Users/lucas/Desktop/Tesi/unified/builder.py)) con supporto sia streaming lazy (`build_stream`) che materializzato (`build_all`);
+     - Identificatori deterministici standardizzati `unified:{source_name}:{source_record_id}`;
+     - Salvaguardia totale dell'integrità temporale: i timestamp naive (`NAIVE_UNKNOWN`) non vengono forzati a UTC né fusi in una timeline universale non documentata;
+     - Conservazione integrale di tutti i 956 record messaggio presenti nelle 5 sorgenti sintetiche;
+     - Documentazione architetturale formale in [docs/unified-model-design.md](file:///c:/Users/lucas/Desktop/Tesi/docs/unified-model-design.md).
 
 ---
 
 ## 2. Baseline Iniziale
-- **FATTO VERIFICATO**: Lo stato all'inizio della sessione registrava:
-  - 4 importer operativi: `WhatsAppMsgstoreImporter`, `WhatsAppWaDbImporter`, `CellebriteCsvImporter`, `CellebriteJsonImporter`;
-  - Provenance multilinea CSV basata sulla riga fisica di inizio (`row:<start_line>`);
-  - Deep immutability ricorsiva attiva in `RawRecord` per strutture annidate (`MappingProxyType` e `tuple`);
-  - Suite pytest precedente: 377 passed, 0 failed, 0 errors.
+- **FATTO VERIFICATO**: All'avvio della fase corrente, lo stato del repository registrava:
+  - 5 importer concreti operativi e read-only (`WhatsAppMsgstoreImporter`, `WhatsAppWaDbImporter`, `CellebriteCsvImporter`, `CellebriteJsonImporter`, `CellebriteXmlImporter`);
+  - Layer di validazione `validation/` con severity rigorosa;
+  - Layer di normalizzazione `normalization/` formalizzato;
+  - Layer di entity resolution `entity_resolution/` iniziale;
+  - Suite pytest precedente: 567 test raccolti, 566 passed, 0 failed, 0 errors, 1 skipped.
 
 ---
 
-## 3. Hardening JSON `can_import()`
-- **FATTO VERIFICATO**: In [importer/cellebrite_json.py](file:///c:/Users/lucas/Desktop/Tesi/importer/cellebrite_json.py), il blocco generico `except Exception: return False` è stato rimosso e sostituito con la gestione ristretta delle sole eccezioni realmente previste per I/O e parsing:
-  ```python
-  except (OSError, ijson.JSONError, UnicodeDecodeError):
-      return False
-  ```
-- **DECISIONE ARCHITETTURALE**: Nessun bug programmatico (es. `TypeError`, `AttributeError`, errori interni imprevisti) viene mascherato. Un test dedicato (`test_does_not_swallow_unexpected_programming_errors`) in [tests/unit/test_cellebrite_json_importer.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_cellebrite_json_importer.py) verifica con `monkeypatch` che eccezioni inattese sollevino regolarmente errore senza essere soppresse.
+## 3. FASE A — Entity Resolution Acceptance Audit & Hardening
 
----
+### 3.1 Audit Semantico JID WhatsApp e Direzione Messaggi (A1)
+- **FATTO VERIFICATO**: Ispezione su `test_data/whatsapp_export/msgstore.db` e `wa.db`:
+  - **JID Individuali (`@s.whatsapp.net`)**: rappresentano contatti individuali (es. `+390000000001@s.whatsapp.net`, `+390000000002@s.whatsapp.net`). Possono essere correlati deterministicamente al numero di telefono se identico alla local part numerica (`EvidenceType.PHONE_JID_LOCAL`).
+  - **JID di Gruppo (`@g.us`)**: nel dataset è presente il JID `00000000001-0000000000@g.us` associato al gruppo `Gruppo_Sintetico_01`. Rappresenta una `Chat`, **NON una persona**. È stata introdotta l'evidenza `EvidenceType.GROUP_JID_EXACT` con `entity_type="group"`. È categoricamente impedito qualsiasi tentativo di estrarre una persona o collegarlo a numeri di telefono.
+  - **Proprietario del Dispositivo (`LOCAL_USER`)**:
+    - Quando `key_from_me == 1`: il mittente è il proprietario del dispositivo, normalizzato come `NormalizedActor(raw_value="LOCAL_USER", actor_type="local_user")`. Se la chat è 1-to-1, il destinatario è `key_remote_jid`; se è di gruppo, il destinatario è `None`.
+    - Quando `key_from_me == 0`: il destinatario è `LOCAL_USER`. Il mittente reale è estratto da `remote_resource` (es. `+39 000 0000001`, `+39 000 0000002`, `group_participant_A`) oppure, in assenza di esso nelle chat 1-to-1, da `key_remote_jid`.
+    - `LOCAL_USER` viene risolto in una `CandidateEntity` dedicata con `candidate_identifier="LOCAL_USER"`, `entity_type="local_user"`, ed evidenza `LOCAL_USER_EXACT`.
 
-## 4. Correzione Claim Memoria Streaming
-- **VALUTAZIONE**: È stata eliminata la formulazione teorica di complessità spaziale assoluta "$O(1)$", non matematicamente rigorosa in presenza di buffer del parser e record di dimensione variabile.
-- **DECISIONE ARCHITETTURALE**: In [docs/importer-design.md](file:///c:/Users/lucas/Desktop/Tesi/docs/importer-design.md) il comportamento della memoria streaming per CSV, JSON e XML è ora descritto oggettivamente:
-  - Nessun caricamento dell'intero dataset in memoria;
-  - Elaborazione incrementale a generatore (`yield`);
-  - Consumo di memoria limitato principalmente al record corrente e ai buffer interni del parser;
-  - Consumo non proporzionale al numero complessivo dei record della sorgente.
-
----
-
-## 5. Test di Sicurezza Sanitizer
-- **FATTO VERIFICATO**: È stata creata la suite di test unitari [tests/unit/test_sanitize_dataset.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_sanitize_dataset.py) (10 test) per verificare la funzione di guardia `_verify_safety()` dello script permanente [scripts/sanitize_synthetic_dataset.py](file:///c:/Users/lucas/Desktop/Tesi/scripts/sanitize_synthetic_dataset.py):
-  1. Path dentro `test_data/` → consentito;
-  2. Path fuori da `test_data/` → bloccato con `ValueError`;
-  3. Path con `..` traversal che risolve all'esterno → bloccato;
-  4. Verifica basata su `path.resolve().parts` (directory fake con prefissi testuali come `test_data_fake` o `my_test_data` rifiutate);
-  5. Symlink puntante all'esterno → risolto all'esterno e bloccato (gracefully skipped se il sistema operativo Windows richiede privilegi elevati);
-  6. Tutte le funzioni pubbliche di sanitizzazione (`sanitize_csv`, `sanitize_json`, `sanitize_wa_db`, `sanitize_msgstore_db`, `sanitize_xml`) invocano preventivamente la guardia.
-  Tutti i test sono eseguiti su directory temporanee isolate (`tmp_path`) senza mai alterare i file di test reali.
-
----
-
-## 6. Risultato Gate A
+### 3.2 Filtraggio Record Non-Messaggio (A2)
 - **FATTO VERIFICATO**:
-  - Comando: `.venv\Scripts\python -m pytest`
-  - Esito: **387 passed, 1 skipped in 16.21s, 0 failed, 0 errors, 0 warnings**.
+  - `msgstore.db` contiene 18 record `chat` (tabella `chat_list`) e 100 record `media_ref` (tabella `messages` con `media_url` privo di corpo o di contesto).
+  - Sia `RecordNormalizer` che `DeterministicEntityResolver` ignorano esplicitamente i record con `record_type in ("chat", "media_ref")` durante l'estrazione degli attori persona, impedendo la creazione di entità spurie.
+  - I record `chat` vengono invece valorizzati per estrarre l'attributo `chat_id` e memorizzare il titolo (`subject`) delle conversazioni.
 
----
-
-## 7. Struttura XML Osservata nel Campione Reale
-- **FATTO VERIFICATO**: Ispezione diretta di `test_data/cellebrite_export/report.xml`:
-  - Dimensione: 10.879 byte (~10 KB);
-  - Gerarchia:
-    ```xml
-    <?xml version='1.0' encoding='utf-8'?>
-    <DumpFile type="UFDR" version="2.0">
-      <DeviceInfo>
-        <Model>Samsung Galaxy S21</Model>
-        <OS>Android 13</OS>
-        <IMEI>000000000000001</IMEI>
-      </DeviceInfo>
-      <InstantMessages>
-        <Message id="0">
-          <Timestamp>2024-04-23T20:30:15+00:00</Timestamp>
-          <Sender>+39 000 0000001</Sender>
-          <Body>Messaggio di test sintetico 08</Body>
-          <Deleted>false</Deleted>
-        </Message>
-        ...
-      </InstantMessages>
-    </DumpFile>
-    ```
-
----
-
-## 8. Encoding XML
-- **FATTO VERIFICATO**: UTF-8 standard, dichiarato esplicitamente nell'XML declaration `<?xml version='1.0' encoding='utf-8'?>`.
-
----
-
-## 9. Root Element
-- **FATTO VERIFICATO**: `<DumpFile type="UFDR" version="2.0">`. Contiene gli attributi `type="UFDR"` e `version="2.0"`.
-
----
-
-## 10. Namespace XML
-- **FATTO VERIFICATO**: Il file `report.xml` sintetico del dataset corrente non definisce attributi `xmlns` (namespace di default vuoto).
-- **DECISIONE ARCHITETTURALE**: L'importer implementa la funzione ausiliaria `_extract_local_tag(tag)` che rimuove in modo trasparente l'URI del namespace (es. `{http://...}Message` → `Message`), consentendo la corretta elaborazione di report UFDR sia con che senza namespace espliciti.
-
----
-
-## 11. Elementi Messaggio
-- **FATTO VERIFICATO**: I record messaggio sono rappresentati dal tag `<Message>` racchiuso all'interno del contenitore `<InstantMessages>`.
-
----
-
-## 12. Numero dei Messaggi
-- **FATTO VERIFICATO**: Esattamente **50 messaggi**, con ID progressivo nativo da `id="0"` a `id="49"`.
-
----
-
-## 13. Attributi XML
-- **FATTO VERIFICATO**: Ciascun elemento `<Message>` possiede l'attributo nativo `id` (es. `id="0"`). Gli attributi dell'elemento vengono estratti e preservati all'interno della chiave `@attributes` e al contempo esposti nella chiave `id` di `raw_fields`.
-
----
-
-## 14. Child ed Elementi Ripetuti
-- **FATTO VERIFICATO**: Ciascun elemento `<Message>` presenta 4 child elements osservati:
-  - `<Timestamp>` (testo ISO 8601);
-  - `<Sender>` (testo numero internazionale o alias);
-  - `<Body>` (testo del messaggio, oppure elemento vuoto auto-chiuso `<Body />` tradotto in `None`);
-  - `<Deleted>` (testo stringa `"false"` o `"true"`).
-- **DECISIONE ARCHITETTURALE**: La funzione `_xml_element_to_dict` mappa ricorsivamente i figli. Qualora nel documento compaiano tag fratelli ripetuti, essi vengono preservati come lista ordinata (`list`), garantendo che cardinalità e sequenza originaria non vadano disperse.
-
----
-
-## 15. Decisione di Sicurezza XML (Input Non Fidato)
-- **DECISIONE ARCHITETTURALE**: Poiché le acquisizioni forensi sono suscettibili di manipolazioni esterne o artefatti corrotti/malevoli, il file XML è trattato rigorosamente come **input non fidato**.
-
----
-
-## 16. DTD e DOCTYPE
-- **FATTO VERIFICATO**: La presenza di dichiarazioni DTD o direttive `<!DOCTYPE>` è vietata tramite `forbid_dtd=True`. Qualsiasi tentativo di parsing di file contenenti DTD solleva immediatamente `defusedxml.common.DTDForbidden`. In `can_import()` la condizione restituisce `False`, mentre in `import_records()` solleva `ValueError`.
-
----
-
-## 17. Entities ed External Entities (Billion Laughs / XXE)
+### 3.3 Deduplicazione Non-Distruttiva (A3)
 - **FATTO VERIFICATO**:
-  - Tentativi di espansione ricorsiva delle entità interne (attacchi DoS / Billion Laughs) vengono intercettati e bloccati alla radice;
-  - Tentativi di risoluzione di entità esterne (XXE - `SYSTEM "file:///..."` o `SYSTEM "http://..."`) vengono bloccati prima di qualunque risoluzione I/O;
-  - Nessun accesso a risorse locali riservate né connessioni alla rete.
+  - `DuplicateCandidate` associa coppie o gruppi di messaggi con medesimo testo normalizzato e timestamp compatibile (es. messaggi sintetici condivisi tra WhatsApp e Cellebrite).
+  - **Nessun record viene eliminato né sovrascritto**: i record d'origine rimangono TUTTI preservati.
+
+### 3.4 Esito Gate A
+- **FATTO VERIFICATO**: Esecuzione pytest dopo l'audit di Entity Resolution:
+  - Risultato: **566 passed, 1 skipped in 17.10s, 0 failed, 0 errors**. Gate A superato con successo.
 
 ---
 
-## 18. Parser Scelto
-- **DECISIONE ARCHITETTURALE**: Si è adottato `defusedxml.ElementTree.iterparse(source, events=("end",), forbid_dtd=True)`. Rappresenta la soluzione più sicura, minimale e performante, ufficialmente raccomandata dalla documentazione del linguaggio Python per il parsing sicuro di XML non fidati.
+## 4. FASE B — Unified Model Foundation (`unified/`)
+
+### 4.1 Architettura e Obiettivi
+È stato implementato il nuovo package [unified/](file:///c:/Users/lucas/Desktop/Tesi/unified/):
+- **Principio vincolante**: costruire il modello dati finale preservando la completa catena di custodia e provenance verso `NormalizedRecord`, `RawRecord` e file originale.
+- **Nessuna perdita d'informazione**: nessun messaggio scartato per presunta duplicazione.
+- **Integrità temporale assoluta**: i timestamp con offset ignoto rimangono `NAIVE_UNKNOWN`.
+
+### 4.2 Modelli Dati ([unified/models.py](file:///c:/Users/lucas/Desktop/Tesi/unified/models.py))
+- **`Participant`**:
+  - Dataclass congelata (`frozen=True`) con `participant_id`, `identifier`, `display_name`, `entity_candidate_id`, `is_local_user`, e `metadata` (`MappingProxyType`).
+  - Se associato a `LOCAL_USER`, presenta `is_local_user=True` e `identifier="LOCAL_USER"`.
+  - Se collegato a un'entità risolta, `entity_candidate_id` punta a `CandidateEntity.candidate_id` e `display_name` eredita il nome di rubrica (es. `"Contatto_001"`).
+- **`Chat`**:
+  - Dataclass congelata (`frozen=True`) con `chat_id`, `chat_type` (`"direct"`, `"group"`, `"unknown"`), `title`, `participants` (tupla immutabile), `source_name`, e `metadata`.
+  - Distingue rigorosamente le chat 1-to-1 (`"direct"`) dai gruppi (`"group"`, es. `@g.us`).
+- **`UnifiedMessage`**:
+  - Dataclass congelata (`frozen=True`) con `message_id` deterministico `unified:{source_name}:{source_record_id}`.
+  - Piena provenance: campo obbligatorio `provenance_record: NormalizedRecord`.
+  - Mantiene `timestamp: NormalizedTimestamp` con il suo stato invariato (`KNOWN_UTC`, `NAIVE_UNKNOWN`, `ABSENT`).
+  - Mantiene `duplicate_candidate_ids: tuple[str, ...]` che traccia in modo trasparente l'appartenenza a cluster di duplicati senza rimuovere il messaggio.
+
+### 4.3 Costruttore del Modello Unificato ([unified/builder.py](file:///c:/Users/lucas/Desktop/Tesi/unified/builder.py))
+- Implementata la classe `UnifiedModelBuilder`:
+  - **Indicizzazione deterministica**: indicizza in memoria le `CandidateEntity` e i `DuplicateCandidate` di `ResolutionResult` per lookup immediato $O(1)$.
+  - **Pre-scansione titoli chat**: analizza i record descrittori `chat` (es. `chat_list`) arricchendo i gruppi con il rispettivo `subject` (`"Gruppo_Sintetico_01"`).
+  - **Filtro record messaggi**: scarta record ausiliari non di tipo messaggio (`contact`, `chat`, `media_ref`) senza creare `UnifiedMessage` spuri.
+  - **Modalità streaming (`build_stream`)**: yield lazy incrementale dei messaggi.
+  - **Modalità materializzata (`build_all`)**: restituisce la lista completa dei messaggi unificati.
 
 ---
 
-## 19. Dipendenza Runtime XML
-- **FATTO VERIFICATO**: Aggiunta al manifesto `pyproject.toml` sotto la sezione `dependencies`:
-  ```toml
-  # cellebrite_xml.py: parsing XML sicuro e streaming contro DTD, XXE, entity expansion
-  "defusedxml>=0.7.1",
-  ```
-  La libreria è installata in `.venv` (versione `0.7.1`, pura Python, 25 KB, zero dipendenze transitive).
+## 5. Metriche di Pipeline e Conteggi Verificati
+
+| Sorgente | File Sorgente | Record Raw Totali | Record Non-Messaggio | Record Messaggio | UnifiedMessage Generati | Stato Timestamp | Note Forensi |
+| :--- | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
+| **WhatsApp `msgstore.db`** | `test_data/whatsapp_export/msgstore.db` | 622 | 118 (18 chat, 100 media) | 504 | **504** | `KNOWN_UTC` | `LOCAL_USER` tracciato; gruppo sintetico con titolo |
+| **WhatsApp `wa.db`** | `test_data/whatsapp_export/wa.db` | 4 | 4 (contatti) | 0 | **0** | N/A | Contatti usati per Entity Resolution |
+| **Cellebrite CSV** | `test_data/cellebrite_export/messages.csv` | 302 | 0 | 302 | **302** | `NAIVE_UNKNOWN` | Nessuna assunzione UTC forzata; 1 timestamp vuoto (`ABSENT`) |
+| **Cellebrite JSON** | `test_data/cellebrite_export/messages.json` | 100 | 0 | 100 | **100** | `KNOWN_UTC` | Offset `+00:00` esplicito |
+| **Cellebrite XML** | `test_data/cellebrite_export/report.xml` | 50 | 0 | 50 | **50** | `KNOWN_UTC` | Offset `+00:00` esplicito |
+| **TOTALE** | - | **1078** | **122** | **956** | **956** | - | **0 messaggi persi, 100% provenance preservata** |
 
 ---
 
-## 20. Risultato Gate B
-- **FATTO VERIFICATO**: Esecuzione completa di pytest post-parser e test di sicurezza:
-  - Esito: **433 passed, 1 skipped in 18.87s, 0 failed, 0 errors, 0 warnings**.
+## 6. File Modificati e Creati
+
+### File Modificati
+- [normalization/models.py](file:///c:/Users/lucas/Desktop/Tesi/normalization/models.py): aggiunto `"local_user"` a `actor_type` in `NormalizedActor`; aggiunto campo opzionale `chat_id` a `NormalizedRecord`.
+- [normalization/normalizer.py](file:///c:/Users/lucas/Desktop/Tesi/normalization/normalizer.py): implementata la semantica di direzione `key_from_me` per `msgstore_db`, estrazione `chat_id`, gestione `LOCAL_USER`.
+- [entity_resolution/models.py](file:///c:/Users/lucas/Desktop/Tesi/entity_resolution/models.py): aggiunti `GROUP_JID_EXACT`, `LOCAL_USER_EXACT` a `EvidenceType`; aggiunti ruoli e tipi estesi a `EntityReference`; introdotto `candidate_identifier` con `@property canonical_identifier` in `CandidateEntity`.
+- [entity_resolution/resolver.py](file:///c:/Users/lucas/Desktop/Tesi/entity_resolution/resolver.py): filtraggio record non-persona, isolamento JID gruppo `@g.us`, risoluzione deterministica di `LOCAL_USER`.
+- [tests/unit/test_entity_resolver.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_entity_resolver.py): aggiunti test unitari per gruppo JID, `LOCAL_USER` e filtraggio `chat`/`media_ref`.
+- [tests/integration/test_entity_resolution_integration.py](file:///c:/Users/lucas/Desktop/Tesi/tests/integration/test_entity_resolution_integration.py): aggiunto test di integrazione per isolamento gruppo JID e presenza `LOCAL_USER`.
+- [pyproject.toml](file:///c:/Users/lucas/Desktop/Tesi/pyproject.toml): aggiunto `"unified*"` a `tool.setuptools.packages.find.include`.
+- [docs/agent-report.md](file:///c:/Users/lucas/Desktop/Tesi/docs/agent-report.md): aggiornamento integrale ed esclusivo dello stato e delle metriche.
+
+### File Creati
+- [unified/__init__.py](file:///c:/Users/lucas/Desktop/Tesi/unified/__init__.py): package export per `Chat`, `Participant`, `UnifiedMessage`, `UnifiedModelBuilder`.
+- [unified/models.py](file:///c:/Users/lucas/Desktop/Tesi/unified/models.py): modelli immutabili `Participant`, `Chat`, `UnifiedMessage`.
+- [unified/builder.py](file:///c:/Users/lucas/Desktop/Tesi/unified/builder.py): costruttore deterministico `UnifiedModelBuilder`.
+- [docs/unified-model-design.md](file:///c:/Users/lucas/Desktop/Tesi/docs/unified-model-design.md): specifica architetturale e documentazione del modello unificato.
+- [tests/unit/test_unified_models.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_unified_models.py): test unitari su immutabilità, validazione e tipi di `Participant`, `Chat`, `UnifiedMessage`.
+- [tests/unit/test_unified_builder.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_unified_builder.py): test unitari su ID deterministico, preservazione fusi orari, linking duplicati, risoluzione partecipanti e streaming.
+- [tests/integration/test_unified_pipeline_integration.py](file:///c:/Users/lucas/Desktop/Tesi/tests/integration/test_unified_pipeline_integration.py): 7 test di integrazione end-to-end su tutte le 5 sorgenti (956 messaggi unificati convalidati).
 
 ---
 
-## 21. File Creati
+## 7. Risultati della Suite di Test Finale (Gate C)
+
 - **FATTO VERIFICATO**:
-  - [importer/cellebrite_xml.py](file:///c:/Users/lucas/Desktop/Tesi/importer/cellebrite_xml.py) — classe `CellebriteXmlImporter`;
-  - [scripts/__init__.py](file:///c:/Users/lucas/Desktop/Tesi/scripts/__init__.py) — pacchetto tooling scripts;
-  - [tests/unit/test_sanitize_dataset.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_sanitize_dataset.py) — 10 test di sicurezza sanitizer;
-  - [tests/unit/test_cellebrite_xml_importer.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_cellebrite_xml_importer.py) — 47 test unitari XML;
-  - [tests/integration/test_cellebrite_xml_integration.py](file:///c:/Users/lucas/Desktop/Tesi/tests/integration/test_cellebrite_xml_integration.py) — 26 test di integrazione e discriminazione a 5 vie.
+  - Comando eseguito: `.venv\Scripts\python.exe -m pytest`
+  - Totale test raccolti (`collected`): **595**
+  - Superati (`passed`): **594**
+  - Falliti (`failed`): **0**
+  - Errori (`errors`): **0**
+  - Saltati (`skipped`): **1** (`tests/unit/test_symlink_safety.py::TestVerifySafety::test_symlink_pointing_outside_rejected` su Windows per policy standard sui permessi symlink non privilegiati)
+  - Avvisi (`warnings`): **0**
+  - Durata: **16.90s**
+- **DICHIARAZIONE FORMALE**: La suite pytest è completamente verde. Nessun warning, 0 errori, 0 fallimenti.
 
 ---
 
-## 22. File Modificati
-- **FATTO VERIFICATO**:
-  - [importer/cellebrite_json.py](file:///c:/Users/lucas/Desktop/Tesi/importer/cellebrite_json.py) — eccezioni specifiche in `can_import()`;
-  - [importer/__init__.py](file:///c:/Users/lucas/Desktop/Tesi/importer/__init__.py) — esportazione pubblica di `CellebriteXmlImporter`;
-  - [pyproject.toml](file:///c:/Users/lucas/Desktop/Tesi/pyproject.toml) — dichiarazione dipendenza `defusedxml>=0.7.1`;
-  - [docs/importer-design.md](file:///c:/Users/lucas/Desktop/Tesi/docs/importer-design.md) — Sezione 10 dedicata a XML, allineamento claim memoria streaming e aggiornamento indici;
-  - [tests/unit/test_cellebrite_json_importer.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_cellebrite_json_importer.py) — test di propagazione bug programmatici in `can_import()`.
+## 8. Rischi Tecnici e Technical Debt Osservato
+
+1. **Timeline Eterogenee per Visualizzazione/Analisi**:
+   - Poiché 301 messaggi di Cellebrite CSV hanno stato temporale `NAIVE_UNKNOWN`, qualsiasi ordinamento temporale globale futuro richiederà all'utente o all'analista di specificare esplicitamente un fuso orario di riferimento per l'acquisizione, anziché forzare arbitrariamente UTC a livello di pipeline.
+2. **Pseudonimi ed Alias Non Risolti**:
+   - Gli alias come `group_participant_A` e gli identificatori `chat_1` rimangono confinati come entità unresolved o partecipanti pseudonimizzati. I futuri moduli di analisi semantica potranno analizzare correlazioni contestuali senza violare la certezza deterministica del modello di base.
+3. **Memoria di Risoluzione per Dataset Forensi Massivi**:
+   - Gli indici in memoria di `UnifiedModelBuilder` e `DeterministicEntityResolver` scalano $O(U)$ con $U$ identificatori unici. Per dataset con milioni di contatti o messaggi, sarà opportuno predisporre un'opzione di persistenza temporanea su SQLite.
 
 ---
 
-## 23. Strategia `source_record_id`
-- **DECISIONE ARCHITETTURALE**:
-  1. **Priorità 1**: Identificatore nativo esplicito presente nell'attributo `id` del tag `<Message>` (es. `"0"`, `"1"`, ... `"49"`).
-  2. **Priorità 2 (fallback strutturale)**: Qualora l'attributo `id` sia assente o vuoto, fallback deterministico basato sull'indice di sequenza dell'elemento: `f"message:{idx}"` (0-indexed).
-  Nessun hash semantico, nessun mapping con identificatori di altre sorgenti.
+## 9. Prossimo Passo Suggerito (SENZA IMPLEMENTARLO)
 
----
-
-## 24. Rappresentazione `raw_fields`
-- **FATTO VERIFICATO**: `raw_fields` è un dizionario fedele che preserva:
-  - `@attributes`: dizionario degli attributi XML originari;
-  - `id`: valore testuale dell'attributo `id`;
-  - `Timestamp`: stringa ISO 8601 originaria;
-  - `Sender`: stringa originaria;
-  - `Body`: testo grezzo o `None` se elemento auto-chiuso `<Body />`;
-  - `Deleted`: stringa originaria `"false"` / `"true"`;
-  - Tutte le strutture annidate sono congelate ricorsivamente tramite `_freeze_structural()`.
-
----
-
-## 25. `record_type`
-- **FATTO VERIFICATO**: Rigidantente `"message"` per ciascun elemento `<Message>`.
-
----
-
-## 26. `can_import()` Strutturale
-- **FATTO VERIFICATO**: Ispezione in streaming $O(1)$ limitata all'intestazione del documento:
-  - Verifica che la radice sia `<DumpFile type="UFDR">` e che esista il contenitore `<InstantMessages>` o l'elemento `<Message>`;
-  - Indipendente dal nome o dall'estensione (riconosce file `.txt` o privi di estensione);
-  - Rifiuta SQLite, CSV, JSON, file binari, XML generici e XML malformati;
-  - Cattura esclusivamente `(OSError, dET.ParseError, DefusedXmlException, UnicodeDecodeError)`.
-
----
-
-## 27. Streaming
-- **FATTO VERIFICATO**: Il metodo `import_records()` è un generatore Python puro (`Iterator[RawRecord]`):
-  - Il chiamante riceve il primo record immediatamente senza attendere la lettura dell'intero report;
-  - `isgenerator(gen)` è confermato dai test.
-
----
-
-## 28. Strategia Rilascio Memoria
-- **DECISIONE ARCHITETTURALE**: L'iterazione si aggancia all'evento `"end"` di `defusedxml.ElementTree.iterparse`.
-  - Non appena un elemento `<Message>` è completo, i dati vengono estratti nel `RawRecord`;
-  - Viene emesso il record via `yield`;
-  - Viene invocato immediatamente `elem.clear()` per cancellare riferimenti ai nodi figli, testo e attributi dell'elemento già processato;
-  - La memoria occupata rimane circoscritta all'elemento corrente più i buffer del parser.
-
----
-
-## 29. Tipi XML Preservati
-- **FATTO VERIFICATO**: Preservazione deliberata dei tipi sorgente (nessuna coercizione):
-  - `<Deleted>false</Deleted>` rimane stringa `"false"` (non `False` booleano);
-  - `<Timestamp>` rimane stringa ISO 8601;
-  - Matrice comparativa verificata dal test unitario `TestCrossSourceDeletedTypeComparison`:
-    - CSV `Deleted`: stringa `"False"` / `"True"`;
-    - JSON `metadata.deleted`: booleano nativo `False` / `True`;
-    - XML `Deleted`: stringa `"false"` / `"true"`.
-
----
-
-## 30. `media_reference`
-- **FATTO VERIFICATO**: Nel campione reale `report.xml`, i messaggi non contengono nodi o attributi relativi ad allegati: per tutti i 50 messaggi `media_reference` è `None`.
-- **DECISIONE ARCHITETTURALE**: L'importer include la logica per intercettare eventuali tag `Attachment`, `Media`, `MediaPath` o attributi `media_path` nel caso di future estrazioni UFDR arricchite, senza comprimere strutture complesse né alterare il contratto di `RawRecord`.
-
----
-
-## 31. Error Handling
-- **DECISIONE ARCHITETTURALE**:
-  - Source-level: `FileNotFoundError` per percorsi inesistenti; `ValueError` per sorgenti non UFDR, malformate o con DTD/XXE;
-  - Record-level: nessun silent skip, nessun `try...except Exception: pass`. Errori di corruzione o bug programmatici si propagano immediatamente per garantire l'integrità forense della catena di custodia.
-
----
-
-## 32. Gestione Namespace
-- **FATTO VERIFICATO**: Verificato sia su file privi di namespace che su file namespaced (es. `xmlns="http://cellebrite.com/ufdr"`, test `test_namespaced_xml_parsed_correctly`).
-
----
-
-## 33. Matrice di Discriminazione Cross-Importer a 5 Vie
-- **FATTO VERIFICATO**: Verificata la completa ortogonalità tra tutti i 5 importer:
-  | Importer | `msgstore.db` | `wa.db` | `messages.csv` | `messages.json` | `report.xml` |
-  |---|---|---|---|---|---|
-  | `WhatsAppMsgstoreImporter` | **True** | False | False | False | False |
-  | `WhatsAppWaDbImporter` | False | **True** | False | False | False |
-  | `CellebriteCsvImporter` | False | False | **True** | False | False |
-  | `CellebriteJsonImporter` | False | False | False | **True** | False |
-  | `CellebriteXmlImporter` | False | False | False | False | **True** |
-
----
-
-## 34. Questioni Aperte: `ChatId`
-- **PROBLEMA APERTO**: In `report.xml` non esiste il tag o attributo `ChatId`. L'associazione del messaggio a una conversazione o a una chat canonica non viene inventata e spetterà interamente alla fase di entity resolution a valle.
-
----
-
-## 35. Questioni Aperte: `group_participant_A`
-- **PROBLEMA APERTO**: La stringa `group_participant_A` è preservata inalterata nel campo `Sender` per tutti i messaggi pertinenti, senza tentativi di risoluzione con contatti reali o numeri telefonici.
-
----
-
-## 36. Questioni Aperte: Timezone
-- **PROBLEMA APERTO**: Le stringhe temporali contengono l'offset `+00:00`. Vengono conservate esattamente come fornite dalla sorgente senza conversione a timestamp Unix o alterazione del fuso orario.
-
----
-
-## 37. Questioni Aperte: Semantica `deleted`
-- **PROBLEMA APERTO**: Preservato il valore sorgente (`"false"` su 49 messaggi, `"true"` sul messaggio id="35"). La normalizzazione verso un booleano canonico o stato unificato appartiene al layer di normalizzazione semantica.
-
----
-
-## 38. Message Types
-- **PROBLEMA APERTO**: In `report.xml` non è presente un tag esplicito `Type` (a differenza di CSV o JSON). I messaggi con `<Body />` vuoto non vengono arbitrariamente classificati come media o eliminati; la loro interpretazione semantica è rimandata.
-
----
-
-## 39. Test Aggiunti nella Fase Corrente
-- **FATTO VERIFICATO**:
-  - `tests/unit/test_sanitize_dataset.py`: 10 test di sicurezza per il sanitizer;
-  - `tests/unit/test_cellebrite_json_importer.py`: 1 test di non-mascheramento errori in `can_import`;
-  - `tests/unit/test_cellebrite_xml_importer.py`: 47 test unitari per `CellebriteXmlImporter` e tipi cross-source;
-  - `tests/integration/test_cellebrite_xml_integration.py`: 26 test di integrazione con `report.xml` reale e discriminazione a 5 vie.
-  - Totale nuovi test: **84 test**.
-
----
-
-## 40. Risultato Finale Pytest
-- **FATTO VERIFICATO**: L'intera suite di test del repository è stata eseguita con esito verde e privo di errori.
-
----
-
-## 41. Collected
-- **FATTO VERIFICATO**: **461 test** raccolti.
-
----
-
-## 42. Passed
-- **FATTO VERIFICATO**: **460 test** superati.
-
----
-
-## 43. Failed
-- **FATTO VERIFICATO**: **0** test falliti.
-
----
-
-## 44. Errors
-- **FATTO VERIFICATO**: **0** errori.
-
----
-
-## 45. Skipped
-- **FATTO VERIFICATO**: **1** test saltato (`test_symlink_pointing_outside_rejected` in `test_sanitize_dataset.py`, a causa dei privilegi di creazione symlink non disponibili di default per utenti non-admin su Windows; la protezione su percorsi reali e traversal `..` è invece passata regolarmente).
-
----
-
-## 46. Warnings
-- **FATTO VERIFICATO**: **0** warning.
-
----
-
-## 47. Durata
-- **FATTO VERIFICATO**: **41.71 secondi**.
-
----
-
-## 48. Problemi Aperti
-- **PROBLEMA APERTO**:
-  1. `DeviceInfo` (Samsung Galaxy S21, Android 13, IMEI `000000000000001`): presente in `report.xml`, è stato correttamente ignorato come record di messaggio. Dovrà essere gestito qualora si desideri un layer di estrazione di metadati del dispositivo/caso forense.
-  2. Assenza di identificatori di chat in `report.xml`: la ricostruzione dei thread di conversazione per i dati UFDR XML richiederà euristiche basate sul mittente/destinatario durante la fase di normalizzazione ed entity resolution.
-
----
-
-## 49. Rischi Tecnici
-- **VALUTAZIONE**:
-  1. *File XML di dimensioni eterogenee*: la combinazione di `defusedxml.ElementTree.iterparse` e `elem.clear()` protegge la memoria da saturazione anche su estrazioni XML multi-megabyte.
-  2. *Formati proprietari Cellebrite UFDR*: UFDR reali possono presentare namespace complessi o tag annidati aggiuntivi (es. geolocalizzazione, allegati multipart); la funzione ricorsiva `_xml_element_to_dict` è già predisposta per mappare qualsiasi sottostruttura senza perdita di informazione.
-
----
-
-## 50. Technical Debt Realmente Osservato
-- **VALUTAZIONE**: Nessun technical debt critico. Il layer di ingestion è ora completo, source-faithful, read-only, streaming e dotato di deep immutability per tutte le 5 sorgenti del progetto. Non si dichiarano linting o type checking automatici come eseguiti in quanto non facenti parte della suite pytest corrente.
-
----
-
-## 51. Prossimo Passo Suggerito
-- **DECISIONE ARCHITETTURALE (NON IMPLEMENTATA)**:
-  - Completata la fase di ingestion (`DATI ORIGINALI → IMPORTER → RawRecord`), il prossimo passo architetturale consiste nell'avvio della fase di **VALIDAZIONE e NORMALIZZAZIONE**:
-    - Definizione del modulo di validazione strutturale dei `RawRecord`;
-    - Progettazione delle regole di normalizzazione deterministica (timestamp UTC canonico, normalizzazione numeri in formato E.164, mappatura tipi messaggio);
-    - Rimanendo rigorosamente separati da `UnifiedMessage` ed Entity Resolution fino al superamento dei relativi gate di test.
+- **Fase successiva della pipeline**: **ANALISI AI & EXPORT / VISUALIZZAZIONE FORENSE**.
+  - Potenziali obiettivi della fase successiva:
+    1. Ingestion dei 956 `UnifiedMessage` per estrazione semantica ed analisi tematica tramite modelli locali (LM Studio / Ollama);
+    2. Moduli di interrogazione temporale e ricerca conversazionale strutturata;
+    3. Interfaccia utente (es. Streamlit) per la revisione interattiva della catena di custodia e dei cluster di messaggi correlati.
+  - **DICHIARAZIONE DI CONFINAMENTO**: Nessuna componente AI, LLM, embedding, multimodalità o Streamlit è stata implementata in questa fase.

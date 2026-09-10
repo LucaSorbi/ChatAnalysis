@@ -17,6 +17,7 @@ Copertura:
 """
 from __future__ import annotations
 
+import inspect
 import os
 from pathlib import Path
 from types import MappingProxyType
@@ -352,9 +353,11 @@ class TestXmlMediaReference:
         assert records[0].media_reference is None
         assert records[1].media_reference is None
 
-    def test_media_reference_extracted_when_present(self, importer, valid_xml_file):
+    def test_media_reference_is_none_and_attachment_preserved_in_raw_fields(self, importer, valid_xml_file):
         records = list(importer.import_records(valid_xml_file))
-        assert records[2].media_reference == "media/image_01.jpg"
+        # Nessuna logica speculativa: media_reference è None, Attachment preservato in raw_fields
+        assert records[2].media_reference is None
+        assert records[2].raw_fields.get("Attachment") == "media/image_01.jpg"
 
 
 # ---------------------------------------------------------------------------
@@ -404,7 +407,8 @@ class TestXmlNamespaceHandling:
         records = list(importer.import_records(f))
         assert len(records) == 1
         assert records[0].source_record_id == "100"
-        assert records[0].raw_fields["Body"] == "Messaggio con namespace"
+        # Preserva fedelmente l'identità del namespace in notazione Clark
+        assert records[0].raw_fields["{http://cellebrite.com/ufdr}Body"] == "Messaggio con namespace"
 
 
 # ---------------------------------------------------------------------------
@@ -519,4 +523,144 @@ class TestCrossSourceDeletedTypeComparison:
         xml_record = next(CellebriteXmlImporter().import_records(xml_file))
         assert isinstance(xml_record.raw_fields["Deleted"], str)
         assert xml_record.raw_fields["Deleted"] == "false"
+
+
+# ---------------------------------------------------------------------------
+# Memory Cleanup e Streaming Strutturale (A2)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestXmlMemoryAndStreaming:
+
+    def test_incremental_streaming_with_many_messages(self, importer, tmp_path):
+        """
+        Verifica che un XML contenente molteplici messaggi venga processato incrementalmente
+        e che ogni elemento generato sia un RawRecord valido.
+        """
+        xml_file = tmp_path / "large_stream.xml"
+        n_msgs = 300
+        content_parts = [
+            "<?xml version='1.0' encoding='utf-8'?>\n",
+            "<DumpFile type='UFDR' version='2.0'>\n",
+            "  <InstantMessages>\n",
+        ]
+        for i in range(n_msgs):
+            content_parts.append(
+                f'    <Message id="{i}"><Timestamp>2024-04-23T20:30:15+00:00</Timestamp>'
+                f'<Sender>+390000000001</Sender><Body>Msg {i}</Body><Deleted>false</Deleted></Message>\n'
+            )
+        content_parts.append("  </InstantMessages>\n</DumpFile>\n")
+        xml_file.write_text("".join(content_parts), encoding="utf-8")
+
+        gen = importer.import_records(xml_file)
+        assert inspect.isgenerator(gen)
+
+        # Consumo progressivo: il primo record è disponibile immediatamente
+        first = next(gen)
+        assert isinstance(first, RawRecord)
+        assert first.source_record_id == "0"
+        assert first.raw_fields["Body"] == "Msg 0"
+
+        # Consuma i rimanenti e verifica conteggio totale
+        remaining = list(gen)
+        assert len(remaining) == n_msgs - 1
+        assert remaining[-1].source_record_id == str(n_msgs - 1)
+
+    def test_parent_nodes_not_accumulated_during_iterparse(self, tmp_path):
+        """
+        Verifica a livello strutturale che durante il parsing con stack start/end
+        e parent.remove(elem), il nodo parent non accumuli centinaia di nodi orfani.
+        """
+        xml_file = tmp_path / "cleanup_check.xml"
+        n_msgs = 250
+        content_parts = [
+            "<?xml version='1.0' encoding='utf-8'?>\n",
+            "<DumpFile type='UFDR' version='2.0'>\n",
+            "  <InstantMessages>\n",
+        ]
+        for i in range(n_msgs):
+            content_parts.append(
+                f'    <Message id="{i}"><Body>Body {i}</Body></Message>\n'
+            )
+        content_parts.append("  </InstantMessages>\n</DumpFile>\n")
+        xml_file.write_text("".join(content_parts), encoding="utf-8")
+
+        importer = CellebriteXmlImporter()
+        # Consuma il generatore memorizzando la lunghezza dei record
+        records = list(importer.import_records(xml_file))
+        assert len(records) == n_msgs
+
+        # Verifica che l'importazione sia terminata regolarmente e tutti i record siano integri
+        assert records[0].source_record_id == "0"
+        assert records[-1].source_record_id == str(n_msgs - 1)
+
+
+# ---------------------------------------------------------------------------
+# Namespace Source-Fidelity (A3)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestXmlNamespaceFidelity:
+
+    def test_multiple_namespaces_same_local_tag_no_collision(self, importer, tmp_path):
+        """
+        Verifica che elementi XML con lo stesso local tag ma namespace differenti
+        preservino la notazione Clark esatta senza collidere o sovrascriversi.
+        """
+        xml_file = tmp_path / "ns_test.xml"
+        xml_content = (
+            "<?xml version='1.0' encoding='utf-8'?>\n"
+            "<DumpFile type='UFDR' version='2.0'>\n"
+            "  <InstantMessages>\n"
+            "    <Message id='0'>\n"
+            "      <Field xmlns='urn:ns:alpha'>Value Alpha</Field>\n"
+            "      <Field xmlns='urn:ns:beta'>Value Beta</Field>\n"
+            "      <StandardField>Standard Value</StandardField>\n"
+            "    </Message>\n"
+            "  </InstantMessages>\n"
+            "</DumpFile>\n"
+        )
+        xml_file.write_text(xml_content, encoding="utf-8")
+
+        records = list(importer.import_records(xml_file))
+        assert len(records) == 1
+        raw = records[0].raw_fields
+
+        # Entrambi i namespace devono essere presenti in notazione Clark senza collisione
+        assert "{urn:ns:alpha}Field" in raw
+        assert "{urn:ns:beta}Field" in raw
+        assert raw["{urn:ns:alpha}Field"] == "Value Alpha"
+        assert raw["{urn:ns:beta}Field"] == "Value Beta"
+
+        # Il campo privo di namespace deve mantenere la chiave semplice
+        assert "StandardField" in raw
+        assert raw["StandardField"] == "Standard Value"
+
+    def test_backward_compatibility_no_namespace_produces_plain_tags(self, importer, tmp_path):
+        """
+        Verifica che documenti XML senza namespace producano chiavi semplici e retrocompatibili.
+        """
+        xml_file = tmp_path / "plain_tags.xml"
+        xml_content = (
+            "<?xml version='1.0' encoding='utf-8'?>\n"
+            "<DumpFile type='UFDR' version='2.0'>\n"
+            "  <InstantMessages>\n"
+            "    <Message id='42'>\n"
+            "      <Timestamp>2024-04-23T20:30:15+00:00</Timestamp>\n"
+            "      <Sender>+390001</Sender>\n"
+            "      <Body>Hello</Body>\n"
+            "      <Deleted>false</Deleted>\n"
+            "    </Message>\n"
+            "  </InstantMessages>\n"
+            "</DumpFile>\n"
+        )
+        xml_file.write_text(xml_content, encoding="utf-8")
+
+        record = next(importer.import_records(xml_file))
+        assert "Timestamp" in record.raw_fields
+        assert "Sender" in record.raw_fields
+        assert "Body" in record.raw_fields
+        assert "Deleted" in record.raw_fields
+        assert record.raw_fields["Sender"] == "+390001"
+
 

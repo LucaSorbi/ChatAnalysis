@@ -36,9 +36,10 @@ Streaming e rilascio memoria
   - Il file viene letto progressivamente tramite `defusedxml.ElementTree.iterparse`
     senza caricare l'intero DOM in memoria.
   - Al termine di ciascun elemento `<Message>` (evento 'end'), i campi vengono
-    estratti nel RawRecord e l'elemento viene immediatamente ripulito via
-    `elem.clear()`, garantendo un consumo di memoria contenuto e non proporzionale
-    al numero totale di record.
+    estratti nel RawRecord, l'elemento viene ripulito via `elem.clear()`, e rimosso
+    dal genitore via `parent.remove(elem)` PRIMA di cedere il controllo con `yield`.
+  - Questo impedisce sia il consumo proporzionale al numero complessivo dei messaggi,
+    sia l'accumulo di nodi orfani vuoti nel nodo padre del parser ElementTree.
 
 Preservazione dei tipi source-level
 -----------------------------------
@@ -98,7 +99,9 @@ def _xml_element_to_dict(elem: Any) -> Any:
       - Attributi in '@attributes' (e attributo 'id' come chiave diretta se presente);
       - Testo grezzo dei child elements;
       - Elementi vuoti (<Tag />) come None;
-      - Elementi child ripetuti come liste ordinate per preservare cardinalità e sequenza.
+      - Elementi child ripetuti come liste ordinate per preservare cardinalità e sequenza;
+      - Identità di namespace XML originale quando presente (notazione Clark '{uri}Tag'),
+        mantenendo il tag semplice 'Tag' per elementi senza namespace.
     """
     # Se l'elemento non ha figli e nessun attributo, restituisce direttamente il testo
     if len(elem) == 0 and not elem.attrib:
@@ -111,20 +114,20 @@ def _xml_element_to_dict(elem: Any) -> Any:
         if "id" in elem.attrib and "id" not in res:
             res["id"] = elem.attrib["id"]
 
-    # Raccoglie i figli
+    # Raccoglie i figli usando il tag originale (notazione Clark se ha namespace, stringa semplice altrimenti)
     children_dict: dict[str, Any] = {}
     for child in elem:
-        local_tag = _extract_local_tag(child.tag)
+        tag_key = child.tag
         child_val = _xml_element_to_dict(child)
 
-        if local_tag in children_dict:
+        if tag_key in children_dict:
             # Preserva elementi ripetuti come lista ordinata
-            current = children_dict[local_tag]
+            current = children_dict[tag_key]
             if not isinstance(current, list):
-                children_dict[local_tag] = [current]
-            children_dict[local_tag].append(child_val)
+                children_dict[tag_key] = [current]
+            children_dict[tag_key].append(child_val)
         else:
-            children_dict[local_tag] = child_val
+            children_dict[tag_key] = child_val
 
     res.update(children_dict)
 
@@ -144,7 +147,7 @@ class CellebriteXmlImporter(BaseImporter):
       - record_type = "message"
       - source_record_id = attributo nativo 'id' o fallback deterministico "message:<idx>"
       - raw_fields = mapping fedele con tipi testuali grezzi e strutture congelate ricorsivamente
-      - media_reference = riferimento ad allegato se presente, altrimenti None
+      - media_reference = None per il dataset osservato (nessun tag media presente)
       - metadata = contesto di provenienza (xml_index, tabella, formato, versione importer)
     """
 
@@ -163,7 +166,8 @@ class CellebriteXmlImporter(BaseImporter):
         Verifica strutturalmente in streaming l'intestazione del documento:
         - Root tag <DumpFile> con attributo type="UFDR" (o contenitore <InstantMessages>);
         - Nessuna dipendenza dall'estensione del file;
-        - Parsing sicuro con defusedxml (rifiuta DTD, DOCTYPE ed entity expansion);
+        - Parsing sicuro con defusedxml (policy esplicita: forbid_dtd=True,
+          forbid_entities=True, forbid_external=True);
         - Cattura unicamente eccezioni previste di I/O, parsing o sicurezza XML.
         """
         if not source_path.exists() or not source_path.is_file():
@@ -174,7 +178,13 @@ class CellebriteXmlImporter(BaseImporter):
                 # Ispezione streaming sicura dei primi eventi: richiede root DumpFile UFDR
                 # e presenza strutturale di InstantMessages o Message
                 has_ufdr_root = False
-                for event, elem in dET.iterparse(f, events=("start",), forbid_dtd=True):
+                for event, elem in dET.iterparse(
+                    f,
+                    events=("start",),
+                    forbid_dtd=True,
+                    forbid_entities=True,
+                    forbid_external=True,
+                ):
                     local_tag = _extract_local_tag(elem.tag)
                     if local_tag == _ROOT_TAG:
                         if elem.attrib.get("type", "").upper() == "UFDR":
@@ -209,8 +219,20 @@ class CellebriteXmlImporter(BaseImporter):
 
         try:
             with open(source_path, "rb") as f:
+                stack: list[Any] = []
                 msg_idx = 0
-                for event, elem in dET.iterparse(f, events=("end",), forbid_dtd=True):
+                for event, elem in dET.iterparse(
+                    f,
+                    events=("start", "end"),
+                    forbid_dtd=True,
+                    forbid_entities=True,
+                    forbid_external=True,
+                ):
+                    if event == "start":
+                        stack.append(elem)
+                        continue
+
+                    # event == "end"
                     local_tag = _extract_local_tag(elem.tag)
 
                     if local_tag == _MESSAGE_TAG:
@@ -221,26 +243,17 @@ class CellebriteXmlImporter(BaseImporter):
                         else:
                             record_id = f"message:{msg_idx}"
 
-                        # 2. Estrazione campi raw fedele
+                        # 2. Estrazione campi raw fedele (Clark notation preservata se con namespace)
                         fields_dict = _xml_element_to_dict(elem)
                         if not isinstance(fields_dict, dict):
                             fields_dict = {"text": fields_dict}
 
-                        # 3. Estrazione eventuale riferimento media
+                        # 3. Nessuna logica speculativa su media XML non osservati:
+                        # Nel dataset UFDR reale non esistono attachment nodes; media_reference è None.
                         media_ref: str | None = None
-                        # Controlla se vi sia un campo media esplicito
-                        for media_tag in ("Media", "Attachment", "MediaPath", "media_path"):
-                            if media_tag in fields_dict and fields_dict[media_tag]:
-                                val = fields_dict[media_tag]
-                                if isinstance(val, str) and val.strip():
-                                    media_ref = val.strip()
-                                    break
-                                elif isinstance(val, dict) and "path" in val:
-                                    media_ref = str(val["path"]).strip()
-                                    break
 
-                        # 4. Emissione RawRecord (congelamento profondo automatico)
-                        yield RawRecord(
+                        # 4. Creazione RawRecord (congelamento profondo automatico)
+                        record = RawRecord(
                             source_name=_SOURCE_NAME,
                             source_path=source_str,
                             source_record_id=record_id,
@@ -256,10 +269,22 @@ class CellebriteXmlImporter(BaseImporter):
                             },
                         )
 
-                        msg_idx += 1
-
-                        # Rilascio tempestivo della memoria per streaming memory-efficient
+                        # 5. Rilascio tempestivo della memoria PRIMA della sospensione del generatore:
+                        # elem.clear() svuota l'elemento corrente;
+                        # parent.remove(elem) rimuove il riferimento dall'elemento contenitore
+                        # impedendo l'accumulo di migliaia di nodi vuoti nel parent.
+                        parent = stack[-2] if len(stack) >= 2 else None
                         elem.clear()
+                        if parent is not None:
+                            parent.remove(elem)
+
+                        stack.pop()
+                        msg_idx += 1
+                        yield record
+                        continue
+
+                    # Tutti gli altri elementi terminati: pop dallo stack
+                    stack.pop()
 
         except (dET.ParseError, DefusedXmlException) as exc:
             raise ValueError(f"Errore durante il parsing del file XML {source_path}: {exc}") from exc

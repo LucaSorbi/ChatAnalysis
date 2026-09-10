@@ -33,8 +33,8 @@ Nessuna operazione di scrittura o modifica dell'evidenza originale.
 Streaming
 ---------
 Utilizza la libreria `ijson` per iterare in streaming gli elementi dell'array
-top-level ('item') uno per uno, garantendo un footprint di memoria costante O(1)
-anche su file di esportazione di grandi dimensioni.
+top-level ('item') uno per uno, garantendo un'elaborazione incrementale con consumo
+proporzionale alla dimensione del singolo record anche su file di grandi dimensioni.
 
 Questioni aperte (esplicitamente non risolte a questo layer):
 ------------------------------------------------------------
