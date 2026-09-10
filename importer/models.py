@@ -14,22 +14,36 @@ RawRecord è un contenitore immutabile e fedele alla sorgente:
 
 Immutabilità — decisione architetturale:
     frozen=True impedisce la riassegnazione di qualsiasi attributo dell'oggetto.
-    I campi raw_fields e metadata sono avvolti in MappingProxyType in __post_init__
-    tramite object.__setattr__: il dict top-level diventa realmente read-only
-    (qualsiasi tentativo di modifica lancia TypeError a runtime).
-
-    Limitazione residua: gli oggetti *annidati* all'interno di raw_fields
-    (es. dict o list dentro un valore) rimangono mutabili per limitazione
-    di Python. Per convenzione di progetto, nessun codice deve modificarli.
-    Questa limitazione è documentata e accettata: wrappare ricorsivamente
-    tutti i nested objects introdurrebbe complessità inutile e
-    impedirebbe l'uso di tipi nativi Python come valori.
+    I campi raw_fields e metadata sono congelati ricorsivamente in __post_init__
+    tramite _freeze_structural() e object.__setattr__:
+    - dizionari (top-level e annidati) avvolti in MappingProxyType
+    - sequenze (liste e tuple annidate) convertite in tuple immutabili
+    - scalari (str, int, float, bool, None, bytes) invariati
+    Qualsiasi tentativo di mutazione top-level o annidata solleva TypeError / AttributeError a runtime.
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
 from types import MappingProxyType
 from typing import Any
+
+
+def _freeze_structural(val: Any) -> Any:
+    """
+    Rende ricorsivamente immutabile una struttura dati (deep immutability strutturale).
+
+    - mapping (dict, MappingProxyType) -> MappingProxyType con valori ricorsivamente congelati
+    - sequence (list, tuple) -> tuple con elementi ricorsivamente congelati
+    - scalari (str, int, float, bool, None, bytes) -> invariati
+
+    Nessuna normalizzazione semantica viene effettuata: chiavi, valori, ordine e tipi
+    vengono rigorosamente preservati.
+    """
+    if isinstance(val, (dict, MappingProxyType)):
+        return MappingProxyType({k: _freeze_structural(v) for k, v in val.items()})
+    elif isinstance(val, (list, tuple)):
+        return tuple(_freeze_structural(item) for item in val)
+    return val
 
 
 @dataclass(frozen=True)
@@ -104,10 +118,10 @@ class RawRecord:
             raise TypeError(f"raw_fields deve essere dict, ricevuto {type(self.raw_fields)}")
         if not isinstance(self.metadata, (dict, MappingProxyType)):
             raise TypeError(f"metadata deve essere dict, ricevuto {type(self.metadata)}")
-        # Wrap in MappingProxyType: rende il dict top-level immutabile a runtime.
+        # Congelamento ricorsivo: rende raw_fields e metadata profondamente immutabili.
         # Usare object.__setattr__ perché frozen=True blocca l'assegnazione diretta.
-        object.__setattr__(self, "raw_fields", MappingProxyType(self.raw_fields))
-        object.__setattr__(self, "metadata", MappingProxyType(self.metadata))
+        object.__setattr__(self, "raw_fields", _freeze_structural(self.raw_fields))
+        object.__setattr__(self, "metadata", _freeze_structural(self.metadata))
 
     def get_field(self, key: str, default: Any = None) -> Any:
         """Accesso conveniente a raw_fields con default."""

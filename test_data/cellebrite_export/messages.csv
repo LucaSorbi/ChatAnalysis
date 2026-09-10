@@ -1,303 +1,303 @@
 Source,MessageType,TimeStamp,Direction,From,To,Body,Attachments,Status,Deleted,Forwarded,ApplicationId,ChatId
-WhatsApp,Text,2024-11-12 03:09:27,Outgoing,+39 320 5554433,+39 333 1234567,Attenzione ci sono controlli,,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-05-30 21:54:17,Incoming,group_participant_A,group_participant_A,Hai visto il nuovo posto in via Roma?,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-03-29 20:37:48,Incoming,+1 212 5550101,+39 347 9876543,👍,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-11-13 04:40:19,Incoming,+39 320 5554433,group_participant_A,Ci vediamo domani alle 10?,,Received,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-25 03:51:22,Incoming,+1 212 5550101,+39 347 9876543,Hai visto il nuovo posto in via Roma?,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-16 07:04:58,Incoming,group_participant_A,+39 333 1234567,Ci vediamo domani alle 10?,,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-04-04 19:14:49,Incoming,group_participant_A,+39 347 9876543,https://t.me/examplegroup,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-03-11 02:23:16,Incoming,+39 347 9876543,+39 320 5554433,Quanto vuoi per 50?,,Delivered,True,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-07-31 20:24:39,Outgoing,+39 333 1234567,+1 212 5550101,,,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-06-26 12:39:06,Incoming,+39 320 5554433,group_participant_A,Ho comprato la roba 💊,,Sent,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-23 23:39:20,Incoming,+39 333 1234567,+39 333 1234567,Ok confermato per stasera,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-03-23 05:51:51,Incoming,+39 333 1234567,+39 333 1234567,Ok confermato per stasera,,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Image,2025-01-06 13:22:43,Incoming,+39 347 9876543,+39 320 5554433,,Files\IMG_0012.jpg,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-11-01 15:15:47,Outgoing,+1 212 5550101,group_participant_A,"Il prezzo è cambiato, ora costa di più",,Read,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-12-25 04:13:28,Incoming,+39 347 9876543,+39 320 5554433,Ok confermato per stasera,,Read,True,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-03-10 04:13:20,Incoming,+39 320 5554433,+39 347 9876543,Porta il pacco al solito posto,,Read,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-06-23 08:41:02,Outgoing,+39 347 9876543,+39 347 9876543,Hai visto il nuovo posto in via Roma?,,Sent,True,False,com.whatsapp,chat_3
-WhatsApp,Image,2024-06-16 10:27:09,Incoming,+39 320 5554433,+39 347 9876543,,Files\IMG_0017.jpg,Delivered,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-24 18:23:39,Incoming,+1 212 5550101,+39 347 9876543,Tutto ok dalla mia parte,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-04 18:57:25,Outgoing,+39 347 9876543,+1 212 5550101,👍,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-07-01 09:45:42,Incoming,+1 212 5550101,+39 320 5554433,Ci vediamo domani alle 10?,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-05 09:13:51,Incoming,+39 320 5554433,+39 347 9876543,Ci vediamo domani alle 10?,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-04-12 11:09:30,Outgoing,+39 333 1234567,+39 320 5554433,,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-22 17:57:37,Incoming,+39 320 5554433,+39 320 5554433,👍,,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-08-31 02:56:06,Incoming,+1 212 5550101,+39 347 9876543,Non mi rispondere sul telefono,,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-05-26 17:43:23,Incoming,+39 347 9876543,+39 333 1234567,"Il prezzo è cambiato, ora costa di più",,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-03-31 02:50:41,Outgoing,+1 212 5550101,+39 333 1234567,https://t.me/examplegroup,,Sent,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-09-28 13:05:47,Incoming,+39 333 1234567,+39 347 9876543,Mandami la foto quando sei pronto,,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2025-05-30 01:46:56,Incoming,group_participant_A,+39 347 9876543,Ciao come stai?,,Delivered,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-03-14 05:58:36,Outgoing,+39 320 5554433,+39 333 1234567,Mandami la foto quando sei pronto,,Read,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-04-29 10:34:57,Outgoing,+39 333 1234567,+39 333 1234567,https://t.me/examplegroup,,Received,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-04 01:22:02,Incoming,group_participant_A,+1 212 5550101,Non mi rispondere sul telefono,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-13 03:14:52,Incoming,+39 333 1234567,group_participant_A,Attenzione ci sono controlli,,Read,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-01-16 22:22:19,Outgoing,+39 347 9876543,+39 347 9876543,Attenzione ci sono controlli,,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Image,2024-08-19 21:18:47,Incoming,+1 212 5550101,+1 212 5550101,,Files\IMG_0034.jpg,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-04 05:52:13,Outgoing,+1 212 5550101,+1 212 5550101,Attenzione ci sono controlli,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-10-13 00:25:01,Incoming,group_participant_A,+39 347 9876543,👍,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-23 03:57:14,Incoming,+39 347 9876543,+1 212 5550101,,,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Image,2024-04-25 10:13:35,Outgoing,+39 347 9876543,+39 320 5554433,,Files\IMG_0038.jpg,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-02 18:44:25,Incoming,+39 333 1234567,group_participant_A,👍,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-07-16 22:56:18,Outgoing,group_participant_A,+39 333 1234567,,,Read,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-11-01 05:15:20,Incoming,+39 333 1234567,+39 333 1234567,👍,,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-24 21:20:41,Incoming,+39 320 5554433,+39 347 9876543,Quanto vuoi per 50?,,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Image,2024-03-23 14:08:49,Incoming,+1 212 5550101,group_participant_A,,Files\IMG_0043.jpg,Read,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-21 08:12:10,Incoming,+1 212 5550101,group_participant_A,,,Sent,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-03-09 01:38:14,Outgoing,+39 347 9876543,+39 347 9876543,Ciao come stai?,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-06-11 12:19:12,Incoming,+1 212 5550101,+39 347 9876543,"Il prezzo è cambiato, ora costa di più",,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-03 03:47:49,Incoming,+1 212 5550101,+39 333 1234567,Porta il pacco al solito posto,,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-01-16 05:53:17,Incoming,+1 212 5550101,group_participant_A,"Il prezzo è cambiato, ora costa di più",,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-09-16 07:24:58,Incoming,+39 333 1234567,+39 333 1234567,👍,,Received,True,True,com.whatsapp,chat_1
-WhatsApp,Image,2025-01-13 15:35:37,Outgoing,+1 212 5550101,+1 212 5550101,,Files\IMG_0050.jpg,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-03-23 16:56:14,Incoming,+39 320 5554433,group_participant_A,Ho comprato la roba 💊,,Sent,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-25 18:36:41,Outgoing,+1 212 5550101,+39 333 1234567,Ok confermato per stasera,,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-19 15:32:54,Incoming,group_participant_A,+39 320 5554433,https://t.me/examplegroup,,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2025-05-21 19:29:06,Incoming,+39 320 5554433,+1 212 5550101,Ok confermato per stasera,,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-05-14 14:22:49,Outgoing,+39 347 9876543,+39 347 9876543,,,Read,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-02-06 13:03:47,Outgoing,+39 333 1234567,+39 320 5554433,Hai visto il nuovo posto in via Roma?,,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-09-19 07:49:55,Incoming,+1 212 5550101,+39 333 1234567,"Il prezzo è cambiato, ora costa di più",,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-06 06:06:37,Outgoing,group_participant_A,+39 320 5554433,"Non scrivere qui, usa l'altra app",,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-19 05:53:49,Outgoing,group_participant_A,+39 333 1234567,Ci vediamo domani alle 10?,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-05-01 23:17:55,Incoming,+39 320 5554433,+1 212 5550101,,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-04-05 12:34:40,Outgoing,+39 347 9876543,+1 212 5550101,👍,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-07-25 14:53:26,Outgoing,+39 320 5554433,+1 212 5550101,Tutto ok dalla mia parte,,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-11-29 01:50:14,Outgoing,+1 212 5550101,+1 212 5550101,https://t.me/examplegroup,,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-02-05 20:04:43,Incoming,+39 333 1234567,+39 333 1234567,Non mi rispondere sul telefono,,Sent,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-27 18:34:32,Incoming,+39 347 9876543,group_participant_A,Ci vediamo domani alle 10?,,Sent,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-08-31 15:42:10,Incoming,+39 320 5554433,+39 333 1234567,Hai visto il nuovo posto in via Roma?,,Delivered,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-09-25 03:56:16,Outgoing,+1 212 5550101,+39 347 9876543,Mandami la foto quando sei pronto,,Read,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2025-02-24 01:03:37,Outgoing,+39 320 5554433,+39 347 9876543,Ho comprato la roba 💊,,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Image,2025-04-05 05:04:03,Incoming,+39 320 5554433,+39 347 9876543,,Files\IMG_0069.jpg,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-05-01 23:55:55,Outgoing,group_participant_A,+39 320 5554433,Porta il pacco al solito posto,,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-09-20 07:03:02,Outgoing,+39 347 9876543,group_participant_A,"Il prezzo è cambiato, ora costa di più",,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-10-20 08:11:57,Outgoing,group_participant_A,+39 347 9876543,Porta il pacco al solito posto,,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-26 15:28:35,Incoming,+1 212 5550101,+39 333 1234567,Ho comprato la roba 💊,,Read,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-10-13 20:08:35,Incoming,group_participant_A,+1 212 5550101,,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-19 04:13:25,Outgoing,+1 212 5550101,+1 212 5550101,Ok confermato per stasera,,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-02-02 14:28:14,Incoming,group_participant_A,+39 333 1234567,Quanto vuoi per 50?,,Received,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-12 06:38:26,Outgoing,+1 212 5550101,+39 333 1234567,Porta il pacco al solito posto,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-08-24 20:12:22,Incoming,+39 320 5554433,+39 320 5554433,Mandami la foto quando sei pronto,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-08-25 00:40:06,Outgoing,+39 320 5554433,+39 347 9876543,Ok confermato per stasera,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-11-20 08:09:54,Outgoing,+1 212 5550101,group_participant_A,Mandami la foto quando sei pronto,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-27 01:28:49,Incoming,+1 212 5550101,+1 212 5550101,https://t.me/examplegroup,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Image,2024-06-29 20:07:18,Outgoing,+1 212 5550101,+39 320 5554433,,Files\IMG_0082.jpg,Received,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-01-20 06:22:54,Outgoing,group_participant_A,+39 320 5554433,Porta il pacco al solito posto,,Read,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2025-02-09 06:11:44,Outgoing,+39 347 9876543,+1 212 5550101,,,Read,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-08-01 13:40:22,Incoming,+39 347 9876543,+39 347 9876543,https://t.me/examplegroup,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-09-21 01:14:58,Outgoing,+1 212 5550101,+39 347 9876543,👍,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-24 19:29:51,Incoming,+39 347 9876543,+39 320 5554433,"Non scrivere qui, usa l'altra app",,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Image,2024-05-11 09:56:59,Incoming,+39 333 1234567,group_participant_A,,Files\IMG_0088.jpg,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Image,2024-09-05 14:00:19,Outgoing,+39 347 9876543,+1 212 5550101,,Files\IMG_0089.jpg,Sent,True,False,com.whatsapp,chat_3
-WhatsApp,Image,2025-03-31 04:22:25,Incoming,+39 347 9876543,+1 212 5550101,,Files\IMG_0090.jpg,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-12 04:27:19,Outgoing,+39 333 1234567,+1 212 5550101,Ciao come stai?,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-03-06 20:29:46,Outgoing,+39 347 9876543,+39 320 5554433,👍,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-02-23 18:31:37,Incoming,+39 347 9876543,+39 347 9876543,👍,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-05-10 00:13:14,Incoming,+39 333 1234567,+39 333 1234567,,,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-14 06:01:28,Outgoing,group_participant_A,group_participant_A,Mandami la foto quando sei pronto,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-03-10 16:24:38,Incoming,+1 212 5550101,+39 333 1234567,"Non scrivere qui, usa l'altra app",,Sent,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-09-23 03:11:02,Incoming,+39 320 5554433,+1 212 5550101,Hai visto il nuovo posto in via Roma?,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-06-21 08:55:36,Incoming,+39 347 9876543,+39 333 1234567,,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-02-21 23:29:50,Incoming,+39 333 1234567,+39 333 1234567,Ciao come stai?,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-10-05 00:57:54,Incoming,+1 212 5550101,+39 347 9876543,Ciao come stai?,,Read,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-06-21 01:26:46,Outgoing,+39 333 1234567,+39 320 5554433,Tutto ok dalla mia parte,,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-18 13:15:38,Incoming,+39 320 5554433,+39 333 1234567,Hai visto il nuovo posto in via Roma?,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-11-12 03:09:27,Outgoing,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 14,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-05-30 21:54:17,Incoming,group_participant_A,group_participant_A,Messaggio di test sintetico 01,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-03-29 20:37:48,Incoming,+1 000 0000004,+39 000 0000002,👍,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-11-13 04:40:19,Incoming,+39 000 0000003,group_participant_A,Messaggio di test sintetico 12,,Received,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-25 03:51:22,Incoming,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 01,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-16 07:04:58,Incoming,group_participant_A,+39 000 0000001,Messaggio di test sintetico 12,,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-04-04 19:14:49,Incoming,group_participant_A,+39 000 0000002,https://example.org/synthetic-test-group,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-03-11 02:23:16,Incoming,+39 000 0000002,+39 000 0000003,Messaggio di test sintetico 16,,Delivered,True,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-07-31 20:24:39,Outgoing,+39 000 0000001,+1 000 0000004,,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-06-26 12:39:06,Incoming,+39 000 0000003,group_participant_A,Messaggio sintetico con emoji 💊,,Sent,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-23 23:39:20,Incoming,+39 000 0000001,+39 000 0000001,Messaggio di test sintetico 06,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-03-23 05:51:51,Incoming,+39 000 0000001,+39 000 0000001,Messaggio di test sintetico 06,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Image,2025-01-06 13:22:43,Incoming,+39 000 0000002,+39 000 0000003,,Files\IMG_0012.jpg,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-11-01 15:15:47,Outgoing,+1 000 0000004,group_participant_A,Messaggio di test sintetico 02,,Read,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-12-25 04:13:28,Incoming,+39 000 0000002,+39 000 0000003,Messaggio di test sintetico 06,,Read,True,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-03-10 04:13:20,Incoming,+39 000 0000003,+39 000 0000002,Messaggio di test sintetico 08,,Read,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-06-23 08:41:02,Outgoing,+39 000 0000002,+39 000 0000002,Messaggio di test sintetico 01,,Sent,True,False,com.whatsapp,chat_3
+WhatsApp,Image,2024-06-16 10:27:09,Incoming,+39 000 0000003,+39 000 0000002,,Files\IMG_0017.jpg,Delivered,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-24 18:23:39,Incoming,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 18,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-04 18:57:25,Outgoing,+39 000 0000002,+1 000 0000004,👍,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-07-01 09:45:42,Incoming,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 12,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-05 09:13:51,Incoming,+39 000 0000003,+39 000 0000002,Messaggio di test sintetico 12,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-04-12 11:09:30,Outgoing,+39 000 0000001,+39 000 0000003,,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-22 17:57:37,Incoming,+39 000 0000003,+39 000 0000003,👍,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-08-31 02:56:06,Incoming,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 13,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-05-26 17:43:23,Incoming,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 02,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-03-31 02:50:41,Outgoing,+1 000 0000004,+39 000 0000001,https://example.org/synthetic-test-group,,Sent,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-09-28 13:05:47,Incoming,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 11,,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2025-05-30 01:46:56,Incoming,group_participant_A,+39 000 0000002,Messaggio di test sintetico 10,,Delivered,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-03-14 05:58:36,Outgoing,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 11,,Read,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-04-29 10:34:57,Outgoing,+39 000 0000001,+39 000 0000001,https://example.org/synthetic-test-group,,Received,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-04 01:22:02,Incoming,group_participant_A,+1 000 0000004,Messaggio di test sintetico 13,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-13 03:14:52,Incoming,+39 000 0000001,group_participant_A,Messaggio di test sintetico 14,,Read,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-01-16 22:22:19,Outgoing,+39 000 0000002,+39 000 0000002,Messaggio di test sintetico 14,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Image,2024-08-19 21:18:47,Incoming,+1 000 0000004,+1 000 0000004,,Files\IMG_0034.jpg,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-04 05:52:13,Outgoing,+1 000 0000004,+1 000 0000004,Messaggio di test sintetico 14,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-10-13 00:25:01,Incoming,group_participant_A,+39 000 0000002,👍,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-23 03:57:14,Incoming,+39 000 0000002,+1 000 0000004,,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Image,2024-04-25 10:13:35,Outgoing,+39 000 0000002,+39 000 0000003,,Files\IMG_0038.jpg,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-02 18:44:25,Incoming,+39 000 0000001,group_participant_A,👍,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-07-16 22:56:18,Outgoing,group_participant_A,+39 000 0000001,,,Read,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-11-01 05:15:20,Incoming,+39 000 0000001,+39 000 0000001,👍,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-24 21:20:41,Incoming,+39 000 0000003,+39 000 0000002,Messaggio di test sintetico 16,,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Image,2024-03-23 14:08:49,Incoming,+1 000 0000004,group_participant_A,,Files\IMG_0043.jpg,Read,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-21 08:12:10,Incoming,+1 000 0000004,group_participant_A,,,Sent,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-03-09 01:38:14,Outgoing,+39 000 0000002,+39 000 0000002,Messaggio di test sintetico 10,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-06-11 12:19:12,Incoming,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 02,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-03 03:47:49,Incoming,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 08,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-01-16 05:53:17,Incoming,+1 000 0000004,group_participant_A,Messaggio di test sintetico 02,,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-09-16 07:24:58,Incoming,+39 000 0000001,+39 000 0000001,👍,,Received,True,True,com.whatsapp,chat_1
+WhatsApp,Image,2025-01-13 15:35:37,Outgoing,+1 000 0000004,+1 000 0000004,,Files\IMG_0050.jpg,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-03-23 16:56:14,Incoming,+39 000 0000003,group_participant_A,Messaggio sintetico con emoji 💊,,Sent,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-25 18:36:41,Outgoing,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 06,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-19 15:32:54,Incoming,group_participant_A,+39 000 0000003,https://example.org/synthetic-test-group,,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2025-05-21 19:29:06,Incoming,+39 000 0000003,+1 000 0000004,Messaggio di test sintetico 06,,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-05-14 14:22:49,Outgoing,+39 000 0000002,+39 000 0000002,,,Read,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-02-06 13:03:47,Outgoing,+39 000 0000001,+39 000 0000003,Messaggio di test sintetico 01,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-09-19 07:49:55,Incoming,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 02,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-06 06:06:37,Outgoing,group_participant_A,+39 000 0000003,Messaggio di test sintetico 17,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-19 05:53:49,Outgoing,group_participant_A,+39 000 0000001,Messaggio di test sintetico 12,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-05-01 23:17:55,Incoming,+39 000 0000003,+1 000 0000004,,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-04-05 12:34:40,Outgoing,+39 000 0000002,+1 000 0000004,👍,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-07-25 14:53:26,Outgoing,+39 000 0000003,+1 000 0000004,Messaggio di test sintetico 18,,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-11-29 01:50:14,Outgoing,+1 000 0000004,+1 000 0000004,https://example.org/synthetic-test-group,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-02-05 20:04:43,Incoming,+39 000 0000001,+39 000 0000001,Messaggio di test sintetico 13,,Sent,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-27 18:34:32,Incoming,+39 000 0000002,group_participant_A,Messaggio di test sintetico 12,,Sent,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-08-31 15:42:10,Incoming,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 01,,Delivered,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-09-25 03:56:16,Outgoing,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 11,,Read,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2025-02-24 01:03:37,Outgoing,+39 000 0000003,+39 000 0000002,Messaggio sintetico con emoji 💊,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Image,2025-04-05 05:04:03,Incoming,+39 000 0000003,+39 000 0000002,,Files\IMG_0069.jpg,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-05-01 23:55:55,Outgoing,group_participant_A,+39 000 0000003,Messaggio di test sintetico 08,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-09-20 07:03:02,Outgoing,+39 000 0000002,group_participant_A,Messaggio di test sintetico 02,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-10-20 08:11:57,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 08,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-26 15:28:35,Incoming,+1 000 0000004,+39 000 0000001,Messaggio sintetico con emoji 💊,,Read,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-10-13 20:08:35,Incoming,group_participant_A,+1 000 0000004,,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-19 04:13:25,Outgoing,+1 000 0000004,+1 000 0000004,Messaggio di test sintetico 06,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-02-02 14:28:14,Incoming,group_participant_A,+39 000 0000001,Messaggio di test sintetico 16,,Received,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-12 06:38:26,Outgoing,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 08,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-08-24 20:12:22,Incoming,+39 000 0000003,+39 000 0000003,Messaggio di test sintetico 11,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-08-25 00:40:06,Outgoing,+39 000 0000003,+39 000 0000002,Messaggio di test sintetico 06,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-11-20 08:09:54,Outgoing,+1 000 0000004,group_participant_A,Messaggio di test sintetico 11,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-27 01:28:49,Incoming,+1 000 0000004,+1 000 0000004,https://example.org/synthetic-test-group,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Image,2024-06-29 20:07:18,Outgoing,+1 000 0000004,+39 000 0000003,,Files\IMG_0082.jpg,Received,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-01-20 06:22:54,Outgoing,group_participant_A,+39 000 0000003,Messaggio di test sintetico 08,,Read,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2025-02-09 06:11:44,Outgoing,+39 000 0000002,+1 000 0000004,,,Read,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-08-01 13:40:22,Incoming,+39 000 0000002,+39 000 0000002,https://example.org/synthetic-test-group,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-09-21 01:14:58,Outgoing,+1 000 0000004,+39 000 0000002,👍,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-24 19:29:51,Incoming,+39 000 0000002,+39 000 0000003,Messaggio di test sintetico 17,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Image,2024-05-11 09:56:59,Incoming,+39 000 0000001,group_participant_A,,Files\IMG_0088.jpg,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Image,2024-09-05 14:00:19,Outgoing,+39 000 0000002,+1 000 0000004,,Files\IMG_0089.jpg,Sent,True,False,com.whatsapp,chat_3
+WhatsApp,Image,2025-03-31 04:22:25,Incoming,+39 000 0000002,+1 000 0000004,,Files\IMG_0090.jpg,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-12 04:27:19,Outgoing,+39 000 0000001,+1 000 0000004,Messaggio di test sintetico 10,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-03-06 20:29:46,Outgoing,+39 000 0000002,+39 000 0000003,👍,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-02-23 18:31:37,Incoming,+39 000 0000002,+39 000 0000002,👍,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-05-10 00:13:14,Incoming,+39 000 0000001,+39 000 0000001,,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-14 06:01:28,Outgoing,group_participant_A,group_participant_A,Messaggio di test sintetico 11,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-03-10 16:24:38,Incoming,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 17,,Sent,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-09-23 03:11:02,Incoming,+39 000 0000003,+1 000 0000004,Messaggio di test sintetico 01,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-06-21 08:55:36,Incoming,+39 000 0000002,+39 000 0000001,,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-02-21 23:29:50,Incoming,+39 000 0000001,+39 000 0000001,Messaggio di test sintetico 10,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-10-05 00:57:54,Incoming,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 10,,Read,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-06-21 01:26:46,Outgoing,+39 000 0000001,+39 000 0000003,Messaggio di test sintetico 18,,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-18 13:15:38,Incoming,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 01,,Received,False,False,com.whatsapp,chat_1
 WhatsApp,Text,2024-08-03 10:07:59,Outgoing,group_participant_A,group_participant_A,,,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-01 20:10:57,Incoming,+39 347 9876543,+39 333 1234567,"Non scrivere qui, usa l'altra app",,Sent,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-06-10 14:26:21,Outgoing,+39 333 1234567,group_participant_A,Hai visto il nuovo posto in via Roma?,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-12-01 23:16:56,Outgoing,+1 212 5550101,+39 320 5554433,Porta il pacco al solito posto,,Received,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-23 09:52:55,Incoming,+39 333 1234567,+39 320 5554433,👍,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-03-20 03:29:24,Incoming,+39 333 1234567,+39 347 9876543,👍,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-01 05:23:12,Incoming,+39 333 1234567,+39 333 1234567,,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-07-10 23:16:35,Outgoing,+39 333 1234567,+1 212 5550101,"Il prezzo è cambiato, ora costa di più",,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-11 00:09:09,Outgoing,group_participant_A,+1 212 5550101,Porta il pacco al solito posto,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-08-31 07:57:06,Incoming,+39 333 1234567,+39 347 9876543,Ci vediamo domani alle 10?,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Image,2024-03-20 02:12:13,Incoming,+39 333 1234567,group_participant_A,,Files\IMG_0113.jpg,Sent,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-10 16:54:14,Outgoing,group_participant_A,+39 333 1234567,https://t.me/examplegroup,,Received,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-05-20 14:03:17,Outgoing,+39 333 1234567,+1 212 5550101,,,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-05-30 09:14:11,Incoming,group_participant_A,+39 347 9876543,,,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-07-07 20:41:26,Incoming,+39 347 9876543,+39 333 1234567,Ci vediamo domani alle 10?,,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-03-29 08:19:16,Incoming,group_participant_A,+39 347 9876543,"Non scrivere qui, usa l'altra app",,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-06 02:15:56,Outgoing,group_participant_A,+39 347 9876543,Ci vediamo domani alle 10?,,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-05 07:46:52,Incoming,+39 333 1234567,+39 320 5554433,Quanto vuoi per 50?,,Received,True,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-08-20 17:32:15,Outgoing,+1 212 5550101,+39 320 5554433,Ok confermato per stasera,,Read,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-22 05:29:20,Incoming,+39 347 9876543,+1 212 5550101,Quanto vuoi per 50?,,Delivered,True,True,com.whatsapp,chat_3
-WhatsApp,Image,2024-10-18 23:30:14,Outgoing,+39 347 9876543,+1 212 5550101,,Files\IMG_0123.jpg,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-03-30 11:17:02,Outgoing,+39 347 9876543,+39 320 5554433,https://t.me/examplegroup,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-08-08 16:01:27,Outgoing,+39 347 9876543,+39 347 9876543,Hai visto il nuovo posto in via Roma?,,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-05-16 18:19:15,Outgoing,+39 320 5554433,+39 333 1234567,Ciao come stai?,,Delivered,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-06-12 07:06:31,Incoming,+39 320 5554433,+1 212 5550101,"Il prezzo è cambiato, ora costa di più",,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-02-20 18:43:31,Incoming,+39 333 1234567,+39 347 9876543,"Non scrivere qui, usa l'altra app",,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-04-10 16:24:23,Outgoing,+1 212 5550101,+39 347 9876543,Ci vediamo domani alle 10?,,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-08-05 12:56:41,Outgoing,+39 347 9876543,group_participant_A,,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-30 01:14:54,Incoming,+1 212 5550101,group_participant_A,Tutto ok dalla mia parte,,Received,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-06-23 10:35:55,Outgoing,+1 212 5550101,+1 212 5550101,,,Sent,True,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-06-19 12:15:59,Incoming,+39 347 9876543,+1 212 5550101,"Il prezzo è cambiato, ora costa di più",,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-05-02 02:35:39,Incoming,+39 320 5554433,+39 320 5554433,Ho comprato la roba 💊,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-03-29 13:50:41,Incoming,+39 333 1234567,+1 212 5550101,,,Sent,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-01-21 10:52:29,Outgoing,+39 320 5554433,+39 320 5554433,Attenzione ci sono controlli,,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Image,2024-03-05 00:23:32,Outgoing,+39 320 5554433,group_participant_A,,Files\IMG_0137.jpg,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-01-30 17:37:00,Incoming,group_participant_A,+39 347 9876543,Non mi rispondere sul telefono,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-14 04:00:38,Incoming,+39 347 9876543,group_participant_A,Hai visto il nuovo posto in via Roma?,,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-03-26 11:07:19,Outgoing,+39 333 1234567,+1 212 5550101,,,Delivered,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-06-30 12:54:57,Outgoing,group_participant_A,group_participant_A,https://t.me/examplegroup,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-26 02:34:05,Outgoing,+1 212 5550101,+39 347 9876543,https://t.me/examplegroup,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-01-08 12:28:11,Incoming,+1 212 5550101,+39 320 5554433,Non mi rispondere sul telefono,,Delivered,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-02-21 13:39:54,Incoming,+39 320 5554433,+39 320 5554433,Ciao come stai?,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-04-01 20:10:57,Incoming,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 17,,Sent,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-06-10 14:26:21,Outgoing,+39 000 0000001,group_participant_A,Messaggio di test sintetico 01,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-12-01 23:16:56,Outgoing,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 08,,Received,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-23 09:52:55,Incoming,+39 000 0000001,+39 000 0000003,👍,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-03-20 03:29:24,Incoming,+39 000 0000001,+39 000 0000002,👍,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-01 05:23:12,Incoming,+39 000 0000001,+39 000 0000001,,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-07-10 23:16:35,Outgoing,+39 000 0000001,+1 000 0000004,Messaggio di test sintetico 02,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-11 00:09:09,Outgoing,group_participant_A,+1 000 0000004,Messaggio di test sintetico 08,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-08-31 07:57:06,Incoming,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 12,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Image,2024-03-20 02:12:13,Incoming,+39 000 0000001,group_participant_A,,Files\IMG_0113.jpg,Sent,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-10 16:54:14,Outgoing,group_participant_A,+39 000 0000001,https://example.org/synthetic-test-group,,Received,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-05-20 14:03:17,Outgoing,+39 000 0000001,+1 000 0000004,,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-05-30 09:14:11,Incoming,group_participant_A,+39 000 0000002,,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-07-07 20:41:26,Incoming,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 12,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-03-29 08:19:16,Incoming,group_participant_A,+39 000 0000002,Messaggio di test sintetico 17,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-06 02:15:56,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 12,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-05 07:46:52,Incoming,+39 000 0000001,+39 000 0000003,Messaggio di test sintetico 16,,Received,True,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-08-20 17:32:15,Outgoing,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 06,,Read,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-22 05:29:20,Incoming,+39 000 0000002,+1 000 0000004,Messaggio di test sintetico 16,,Delivered,True,True,com.whatsapp,chat_3
+WhatsApp,Image,2024-10-18 23:30:14,Outgoing,+39 000 0000002,+1 000 0000004,,Files\IMG_0123.jpg,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-03-30 11:17:02,Outgoing,+39 000 0000002,+39 000 0000003,https://example.org/synthetic-test-group,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-08-08 16:01:27,Outgoing,+39 000 0000002,+39 000 0000002,Messaggio di test sintetico 01,,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-05-16 18:19:15,Outgoing,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 10,,Delivered,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-06-12 07:06:31,Incoming,+39 000 0000003,+1 000 0000004,Messaggio di test sintetico 02,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-02-20 18:43:31,Incoming,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 17,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-04-10 16:24:23,Outgoing,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 12,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-08-05 12:56:41,Outgoing,+39 000 0000002,group_participant_A,,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-30 01:14:54,Incoming,+1 000 0000004,group_participant_A,Messaggio di test sintetico 18,,Received,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-06-23 10:35:55,Outgoing,+1 000 0000004,+1 000 0000004,,,Sent,True,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-06-19 12:15:59,Incoming,+39 000 0000002,+1 000 0000004,Messaggio di test sintetico 02,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-05-02 02:35:39,Incoming,+39 000 0000003,+39 000 0000003,Messaggio sintetico con emoji 💊,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-03-29 13:50:41,Incoming,+39 000 0000001,+1 000 0000004,,,Sent,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-01-21 10:52:29,Outgoing,+39 000 0000003,+39 000 0000003,Messaggio di test sintetico 14,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Image,2024-03-05 00:23:32,Outgoing,+39 000 0000003,group_participant_A,,Files\IMG_0137.jpg,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-01-30 17:37:00,Incoming,group_participant_A,+39 000 0000002,Messaggio di test sintetico 13,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-14 04:00:38,Incoming,+39 000 0000002,group_participant_A,Messaggio di test sintetico 01,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-03-26 11:07:19,Outgoing,+39 000 0000001,+1 000 0000004,,,Delivered,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-06-30 12:54:57,Outgoing,group_participant_A,group_participant_A,https://example.org/synthetic-test-group,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-26 02:34:05,Outgoing,+1 000 0000004,+39 000 0000002,https://example.org/synthetic-test-group,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-01-08 12:28:11,Incoming,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 13,,Delivered,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-02-21 13:39:54,Incoming,+39 000 0000003,+39 000 0000003,Messaggio di test sintetico 10,,Read,False,False,com.whatsapp,chat_3
 WhatsApp,Image,2025-05-04 05:03:20,Incoming,group_participant_A,group_participant_A,,Files\IMG_0145.jpg,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-03 18:29:49,Outgoing,+39 333 1234567,+39 320 5554433,https://t.me/examplegroup,,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-06-19 04:20:54,Incoming,group_participant_A,+1 212 5550101,Ciao come stai?,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-06-08 22:06:38,Outgoing,+39 347 9876543,+39 320 5554433,,,Read,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-09-10 19:28:22,Outgoing,+1 212 5550101,+1 212 5550101,Ok confermato per stasera,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-06-09 09:03:37,Incoming,+39 347 9876543,+39 347 9876543,Mandami la foto quando sei pronto,,Received,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-06 15:41:16,Incoming,group_participant_A,+1 212 5550101,Hai visto il nuovo posto in via Roma?,,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Image,2024-07-10 17:26:00,Outgoing,group_participant_A,+39 320 5554433,,Files\IMG_0152.jpg,Received,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-05-16 23:53:20,Incoming,+1 212 5550101,+39 320 5554433,Mandami la foto quando sei pronto,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-10-25 18:40:30,Outgoing,+39 347 9876543,group_participant_A,Porta il pacco al solito posto,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-05-02 20:19:10,Outgoing,group_participant_A,+39 320 5554433,Ho comprato la roba 💊,,Delivered,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-29 10:41:25,Outgoing,+39 333 1234567,group_participant_A,Non mi rispondere sul telefono,,Received,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-01-21 18:03:26,Outgoing,+39 333 1234567,+1 212 5550101,Attenzione ci sono controlli,,Sent,True,False,com.whatsapp,chat_2
-WhatsApp,Image,2024-03-30 01:50:26,Outgoing,+39 347 9876543,+39 320 5554433,,Files\IMG_0158.jpg,Received,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-12-05 23:45:37,Outgoing,+39 347 9876543,+1 212 5550101,Hai visto il nuovo posto in via Roma?,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-04-06 10:20:58,Incoming,group_participant_A,+1 212 5550101,Ok confermato per stasera,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-05-18 05:02:46,Outgoing,+39 347 9876543,+39 333 1234567,Quanto vuoi per 50?,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-20 04:59:43,Outgoing,+39 320 5554433,+1 212 5550101,Ci vediamo domani alle 10?,,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-07-04 06:42:50,Outgoing,+39 347 9876543,+39 333 1234567,Ciao come stai?,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-06-03 14:07:18,Outgoing,+39 333 1234567,+39 347 9876543,Porta il pacco al solito posto,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-09-07 15:10:59,Outgoing,group_participant_A,+39 347 9876543,Quanto vuoi per 50?,,Received,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-09-08 04:00:47,Outgoing,+39 347 9876543,+39 333 1234567,Attenzione ci sono controlli,,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-26 01:17:42,Incoming,+39 320 5554433,group_participant_A,Tutto ok dalla mia parte,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-20 11:08:53,Outgoing,group_participant_A,+39 347 9876543,Hai visto il nuovo posto in via Roma?,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-05-16 04:24:27,Incoming,+39 320 5554433,+1 212 5550101,Ho comprato la roba 💊,,Sent,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-01-31 22:13:03,Outgoing,+39 347 9876543,group_participant_A,Ciao come stai?,,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-07-02 14:44:48,Outgoing,+1 212 5550101,+39 347 9876543,Ho comprato la roba 💊,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-10-18 20:26:57,Outgoing,+39 347 9876543,+39 333 1234567,"Il prezzo è cambiato, ora costa di più",,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-18 06:10:24,Outgoing,+39 320 5554433,+39 333 1234567,"Il prezzo è cambiato, ora costa di più",,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-11 21:21:24,Outgoing,+39 347 9876543,group_participant_A,Attenzione ci sono controlli,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-24 08:36:48,Outgoing,+39 347 9876543,+39 333 1234567,"Non scrivere qui, usa l'altra app",,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-29 03:04:45,Incoming,+39 333 1234567,+1 212 5550101,https://t.me/examplegroup,,Sent,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-15 13:53:08,Incoming,+39 347 9876543,+39 320 5554433,Mandami la foto quando sei pronto,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-10-06 07:05:35,Incoming,+1 212 5550101,+1 212 5550101,Ok confermato per stasera,,Received,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-09 09:08:41,Outgoing,+39 333 1234567,+1 212 5550101,👍,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-10-22 12:06:23,Outgoing,+1 212 5550101,+39 320 5554433,https://t.me/examplegroup,,Sent,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-04-16 03:27:32,Incoming,+1 212 5550101,+39 347 9876543,"Non scrivere qui, usa l'altra app",,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-11-10 05:27:23,Outgoing,+1 212 5550101,+1 212 5550101,Tutto ok dalla mia parte,,Received,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-01-31 03:47:08,Incoming,+39 333 1234567,+1 212 5550101,Ok confermato per stasera,,Delivered,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-01-14 12:34:16,Incoming,+39 320 5554433,+39 333 1234567,Attenzione ci sono controlli,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-06-09 09:29:13,Outgoing,+39 333 1234567,+39 347 9876543,Hai visto il nuovo posto in via Roma?,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-03-31 16:01:00,Incoming,+39 333 1234567,+1 212 5550101,Attenzione ci sono controlli,,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-21 08:46:21,Outgoing,+39 320 5554433,group_participant_A,Attenzione ci sono controlli,,Sent,True,True,com.whatsapp,chat_3
-WhatsApp,Text,2025-03-20 18:15:20,Outgoing,+39 320 5554433,+39 347 9876543,Hai visto il nuovo posto in via Roma?,,Delivered,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-01-02 05:25:36,Outgoing,+39 333 1234567,+39 333 1234567,👍,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-05-24 18:44:54,Outgoing,+39 347 9876543,+39 347 9876543,,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-06-05 01:48:32,Outgoing,+39 333 1234567,+39 347 9876543,Quanto vuoi per 50?,,Sent,True,False,com.whatsapp,chat_3
-WhatsApp,Image,2024-05-09 00:48:56,Outgoing,+39 333 1234567,+39 320 5554433,,Files\IMG_0192.jpg,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-01 08:37:07,Outgoing,+1 212 5550101,+1 212 5550101,Porta il pacco al solito posto,,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-03-28 09:34:12,Incoming,+39 333 1234567,+39 333 1234567,Quanto vuoi per 50?,,Read,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-01-02 13:40:47,Incoming,+39 320 5554433,group_participant_A,👍,,Sent,False,True,com.whatsapp,chat_1
-WhatsApp,Image,2024-10-07 13:27:14,Incoming,+1 212 5550101,+1 212 5550101,,Files\IMG_0196.jpg,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-04-17 20:35:40,Incoming,+39 333 1234567,group_participant_A,Porta il pacco al solito posto,,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-16 21:14:16,Incoming,+39 347 9876543,+39 333 1234567,Non mi rispondere sul telefono,,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-12-11 02:28:01,Incoming,+39 347 9876543,group_participant_A,,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-06-27 07:37:12,Outgoing,+39 333 1234567,+1 212 5550101,Mandami la foto quando sei pronto,,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-21 17:59:44,Outgoing,+39 333 1234567,+39 320 5554433,https://t.me/examplegroup,,Delivered,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-06-13 09:16:15,Incoming,+39 347 9876543,+39 333 1234567,Porta il pacco al solito posto,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-08-05 18:14:56,Incoming,+39 347 9876543,+39 320 5554433,,,Read,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-06-21 07:47:55,Incoming,+39 320 5554433,+39 347 9876543,Ho comprato la roba 💊,,Sent,True,True,com.whatsapp,chat_3
-WhatsApp,Text,2025-05-13 17:39:09,Outgoing,group_participant_A,+1 212 5550101,"Il prezzo è cambiato, ora costa di più",,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-09-21 06:29:35,Outgoing,group_participant_A,+39 347 9876543,Porta il pacco al solito posto,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-18 01:37:07,Outgoing,group_participant_A,group_participant_A,Quanto vuoi per 50?,,Received,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-05-30 13:03:43,Incoming,group_participant_A,group_participant_A,"Il prezzo è cambiato, ora costa di più",,Read,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-04-22 09:25:05,Outgoing,+39 320 5554433,+39 347 9876543,,,Received,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-09-05 15:49:48,Incoming,+39 320 5554433,group_participant_A,Porta il pacco al solito posto,,Sent,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-10-19 14:21:28,Outgoing,+39 333 1234567,+39 320 5554433,"Non scrivere qui, usa l'altra app",,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-10-31 07:49:40,Incoming,+39 320 5554433,+39 347 9876543,Ciao come stai?,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-10-30 17:56:40,Incoming,+39 333 1234567,group_participant_A,Mandami la foto quando sei pronto,,Sent,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-04-11 16:09:56,Outgoing,+39 320 5554433,group_participant_A,Ci vediamo domani alle 10?,,Sent,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-24 13:33:04,Outgoing,+1 212 5550101,+39 320 5554433,"Non scrivere qui, usa l'altra app",,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Image,2025-03-23 03:29:31,Incoming,+39 333 1234567,+39 347 9876543,,Files\IMG_0216.jpg,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-02-10 18:09:04,Outgoing,+39 333 1234567,group_participant_A,Non mi rispondere sul telefono,,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-04-02 06:38:23,Outgoing,+39 347 9876543,+1 212 5550101,,,Sent,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-05-20 02:40:28,Outgoing,+1 212 5550101,+39 320 5554433,https://t.me/examplegroup,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-05-13 04:44:11,Outgoing,group_participant_A,+39 347 9876543,Ciao come stai?,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2025-01-11 01:58:59,Outgoing,+1 212 5550101,+39 320 5554433,"Non scrivere qui, usa l'altra app",,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-28 06:46:33,Outgoing,+39 333 1234567,+1 212 5550101,,,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-26 12:51:55,Outgoing,+39 333 1234567,+39 347 9876543,Ok confermato per stasera,,Read,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-09 04:24:14,Incoming,+39 347 9876543,+39 333 1234567,Hai visto il nuovo posto in via Roma?,,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-05-13 06:54:55,Incoming,+1 212 5550101,+39 333 1234567,"Il prezzo è cambiato, ora costa di più",,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2025-02-18 20:23:25,Outgoing,+1 212 5550101,+39 347 9876543,,,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-03-17 21:39:50,Outgoing,+39 333 1234567,+39 347 9876543,Ci vediamo domani alle 10?,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-04-12 16:47:05,Outgoing,group_participant_A,+39 347 9876543,Tutto ok dalla mia parte,,Sent,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-17 00:56:10,Incoming,+39 320 5554433,+1 212 5550101,Ok confermato per stasera,,Received,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-04-21 06:15:38,Outgoing,group_participant_A,+39 347 9876543,Ho comprato la roba 💊,,Sent,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-04-29 05:17:14,Outgoing,+39 320 5554433,+1 212 5550101,Attenzione ci sono controlli,,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-03-01 22:20:06,Outgoing,+1 212 5550101,+39 333 1234567,Non mi rispondere sul telefono,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-07-31 13:08:45,Outgoing,+39 333 1234567,+39 333 1234567,Attenzione ci sono controlli,,Delivered,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-12 22:13:04,Incoming,+39 320 5554433,group_participant_A,,,Read,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-29 12:48:43,Incoming,group_participant_A,+39 333 1234567,Ci vediamo domani alle 10?,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-04-05 01:27:39,Incoming,+39 347 9876543,+39 320 5554433,Ciao come stai?,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-11 11:25:48,Incoming,+39 320 5554433,+39 347 9876543,👍,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-08-10 18:42:21,Incoming,+39 320 5554433,+1 212 5550101,,,Delivered,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-08-30 21:50:18,Outgoing,+39 333 1234567,+39 333 1234567,Ho comprato la roba 💊,,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-08-10 00:38:46,Outgoing,group_participant_A,+1 212 5550101,Ciao come stai?,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-01-11 19:07:10,Outgoing,group_participant_A,+39 347 9876543,Ciao come stai?,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-12-14 11:28:48,Incoming,+39 347 9876543,group_participant_A,"Il prezzo è cambiato, ora costa di più",,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-11-24 08:06:51,Outgoing,+1 212 5550101,+1 212 5550101,Ok confermato per stasera,,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Image,2024-04-01 13:10:13,Incoming,+39 320 5554433,+39 320 5554433,,Files\IMG_0244.jpg,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Image,2024-08-24 18:15:10,Incoming,group_participant_A,+39 333 1234567,,Files\IMG_0245.jpg,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-08-19 17:39:33,Outgoing,+39 320 5554433,+39 333 1234567,Ciao come stai?,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-01-17 04:24:16,Outgoing,+39 347 9876543,+39 333 1234567,,,Delivered,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-25 00:32:04,Outgoing,+39 320 5554433,+39 347 9876543,,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-28 07:30:09,Outgoing,+39 333 1234567,+1 212 5550101,https://t.me/examplegroup,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-06-03 03:38:55,Incoming,+39 333 1234567,+39 347 9876543,Mandami la foto quando sei pronto,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-05-04 12:26:29,Outgoing,+39 347 9876543,+1 212 5550101,Hai visto il nuovo posto in via Roma?,,Read,True,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-11-06 14:13:45,Incoming,group_participant_A,+1 212 5550101,"Non scrivere qui, usa l'altra app",,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-01-11 14:26:05,Incoming,+39 347 9876543,+39 333 1234567,Non mi rispondere sul telefono,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-03-05 04:03:11,Incoming,+1 212 5550101,+39 347 9876543,"Non scrivere qui, usa l'altra app",,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-11 03:01:10,Outgoing,+1 212 5550101,+39 347 9876543,,,Read,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-04-03 13:33:33,Outgoing,+39 347 9876543,+1 212 5550101,Ci vediamo domani alle 10?,,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-02-09 13:52:36,Incoming,+1 212 5550101,+1 212 5550101,,,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-01-31 00:32:53,Incoming,+1 212 5550101,+39 333 1234567,Mandami la foto quando sei pronto,,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Image,2024-11-20 17:28:04,Incoming,+39 347 9876543,+39 320 5554433,,Files\IMG_0259.jpg,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-08-09 14:41:37,Incoming,+1 212 5550101,+39 320 5554433,Porta il pacco al solito posto,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-08-24 09:37:12,Incoming,+39 333 1234567,+39 333 1234567,Ciao come stai?,,Delivered,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-04-02 10:05:53,Outgoing,group_participant_A,group_participant_A,Tutto ok dalla mia parte,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-04-11 08:25:27,Outgoing,group_participant_A,+39 333 1234567,Ci vediamo domani alle 10?,,Delivered,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-28 12:58:17,Outgoing,group_participant_A,+39 320 5554433,Mandami la foto quando sei pronto,,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-05-28 21:40:20,Outgoing,+1 212 5550101,group_participant_A,Hai visto il nuovo posto in via Roma?,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-22 14:10:40,Outgoing,+1 212 5550101,+1 212 5550101,,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-05 07:09:37,Outgoing,group_participant_A,+39 333 1234567,Quanto vuoi per 50?,,Received,True,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-12-06 00:09:25,Outgoing,group_participant_A,+1 212 5550101,Attenzione ci sono controlli,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-06-18 04:13:48,Incoming,group_participant_A,+39 333 1234567,,,Received,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-07-27 13:28:33,Outgoing,group_participant_A,+39 333 1234567,Ok confermato per stasera,,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-04-25 01:31:11,Outgoing,+39 320 5554433,+39 347 9876543,Hai visto il nuovo posto in via Roma?,,Read,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-09-26 21:09:33,Incoming,group_participant_A,+39 320 5554433,Non mi rispondere sul telefono,,Read,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-14 11:28:03,Outgoing,+39 333 1234567,+39 320 5554433,"Il prezzo è cambiato, ora costa di più",,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2025-06-18 11:24:02,Incoming,+1 212 5550101,+39 320 5554433,Quanto vuoi per 50?,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-12-12 11:05:05,Incoming,+39 347 9876543,+1 212 5550101,Tutto ok dalla mia parte,,Delivered,True,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-05-16 18:56:19,Outgoing,+39 347 9876543,group_participant_A,,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-06-17 21:26:46,Incoming,group_participant_A,+39 347 9876543,Ho comprato la roba 💊,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-13 03:51:50,Outgoing,+39 347 9876543,+39 333 1234567,Porta il pacco al solito posto,,Received,True,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-02-03 23:22:24,Outgoing,+39 347 9876543,+39 347 9876543,Ho comprato la roba 💊,,Sent,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-02-25 06:30:45,Outgoing,+39 320 5554433,+39 333 1234567,Quanto vuoi per 50?,,Delivered,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-09-14 16:23:09,Outgoing,+1 212 5550101,+39 347 9876543,"Il prezzo è cambiato, ora costa di più",,Read,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2024-03-20 20:36:58,Outgoing,group_participant_A,+39 320 5554433,Porta il pacco al solito posto,,Received,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-11-27 18:22:53,Outgoing,+1 212 5550101,+39 347 9876543,Tutto ok dalla mia parte,,Sent,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-05-11 16:48:35,Outgoing,+39 333 1234567,+39 347 9876543,Porta il pacco al solito posto,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-03-06 20:52:00,Outgoing,+39 333 1234567,group_participant_A,"Non scrivere qui, usa l'altra app",,Delivered,True,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-26 07:07:58,Incoming,+39 347 9876543,+39 320 5554433,Mandami la foto quando sei pronto,,Sent,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-02-29 07:37:49,Incoming,+39 333 1234567,+39 347 9876543,"Non scrivere qui, usa l'altra app",,Sent,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-03-28 21:31:49,Outgoing,group_participant_A,+1 212 5550101,Hai visto il nuovo posto in via Roma?,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2024-09-30 21:06:13,Incoming,+39 320 5554433,+1 212 5550101,👍,,Received,True,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-22 22:35:24,Outgoing,+39 347 9876543,+1 212 5550101,👍,,Received,True,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-03-05 22:44:50,Outgoing,group_participant_A,+1 212 5550101,,,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2024-10-08 11:35:47,Outgoing,group_participant_A,+1 212 5550101,"Non scrivere qui, usa l'altra app",,Read,False,False,com.whatsapp,chat_2
-WhatsApp,Image,2024-12-23 14:15:41,Outgoing,+39 347 9876543,group_participant_A,,Files\IMG_0293.jpg,Delivered,False,False,com.whatsapp,chat_1
-WhatsApp,Text,2025-06-24 10:17:34,Outgoing,+39 347 9876543,+1 212 5550101,Ciao come stai?,,Received,False,False,com.whatsapp,chat_2
-WhatsApp,Text,2025-04-06 07:34:35,Outgoing,+39 347 9876543,+39 333 1234567,"Non scrivere qui, usa l'altra app",,Sent,False,False,com.whatsapp,chat_3
-WhatsApp,Text,2024-11-19 12:01:37,Incoming,+39 347 9876543,+39 347 9876543,,,Delivered,False,False,com.whatsapp,chat_2
-WhatsApp,Image,2025-05-15 20:49:19,Outgoing,+39 333 1234567,+39 320 5554433,,Files\IMG_0297.jpg,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Text,2024-05-04 13:07:05,Outgoing,+39 333 1234567,+1 212 5550101,👍,,Received,False,True,com.whatsapp,chat_2
-WhatsApp,Text,2024-05-01 18:58:32,Outgoing,+39 320 5554433,+39 333 1234567,,,Received,False,True,com.whatsapp,chat_1
-WhatsApp,Text,2025-05-16 07:04:58,Incoming,group_participant_A,+39 333 1234567,Ci vediamo domani alle 10?,,Delivered,False,True,com.whatsapp,chat_3
-WhatsApp,Text,,Incoming,+39 333 1234567,+39 347 9876543,,,,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-03 18:29:49,Outgoing,+39 000 0000001,+39 000 0000003,https://example.org/synthetic-test-group,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-06-19 04:20:54,Incoming,group_participant_A,+1 000 0000004,Messaggio di test sintetico 10,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-06-08 22:06:38,Outgoing,+39 000 0000002,+39 000 0000003,,,Read,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-09-10 19:28:22,Outgoing,+1 000 0000004,+1 000 0000004,Messaggio di test sintetico 06,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-06-09 09:03:37,Incoming,+39 000 0000002,+39 000 0000002,Messaggio di test sintetico 11,,Received,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-06 15:41:16,Incoming,group_participant_A,+1 000 0000004,Messaggio di test sintetico 01,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Image,2024-07-10 17:26:00,Outgoing,group_participant_A,+39 000 0000003,,Files\IMG_0152.jpg,Received,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-05-16 23:53:20,Incoming,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 11,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-10-25 18:40:30,Outgoing,+39 000 0000002,group_participant_A,Messaggio di test sintetico 08,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-05-02 20:19:10,Outgoing,group_participant_A,+39 000 0000003,Messaggio sintetico con emoji 💊,,Delivered,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-29 10:41:25,Outgoing,+39 000 0000001,group_participant_A,Messaggio di test sintetico 13,,Received,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-01-21 18:03:26,Outgoing,+39 000 0000001,+1 000 0000004,Messaggio di test sintetico 14,,Sent,True,False,com.whatsapp,chat_2
+WhatsApp,Image,2024-03-30 01:50:26,Outgoing,+39 000 0000002,+39 000 0000003,,Files\IMG_0158.jpg,Received,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-12-05 23:45:37,Outgoing,+39 000 0000002,+1 000 0000004,Messaggio di test sintetico 01,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-04-06 10:20:58,Incoming,group_participant_A,+1 000 0000004,Messaggio di test sintetico 06,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-05-18 05:02:46,Outgoing,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 16,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-20 04:59:43,Outgoing,+39 000 0000003,+1 000 0000004,Messaggio di test sintetico 12,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-07-04 06:42:50,Outgoing,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 10,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-06-03 14:07:18,Outgoing,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 08,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-09-07 15:10:59,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 16,,Received,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-09-08 04:00:47,Outgoing,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 14,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-26 01:17:42,Incoming,+39 000 0000003,group_participant_A,Messaggio di test sintetico 18,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-20 11:08:53,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 01,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-05-16 04:24:27,Incoming,+39 000 0000003,+1 000 0000004,Messaggio sintetico con emoji 💊,,Sent,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-01-31 22:13:03,Outgoing,+39 000 0000002,group_participant_A,Messaggio di test sintetico 10,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-07-02 14:44:48,Outgoing,+1 000 0000004,+39 000 0000002,Messaggio sintetico con emoji 💊,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-10-18 20:26:57,Outgoing,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 02,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-18 06:10:24,Outgoing,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 02,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-11 21:21:24,Outgoing,+39 000 0000002,group_participant_A,Messaggio di test sintetico 14,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-24 08:36:48,Outgoing,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 17,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-29 03:04:45,Incoming,+39 000 0000001,+1 000 0000004,https://example.org/synthetic-test-group,,Sent,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-15 13:53:08,Incoming,+39 000 0000002,+39 000 0000003,Messaggio di test sintetico 11,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-10-06 07:05:35,Incoming,+1 000 0000004,+1 000 0000004,Messaggio di test sintetico 06,,Received,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-09 09:08:41,Outgoing,+39 000 0000001,+1 000 0000004,👍,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-10-22 12:06:23,Outgoing,+1 000 0000004,+39 000 0000003,https://example.org/synthetic-test-group,,Sent,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-04-16 03:27:32,Incoming,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 17,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-11-10 05:27:23,Outgoing,+1 000 0000004,+1 000 0000004,Messaggio di test sintetico 18,,Received,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-01-31 03:47:08,Incoming,+39 000 0000001,+1 000 0000004,Messaggio di test sintetico 06,,Delivered,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-01-14 12:34:16,Incoming,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 14,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-06-09 09:29:13,Outgoing,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 01,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-03-31 16:01:00,Incoming,+39 000 0000001,+1 000 0000004,Messaggio di test sintetico 14,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-21 08:46:21,Outgoing,+39 000 0000003,group_participant_A,Messaggio di test sintetico 14,,Sent,True,True,com.whatsapp,chat_3
+WhatsApp,Text,2025-03-20 18:15:20,Outgoing,+39 000 0000003,+39 000 0000002,Messaggio di test sintetico 01,,Delivered,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-01-02 05:25:36,Outgoing,+39 000 0000001,+39 000 0000001,👍,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-05-24 18:44:54,Outgoing,+39 000 0000002,+39 000 0000002,,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-06-05 01:48:32,Outgoing,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 16,,Sent,True,False,com.whatsapp,chat_3
+WhatsApp,Image,2024-05-09 00:48:56,Outgoing,+39 000 0000001,+39 000 0000003,,Files\IMG_0192.jpg,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-01 08:37:07,Outgoing,+1 000 0000004,+1 000 0000004,Messaggio di test sintetico 08,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-03-28 09:34:12,Incoming,+39 000 0000001,+39 000 0000001,Messaggio di test sintetico 16,,Read,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-01-02 13:40:47,Incoming,+39 000 0000003,group_participant_A,👍,,Sent,False,True,com.whatsapp,chat_1
+WhatsApp,Image,2024-10-07 13:27:14,Incoming,+1 000 0000004,+1 000 0000004,,Files\IMG_0196.jpg,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-04-17 20:35:40,Incoming,+39 000 0000001,group_participant_A,Messaggio di test sintetico 08,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-16 21:14:16,Incoming,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 13,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-12-11 02:28:01,Incoming,+39 000 0000002,group_participant_A,,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-06-27 07:37:12,Outgoing,+39 000 0000001,+1 000 0000004,Messaggio di test sintetico 11,,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-21 17:59:44,Outgoing,+39 000 0000001,+39 000 0000003,https://example.org/synthetic-test-group,,Delivered,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-06-13 09:16:15,Incoming,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 08,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-08-05 18:14:56,Incoming,+39 000 0000002,+39 000 0000003,,,Read,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-06-21 07:47:55,Incoming,+39 000 0000003,+39 000 0000002,Messaggio sintetico con emoji 💊,,Sent,True,True,com.whatsapp,chat_3
+WhatsApp,Text,2025-05-13 17:39:09,Outgoing,group_participant_A,+1 000 0000004,Messaggio di test sintetico 02,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-09-21 06:29:35,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 08,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-18 01:37:07,Outgoing,group_participant_A,group_participant_A,Messaggio di test sintetico 16,,Received,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-05-30 13:03:43,Incoming,group_participant_A,group_participant_A,Messaggio di test sintetico 02,,Read,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-04-22 09:25:05,Outgoing,+39 000 0000003,+39 000 0000002,,,Received,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-09-05 15:49:48,Incoming,+39 000 0000003,group_participant_A,Messaggio di test sintetico 08,,Sent,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-10-19 14:21:28,Outgoing,+39 000 0000001,+39 000 0000003,Messaggio di test sintetico 17,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-10-31 07:49:40,Incoming,+39 000 0000003,+39 000 0000002,Messaggio di test sintetico 10,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-10-30 17:56:40,Incoming,+39 000 0000001,group_participant_A,Messaggio di test sintetico 11,,Sent,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-04-11 16:09:56,Outgoing,+39 000 0000003,group_participant_A,Messaggio di test sintetico 12,,Sent,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-24 13:33:04,Outgoing,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 17,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Image,2025-03-23 03:29:31,Incoming,+39 000 0000001,+39 000 0000002,,Files\IMG_0216.jpg,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-02-10 18:09:04,Outgoing,+39 000 0000001,group_participant_A,Messaggio di test sintetico 13,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-04-02 06:38:23,Outgoing,+39 000 0000002,+1 000 0000004,,,Sent,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-05-20 02:40:28,Outgoing,+1 000 0000004,+39 000 0000003,https://example.org/synthetic-test-group,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-05-13 04:44:11,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 10,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2025-01-11 01:58:59,Outgoing,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 17,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-28 06:46:33,Outgoing,+39 000 0000001,+1 000 0000004,,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-26 12:51:55,Outgoing,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 06,,Read,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-09 04:24:14,Incoming,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 01,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-05-13 06:54:55,Incoming,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 02,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2025-02-18 20:23:25,Outgoing,+1 000 0000004,+39 000 0000002,,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-03-17 21:39:50,Outgoing,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 12,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-04-12 16:47:05,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 18,,Sent,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-17 00:56:10,Incoming,+39 000 0000003,+1 000 0000004,Messaggio di test sintetico 06,,Received,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-04-21 06:15:38,Outgoing,group_participant_A,+39 000 0000002,Messaggio sintetico con emoji 💊,,Sent,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-04-29 05:17:14,Outgoing,+39 000 0000003,+1 000 0000004,Messaggio di test sintetico 14,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-03-01 22:20:06,Outgoing,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 13,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-07-31 13:08:45,Outgoing,+39 000 0000001,+39 000 0000001,Messaggio di test sintetico 14,,Delivered,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-12 22:13:04,Incoming,+39 000 0000003,group_participant_A,,,Read,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-29 12:48:43,Incoming,group_participant_A,+39 000 0000001,Messaggio di test sintetico 12,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-04-05 01:27:39,Incoming,+39 000 0000002,+39 000 0000003,Messaggio di test sintetico 10,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-11 11:25:48,Incoming,+39 000 0000003,+39 000 0000002,👍,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-08-10 18:42:21,Incoming,+39 000 0000003,+1 000 0000004,,,Delivered,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-08-30 21:50:18,Outgoing,+39 000 0000001,+39 000 0000001,Messaggio sintetico con emoji 💊,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-08-10 00:38:46,Outgoing,group_participant_A,+1 000 0000004,Messaggio di test sintetico 10,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-01-11 19:07:10,Outgoing,group_participant_A,+39 000 0000002,Messaggio di test sintetico 10,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-12-14 11:28:48,Incoming,+39 000 0000002,group_participant_A,Messaggio di test sintetico 02,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-11-24 08:06:51,Outgoing,+1 000 0000004,+1 000 0000004,Messaggio di test sintetico 06,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Image,2024-04-01 13:10:13,Incoming,+39 000 0000003,+39 000 0000003,,Files\IMG_0244.jpg,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Image,2024-08-24 18:15:10,Incoming,group_participant_A,+39 000 0000001,,Files\IMG_0245.jpg,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-08-19 17:39:33,Outgoing,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 10,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-01-17 04:24:16,Outgoing,+39 000 0000002,+39 000 0000001,,,Delivered,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-25 00:32:04,Outgoing,+39 000 0000003,+39 000 0000002,,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-28 07:30:09,Outgoing,+39 000 0000001,+1 000 0000004,https://example.org/synthetic-test-group,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-06-03 03:38:55,Incoming,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 11,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-05-04 12:26:29,Outgoing,+39 000 0000002,+1 000 0000004,Messaggio di test sintetico 01,,Read,True,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-11-06 14:13:45,Incoming,group_participant_A,+1 000 0000004,Messaggio di test sintetico 17,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-01-11 14:26:05,Incoming,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 13,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-03-05 04:03:11,Incoming,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 17,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-11 03:01:10,Outgoing,+1 000 0000004,+39 000 0000002,,,Read,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-04-03 13:33:33,Outgoing,+39 000 0000002,+1 000 0000004,Messaggio di test sintetico 12,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-02-09 13:52:36,Incoming,+1 000 0000004,+1 000 0000004,,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-01-31 00:32:53,Incoming,+1 000 0000004,+39 000 0000001,Messaggio di test sintetico 11,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Image,2024-11-20 17:28:04,Incoming,+39 000 0000002,+39 000 0000003,,Files\IMG_0259.jpg,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-08-09 14:41:37,Incoming,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 08,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-08-24 09:37:12,Incoming,+39 000 0000001,+39 000 0000001,Messaggio di test sintetico 10,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-04-02 10:05:53,Outgoing,group_participant_A,group_participant_A,Messaggio di test sintetico 18,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-04-11 08:25:27,Outgoing,group_participant_A,+39 000 0000001,Messaggio di test sintetico 12,,Delivered,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-28 12:58:17,Outgoing,group_participant_A,+39 000 0000003,Messaggio di test sintetico 11,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-05-28 21:40:20,Outgoing,+1 000 0000004,group_participant_A,Messaggio di test sintetico 01,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-22 14:10:40,Outgoing,+1 000 0000004,+1 000 0000004,,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-05 07:09:37,Outgoing,group_participant_A,+39 000 0000001,Messaggio di test sintetico 16,,Received,True,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-12-06 00:09:25,Outgoing,group_participant_A,+1 000 0000004,Messaggio di test sintetico 14,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-06-18 04:13:48,Incoming,group_participant_A,+39 000 0000001,,,Received,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-07-27 13:28:33,Outgoing,group_participant_A,+39 000 0000001,Messaggio di test sintetico 06,,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-04-25 01:31:11,Outgoing,+39 000 0000003,+39 000 0000002,Messaggio di test sintetico 01,,Read,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-09-26 21:09:33,Incoming,group_participant_A,+39 000 0000003,Messaggio di test sintetico 13,,Read,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-14 11:28:03,Outgoing,+39 000 0000001,+39 000 0000003,Messaggio di test sintetico 02,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-06-18 11:24:02,Incoming,+1 000 0000004,+39 000 0000003,Messaggio di test sintetico 16,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-12-12 11:05:05,Incoming,+39 000 0000002,+1 000 0000004,Messaggio di test sintetico 18,,Delivered,True,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-05-16 18:56:19,Outgoing,+39 000 0000002,group_participant_A,,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-06-17 21:26:46,Incoming,group_participant_A,+39 000 0000002,Messaggio sintetico con emoji 💊,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-13 03:51:50,Outgoing,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 08,,Received,True,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-02-03 23:22:24,Outgoing,+39 000 0000002,+39 000 0000002,Messaggio sintetico con emoji 💊,,Sent,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-02-25 06:30:45,Outgoing,+39 000 0000003,+39 000 0000001,Messaggio di test sintetico 16,,Delivered,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-09-14 16:23:09,Outgoing,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 02,,Read,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2024-03-20 20:36:58,Outgoing,group_participant_A,+39 000 0000003,Messaggio di test sintetico 08,,Received,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-11-27 18:22:53,Outgoing,+1 000 0000004,+39 000 0000002,Messaggio di test sintetico 18,,Sent,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-05-11 16:48:35,Outgoing,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 08,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-03-06 20:52:00,Outgoing,+39 000 0000001,group_participant_A,Messaggio di test sintetico 17,,Delivered,True,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-26 07:07:58,Incoming,+39 000 0000002,+39 000 0000003,Messaggio di test sintetico 11,,Sent,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-02-29 07:37:49,Incoming,+39 000 0000001,+39 000 0000002,Messaggio di test sintetico 17,,Sent,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-03-28 21:31:49,Outgoing,group_participant_A,+1 000 0000004,Messaggio di test sintetico 01,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2024-09-30 21:06:13,Incoming,+39 000 0000003,+1 000 0000004,👍,,Received,True,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-22 22:35:24,Outgoing,+39 000 0000002,+1 000 0000004,👍,,Received,True,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-03-05 22:44:50,Outgoing,group_participant_A,+1 000 0000004,,,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2024-10-08 11:35:47,Outgoing,group_participant_A,+1 000 0000004,Messaggio di test sintetico 17,,Read,False,False,com.whatsapp,chat_2
+WhatsApp,Image,2024-12-23 14:15:41,Outgoing,+39 000 0000002,group_participant_A,,Files\IMG_0293.jpg,Delivered,False,False,com.whatsapp,chat_1
+WhatsApp,Text,2025-06-24 10:17:34,Outgoing,+39 000 0000002,+1 000 0000004,Messaggio di test sintetico 10,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Text,2025-04-06 07:34:35,Outgoing,+39 000 0000002,+39 000 0000001,Messaggio di test sintetico 17,,Sent,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-19 12:01:37,Incoming,+39 000 0000002,+39 000 0000002,,,Delivered,False,False,com.whatsapp,chat_2
+WhatsApp,Image,2025-05-15 20:49:19,Outgoing,+39 000 0000001,+39 000 0000003,,Files\IMG_0297.jpg,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Text,2024-05-04 13:07:05,Outgoing,+39 000 0000001,+1 000 0000004,👍,,Received,False,True,com.whatsapp,chat_2
+WhatsApp,Text,2024-05-01 18:58:32,Outgoing,+39 000 0000003,+39 000 0000001,,,Received,False,True,com.whatsapp,chat_1
+WhatsApp,Text,2025-05-16 07:04:58,Incoming,group_participant_A,+39 000 0000001,Messaggio di test sintetico 12,,Delivered,False,True,com.whatsapp,chat_3
+WhatsApp,Text,,Incoming,+39 000 0000001,+39 000 0000002,,,,False,False,com.whatsapp,chat_1

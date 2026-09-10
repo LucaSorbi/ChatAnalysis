@@ -248,6 +248,30 @@ class TestCanImportPositive:
         shutil.copy2(minimal_db, renamed)
         assert importer.can_import(renamed) is True
 
+    def test_renamed_db_csv_extension(self, importer, minimal_db, tmp_path):
+        """
+        4. Copia dello stesso DB chiamata evidence.csv → True.
+        L'estensione non è un hard gate se la struttura SQLite è compatibile.
+        """
+        import shutil
+        renamed = tmp_path / "evidence.csv"
+        shutil.copy2(minimal_db, renamed)
+        assert importer.can_import(renamed) is True
+
+    def test_synthetic_original_msgstore_returns_true(self, importer):
+        """1. msgstore.db sintetico originale → True."""
+        msgstore_path = Path("test_data/whatsapp_export/msgstore.db")
+        assert msgstore_path.exists()
+        assert importer.can_import(msgstore_path) is True
+
+    def test_synthetic_msgstore_copied_as_evidence_csv(self, importer, tmp_path):
+        """4b. Copia del msgstore.db sintetico originale come evidence.csv → True."""
+        import shutil
+        orig = Path("test_data/whatsapp_export/msgstore.db")
+        dest = tmp_path / "evidence.csv"
+        shutil.copy2(orig, dest)
+        assert importer.can_import(dest) is True
+
 
 # ---------------------------------------------------------------------------
 # can_import — casi negativi
@@ -257,24 +281,24 @@ class TestCanImportPositive:
 class TestCanImportNegative:
 
     def test_returns_false_for_nonexistent_file(self, importer, tmp_path):
-        """E. Path inesistente → False."""
+        """7. Path inesistente → False."""
         ghost = tmp_path / "ghost.db"
         assert importer.can_import(ghost) is False
 
     def test_returns_false_for_csv_extension(self, importer, tmp_path):
-        """D. Estensione CSV (fast reject) → False."""
+        """5. Vero CSV/testo (non SQLite) → False."""
         csv = tmp_path / "messages.csv"
         csv.write_text("id,text\n1,hello")
         assert importer.can_import(csv) is False
 
     def test_returns_false_for_json_extension(self, importer, tmp_path):
-        """D. Estensione JSON (fast reject) → False."""
+        """D. Vero file JSON (testo non SQLite) → False."""
         jsf = tmp_path / "data.json"
         jsf.write_text('{"key": "value"}')
         assert importer.can_import(jsf) is False
 
     def test_returns_false_for_xml_extension(self, importer, tmp_path):
-        """D. Estensione XML (fast reject) → False."""
+        """D. Vero file XML (testo non SQLite) → False."""
         xf = tmp_path / "report.xml"
         xf.write_text("<root/>")
         assert importer.can_import(xf) is False

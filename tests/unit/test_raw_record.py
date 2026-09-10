@@ -134,9 +134,10 @@ class TestRawRecordCreation:
         assert record.raw_fields["media_url"] is None
 
     def test_raw_fields_preserves_nested_dict(self):
-        """raw_fields può contenere dict annidati (es. JSON Cellebrite)."""
+        """raw_fields preserva dict annidati (congelati come MappingProxyType per deep immutability)."""
+        from types import MappingProxyType
         record = make_json_message_record()
-        assert isinstance(record.raw_fields["content"], dict)
+        assert isinstance(record.raw_fields["content"], MappingProxyType)
         assert record.raw_fields["content"]["text"] == "Messaggio JSON sintetico"
 
 
@@ -269,6 +270,80 @@ class TestRawRecordImmutability:
         """Tentativo di mutare metadata deve sollevare TypeError."""
         with pytest.raises(TypeError):
             sqlite_record.metadata["table"] = "other"  # type: ignore[index]
+
+    def test_nested_dict_mutation_raises(self):
+        """Dizionario annidato dentro raw_fields deve essere MappingProxyType e non mutabile."""
+        from types import MappingProxyType
+        record = RawRecord(
+            source_name="cellebrite_json",
+            source_path="/fake/messages.json",
+            source_record_id="msg_001",
+            record_type="message",
+            raw_fields={"content": {"text": "original", "media_path": None}},
+            media_reference=None,
+            metadata={},
+        )
+        assert isinstance(record.raw_fields["content"], MappingProxyType)
+        assert record.raw_fields["content"]["text"] == "original"
+        with pytest.raises(TypeError):
+            record.raw_fields["content"]["text"] = "mutated"  # type: ignore[index]
+
+    def test_nested_list_mutation_raises(self):
+        """Lista annidata dentro raw_fields deve essere convertita in tuple immutabile."""
+        record = RawRecord(
+            source_name="cellebrite_json",
+            source_path="/fake/messages.json",
+            source_record_id="msg_001",
+            record_type="message",
+            raw_fields={"tags": ["tag_a", "tag_b"]},
+            media_reference=None,
+            metadata={},
+        )
+        assert isinstance(record.raw_fields["tags"], tuple)
+        assert record.raw_fields["tags"] == ("tag_a", "tag_b")
+        with pytest.raises(TypeError):
+            record.raw_fields["tags"][0] = "mutated"  # type: ignore[index]
+        with pytest.raises(AttributeError):
+            record.raw_fields["tags"].append("tag_c")  # type: ignore[attr-defined]
+
+    def test_dict_inside_list_mutation_raises(self):
+        """Dizionario dentro una lista annidata deve essere MappingProxyType dentro tuple."""
+        from types import MappingProxyType
+        record = RawRecord(
+            source_name="cellebrite_json",
+            source_path="/fake/messages.json",
+            source_record_id="msg_001",
+            record_type="message",
+            raw_fields={"attachments": [{"file_name": "foto.jpg", "size": 1024}]},
+            media_reference=None,
+            metadata={},
+        )
+        assert isinstance(record.raw_fields["attachments"], tuple)
+        assert isinstance(record.raw_fields["attachments"][0], MappingProxyType)
+        assert record.raw_fields["attachments"][0]["file_name"] == "foto.jpg"
+        with pytest.raises(TypeError):
+            record.raw_fields["attachments"][0]["file_name"] = "malicious.exe"  # type: ignore[index]
+        with pytest.raises(TypeError):
+            record.raw_fields["attachments"][0] = {"file_name": "other.jpg"}  # type: ignore[index]
+
+    def test_nested_metadata_mutation_raises(self):
+        """Strutture annidate dentro metadata devono essere ricorsivamente immutabili."""
+        from types import MappingProxyType
+        record = RawRecord(
+            source_name="s",
+            source_path="/p",
+            source_record_id="1",
+            record_type="message",
+            raw_fields={},
+            media_reference=None,
+            metadata={"nested": {"level": 2, "items": [1, 2]}},
+        )
+        assert isinstance(record.metadata["nested"], MappingProxyType)
+        assert isinstance(record.metadata["nested"]["items"], tuple)
+        with pytest.raises(TypeError):
+            record.metadata["nested"]["level"] = 99  # type: ignore[index]
+        with pytest.raises(TypeError):
+            record.metadata["nested"]["items"][0] = 99  # type: ignore[index]
 
 
 # ---------------------------------------------------------------------------

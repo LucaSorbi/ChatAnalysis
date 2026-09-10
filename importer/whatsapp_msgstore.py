@@ -30,8 +30,8 @@ Schema osservato (da ispezione diretta — Fase 1 + Fase 2):
 Strategia can_import
 --------------------
 Riconoscimento strutturale non-distruttivo, in sola lettura.
-L'estensione del file è un hint opzionale, NON un requisito assoluto:
-in contesti forensi un database può essere copiato o rinominato.
+Nome del file ed estensione NON sono un hard gate: in contesti forensi
+un database può essere copiato, rinominato o privo di estensione.
 
 Algoritmo:
 1. Il file deve esistere ed essere un file regolare (non directory).
@@ -41,10 +41,6 @@ Algoritmo:
    'key_from_me', 'key_id') nella tabella messages.
 4. Qualsiasi errore (file non SQLite, schema diverso, permessi) →
    return False senza propagare eccezioni.
-
-L'estensione viene controllata solo per un early-exit veloce:
-se l'estensione non è né SQLite-standard né assente, si tenta
-comunque l'apertura strutturale.
 
 Modalità read-only
 ------------------
@@ -60,9 +56,10 @@ Gestione errori
 ---------------
 - Errore sorgente (file non trovato, non SQLite, tabelle mancanti):
   propagato come FileNotFoundError o ValueError da validate_source().
-- Errore singolo record: logging.warning con identificatore del record
-  e causa; il generatore continua con il record successivo.
-  NESSUN silenziamento silenzioso (no `except Exception: pass`).
+- Errore record: il mapping SQLite row -> RawRecord è un passthrough diretto.
+  Gli errori inattesi/programmatici non vengono intercettati con broad except
+  né mascherati da warning con salto record: vengono lasciati propagare
+  per garantire integrità e osservabilità forense.
 
 Record prodotti
 ---------------
@@ -104,15 +101,6 @@ _REQUIRED_TABLES: frozenset[str] = frozenset({"messages", "chat_list"})
 # Colonne che devono essere presenti nella tabella messages
 _REQUIRED_MSG_COLUMNS: frozenset[str] = frozenset({"key_remote_jid", "key_from_me", "key_id"})
 
-# Estensioni SQLite comuni — usate come hint opzionale, non come gate
-_SQLITE_HINT_EXTENSIONS: frozenset[str] = frozenset({".db", ".sqlite", ".sqlite3"})
-# Estensioni che appartengono inequivocabilmente ad altri formati:
-# se il file ha queste estensioni saltiamo subito l'apertura SQLite.
-_NON_SQLITE_EXTENSIONS: frozenset[str] = frozenset({
-    ".csv", ".json", ".xml", ".txt", ".pdf", ".docx", ".xlsx",
-    ".jpg", ".jpeg", ".png", ".mp4", ".mp3", ".opus", ".zip",
-})
-
 # Versione importer — inclusa nel metadata di ogni record
 _IMPORTER_VERSION = "0.1.0"
 
@@ -123,7 +111,7 @@ def _open_readonly(db_path: Path) -> sqlite3.Connection:
     L'URI mode=ro è garantito a livello di driver: qualsiasi tentativo
     di scrittura genera OperationalError.
     """
-    uri = db_path.as_uri() + "?mode=ro"
+    uri = db_path.resolve().as_uri() + "?mode=ro"
     conn = sqlite3.connect(uri, uri=True)
     conn.row_factory = sqlite3.Row
     return conn
@@ -159,22 +147,18 @@ class WhatsAppMsgstoreImporter(BaseImporter):
         """
         True se source_path è un msgstore.db WhatsApp — riconoscimento strutturale.
 
-        L'estensione è un hint opzionale, non un requisito assoluto.
-        In contesti forensi il file può essere rinominato o privo di estensione.
+        Nome file ed estensione non sono un hard gate: in contesti forensi
+        il file può essere rinominato (es. .bak, .csv, o privo di estensione).
+        La decisione definitiva dipende dal contenuto SQLite e dallo schema.
 
         Algoritmo:
-        1. Il file deve esistere ed essere un file regolare.
-        2. Se l'estensione appartiene inequivocabilmente a un formato non-SQLite
-           (csv, json, xml, jpg, …) → False immediato (fast reject).
-        3. Apertura in read-only (?mode=ro).
-        4. Verifica tabelle caratteristiche ('messages', 'chat_list').
-        5. Verifica colonne chiave di WhatsApp ('key_remote_jid', 'key_from_me', 'key_id').
-        6. Qualsiasi errore → False (mai sollevare eccezioni).
+        1. Il file deve esistere ed essere un file regolare (non directory).
+        2. Apertura in read-only (?mode=ro).
+        3. Verifica tabelle caratteristiche ('messages', 'chat_list').
+        4. Verifica colonne chiave di WhatsApp ('key_remote_jid', 'key_from_me', 'key_id').
+        5. Qualsiasi errore (file non SQLite, corrotto, schema incompatibile) → False.
         """
         if not source_path.exists() or not source_path.is_file():
-            return False
-        # Fast reject per estensioni non-SQLite inequivocabili
-        if source_path.suffix.lower() in _NON_SQLITE_EXTENSIONS:
             return False
         # Verifica strutturale (read-only): è questo un msgstore.db WhatsApp?
         try:
@@ -184,8 +168,7 @@ class WhatsAppMsgstoreImporter(BaseImporter):
             finally:
                 conn.close()
         except Exception:
-            # Qualsiasi errore di apertura (file corrotto, non SQLite, ecc.)
-
+            # Qualsiasi errore di apertura o query (file corrotto, non SQLite, permessi, ecc.)
             # → non è una sorgente gestibile da questo importer
             return False
 
@@ -241,38 +224,29 @@ class WhatsAppMsgstoreImporter(BaseImporter):
     ) -> Iterator[RawRecord]:
         """
         Itera sulla tabella messages riga per riga (streaming).
-        Ogni errore su un singolo record viene loggato e saltato.
+        Passthrough diretto riga SQLite -> RawRecord.
+        Errori programmatici/inattesi propagano per garantire integrità forense.
         """
         cur = conn.cursor()
         cur.execute("SELECT * FROM messages ORDER BY _id")
         for row in cur:
-            raw_id = row["_id"] if "messages._id" not in str(row) else "?"
-            try:
-                record_id = str(row["_id"])
-                fields = _row_to_dict(row)
-                # media_reference: usa media_url se presente, altrimenti None
-                media_ref: str | None = fields.get("media_url")  # type: ignore[assignment]
-                yield RawRecord(
-                    source_name=_SOURCE_NAME,
-                    source_path=source_str,
-                    source_record_id=record_id,
-                    record_type="message",
-                    raw_fields=fields,
-                    media_reference=media_ref if media_ref else None,
-                    metadata={
-                        "table": "messages",
-                        "importer": "WhatsAppMsgstoreImporter",
-                        "importer_version": _IMPORTER_VERSION,
-                    },
-                )
-            except Exception as exc:
-                logger.warning(
-                    "WhatsAppMsgstoreImporter: record saltato "
-                    "[source=%s table=messages _id=%s]: %s",
-                    source_str,
-                    raw_id,
-                    exc,
-                )
+            record_id = str(row["_id"])
+            fields = _row_to_dict(row)
+            # media_reference: usa media_url se presente, altrimenti None
+            media_ref: str | None = fields.get("media_url")  # type: ignore[assignment]
+            yield RawRecord(
+                source_name=_SOURCE_NAME,
+                source_path=source_str,
+                source_record_id=record_id,
+                record_type="message",
+                raw_fields=fields,
+                media_reference=media_ref if media_ref else None,
+                metadata={
+                    "table": "messages",
+                    "importer": "WhatsAppMsgstoreImporter",
+                    "importer_version": _IMPORTER_VERSION,
+                },
+            )
 
     def _import_chat_list(
         self, conn: sqlite3.Connection, source_str: str
@@ -281,28 +255,19 @@ class WhatsAppMsgstoreImporter(BaseImporter):
         cur = conn.cursor()
         cur.execute("SELECT * FROM chat_list ORDER BY _id")
         for row in cur:
-            try:
-                yield RawRecord(
-                    source_name=_SOURCE_NAME,
-                    source_path=source_str,
-                    source_record_id=str(row["_id"]),
-                    record_type="chat",
-                    raw_fields=_row_to_dict(row),
-                    media_reference=None,
-                    metadata={
-                        "table": "chat_list",
-                        "importer": "WhatsAppMsgstoreImporter",
-                        "importer_version": _IMPORTER_VERSION,
-                    },
-                )
-            except Exception as exc:
-                logger.warning(
-                    "WhatsAppMsgstoreImporter: record saltato "
-                    "[source=%s table=chat_list _id=%s]: %s",
-                    source_str,
-                    row["_id"],
-                    exc,
-                )
+            yield RawRecord(
+                source_name=_SOURCE_NAME,
+                source_path=source_str,
+                source_record_id=str(row["_id"]),
+                record_type="chat",
+                raw_fields=_row_to_dict(row),
+                media_reference=None,
+                metadata={
+                    "table": "chat_list",
+                    "importer": "WhatsAppMsgstoreImporter",
+                    "importer_version": _IMPORTER_VERSION,
+                },
+            )
 
     def _import_media_refs(
         self, conn: sqlite3.Connection, source_str: str
@@ -311,27 +276,18 @@ class WhatsAppMsgstoreImporter(BaseImporter):
         cur = conn.cursor()
         cur.execute("SELECT * FROM media_refs ORDER BY _id")
         for row in cur:
-            try:
-                fields = _row_to_dict(row)
-                file_path: str | None = fields.get("file_path")  # type: ignore[assignment]
-                yield RawRecord(
-                    source_name=_SOURCE_NAME,
-                    source_path=source_str,
-                    source_record_id=str(row["_id"]),
-                    record_type="media_ref",
-                    raw_fields=fields,
-                    media_reference=file_path if file_path else None,
-                    metadata={
-                        "table": "media_refs",
-                        "importer": "WhatsAppMsgstoreImporter",
-                        "importer_version": _IMPORTER_VERSION,
-                    },
-                )
-            except Exception as exc:
-                logger.warning(
-                    "WhatsAppMsgstoreImporter: record saltato "
-                    "[source=%s table=media_refs _id=%s]: %s",
-                    source_str,
-                    row["_id"],
-                    exc,
-                )
+            fields = _row_to_dict(row)
+            file_path: str | None = fields.get("file_path")  # type: ignore[assignment]
+            yield RawRecord(
+                source_name=_SOURCE_NAME,
+                source_path=source_str,
+                source_record_id=str(row["_id"]),
+                record_type="media_ref",
+                raw_fields=fields,
+                media_reference=file_path if file_path else None,
+                metadata={
+                    "table": "media_refs",
+                    "importer": "WhatsAppMsgstoreImporter",
+                    "importer_version": _IMPORTER_VERSION,
+                },
+            )

@@ -71,7 +71,7 @@ Il campione è composto da **due directory di provenienza** con struttura e orig
 | Status WhatsApp | `status` | Testo dello stato WhatsApp (25% null) |
 | Numero telefonico | `phone_number` | Formato internazionale |
 
-4 contatti nel campione: Mario Rossi, Lucia Bianchi, Giovanni Verdi, John Smith
+4 contatti nel campione: Contatto_001, Contatto_002, Contatto_003, Contatto_004
 
 #### `cellebrite_export/messages.csv`
 
@@ -431,7 +431,7 @@ UnifiedMessage
 Chat:
   unified_id:    str          # UUID generato
   chat_type:     enum         # "private" | "group"
-  jid:           str | None   # JID WhatsApp (es. +393331234567@s.whatsapp.net)
+  jid:           str | None   # JID WhatsApp (es. +390000000001@s.whatsapp.net)
   cellebrite_id: str | None   # ID opaco Cellebrite (es. "chat_1")
   subject:       str | None   # Nome gruppo (solo per chat di gruppo)
   participants:  List[Participant]

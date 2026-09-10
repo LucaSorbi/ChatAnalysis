@@ -16,6 +16,10 @@ dependencies = [
     "charset-normalizer>=3.4",
     # sqlite_analyzer.py: parsing timestamp ISO/unix
     "python-dateutil>=2.9",
+    # cellebrite_json.py: streaming parser per grandi file JSON
+    "ijson>=3.3",
+    # cellebrite_xml.py: parsing XML sicuro e streaming contro DTD, XXE, entity expansion
+    "defusedxml>=0.7.1",
 ]
 
 [project.optional-dependencies]
