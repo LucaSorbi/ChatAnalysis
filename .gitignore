@@ -140,3 +140,9 @@ secrets/
 # NOTA: test_data/ contiene esclusivamente dati sintetici ed è versionato.
 # Aggiungere qui eventuali sottodirectory con dati reali se vengono create.
 # =============================================================================
+
+# =============================================================================
+# Review Bundle temporaneo per revisione supervisore — MAI versionare
+# =============================================================================
+review_bundle/
+

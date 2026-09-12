@@ -254,3 +254,155 @@ class TestMediaResolutionContext:
         assert asset.media_kind == MediaKind.AUDIO
         assert asset.metadata.get("resolved_from_media_ref_fallback") is True
         assert asset.metadata["whatsapp_media_ref"]["media_job_uuid"] == "uuid-1234"
+        assert asset.provenance_message is msg
+
+    def test_conflicting_media_refs_produce_ambiguous_status(self, tmp_path: Path):
+        """
+        Requisito A1: Se compaiono più record media_ref con percorsi differenti per lo stesso
+        message_row_id, lo status deve essere AMBIGUOUS, resolved_path deve essere None,
+        e tutte le candidate references devono essere preservate nei metadati.
+        """
+        raw_ref1 = RawRecord(
+            source_name="msgstore_db",
+            source_path="/path/msgstore.db",
+            source_record_id="ref_1",
+            record_type="media_ref",
+            raw_fields={"message_row_id": 200, "file_path": "WhatsApp Audio/A.opus"},
+            media_reference="WhatsApp Audio/A.opus",
+            metadata={},
+        )
+        raw_ref2 = RawRecord(
+            source_name="msgstore_db",
+            source_path="/path/msgstore.db",
+            source_record_id="ref_2",
+            record_type="media_ref",
+            raw_fields={"message_row_id": 200, "file_path": "WhatsApp Audio/B.opus"},
+            media_reference="WhatsApp Audio/B.opus",
+            metadata={},
+        )
+        ctx = MediaResolutionContext.from_records([raw_ref1, raw_ref2])
+        assert ctx.is_ambiguous("200") is True
+        assert ctx.get_msgstore_ref("200") is None
+        assert len(ctx.get_all_msgstore_refs("200")) == 2
+
+        resolver = MediaResolver(allowed_roots=[tmp_path], context=ctx)
+        msg = _make_unified_message(source_name="msgstore_db", source_record_id="200", media_reference=None)
+        asset = resolver.resolve(msg)
+
+        assert asset.status == MediaResolutionStatus.AMBIGUOUS
+        assert asset.resolved_path is None
+        assert "candidate_media_refs" in asset.metadata
+        assert len(asset.metadata["candidate_media_refs"]) == 2
+        assert asset.provenance_message is msg
+
+    def test_identical_media_refs_equivalence_policy(self, tmp_path: Path):
+        """
+        Requisito A1: Se compaiono più record media_ref identici (stesso file_path),
+        la policy li riconosce come equivalenti e procede alla normale risoluzione.
+        """
+        media_file = tmp_path / "audio.opus"
+        media_file.write_bytes(b"data")
+
+        raw_ref1 = RawRecord(
+            source_name="msgstore_db",
+            source_path="/path/msgstore.db",
+            source_record_id="ref_1",
+            record_type="media_ref",
+            raw_fields={"message_row_id": 300, "file_path": "audio.opus"},
+            media_reference="audio.opus",
+            metadata={},
+        )
+        raw_ref2 = RawRecord(
+            source_name="msgstore_db",
+            source_path="/path/msgstore.db",
+            source_record_id="ref_2",
+            record_type="media_ref",
+            raw_fields={"message_row_id": 300, "file_path": "audio.opus"},
+            media_reference="audio.opus",
+            metadata={},
+        )
+        ctx = MediaResolutionContext.from_records([raw_ref1, raw_ref2])
+        assert ctx.is_ambiguous("300") is False
+        assert ctx.get_msgstore_ref("300") is not None
+
+        resolver = MediaResolver(allowed_roots=[tmp_path], context=ctx)
+        msg = _make_unified_message(source_name="msgstore_db", source_record_id="300", media_reference=None)
+        asset = resolver.resolve(msg)
+        assert asset.status == MediaResolutionStatus.RESOLVED
+
+    def test_unexpected_programmatic_error_propagates(self, tmp_path: Path, monkeypatch):
+        """
+        Requisito A2: Errori programmatici inattesi (es. TypeError) non devono essere nascosti
+        da un broad except Exception.
+        """
+        resolver = MediaResolver(allowed_roots=[tmp_path])
+        msg = _make_unified_message(source_name="msgstore_db", source_record_id="500", media_reference="test.opus")
+
+        def buggy_is_safe(self, target_path):
+            raise TypeError("Inatteso errore logico interno!")
+
+        monkeypatch.setattr(resolver, "_is_safe_under_roots", buggy_is_safe.__get__(resolver, MediaResolver))
+
+        with pytest.raises(TypeError, match="Inatteso errore logico interno"):
+            resolver.resolve(msg)
+
+    def test_full_provenance_chain_from_asset(self, tmp_path: Path):
+        """
+        Requisito A3: Provenance completa da ResolvedMediaAsset a UnifiedMessage a NormalizedRecord a RawRecord.
+        """
+        media_file = tmp_path / "img.jpg"
+        media_file.write_bytes(b"fake_jpeg")
+
+        resolver = MediaResolver(allowed_roots=[tmp_path])
+        msg = _make_unified_message(source_name="msgstore_db", source_record_id="1", media_reference="img.jpg", message_type=CanonicalMessageType.IMAGE)
+        asset = resolver.resolve(msg)
+
+        assert asset.provenance_message is msg
+        assert asset.provenance_message.message_id == msg.message_id
+        assert asset.provenance_message.provenance_record is not None
+        assert asset.provenance_message.provenance_record.raw_record is not None
+        assert asset.provenance_message.provenance_record.raw_record.source_name == "msgstore_db"
+
+    def test_resolved_media_asset_provenance_mismatch_rejected(self):
+        msg = _make_unified_message(source_name="msgstore_db", source_record_id="10")
+
+        # Mismatch message_id
+        with pytest.raises(ValueError, match="Incoerenza di provenance"):
+            ResolvedMediaAsset(
+                message_id="unified:msgstore_db:999",
+                source_name=msg.source_name,
+                source_record_id=msg.source_record_id,
+                raw_reference="test.opus",
+                resolved_path="/path/test.opus",
+                media_kind=MediaKind.AUDIO,
+                status=MediaResolutionStatus.RESOLVED,
+                provenance_message=msg,
+            )
+
+        # Mismatch source_name
+        with pytest.raises(ValueError, match="Incoerenza di provenance"):
+            ResolvedMediaAsset(
+                message_id=msg.message_id,
+                source_name="altra_sorgente",
+                source_record_id=msg.source_record_id,
+                raw_reference="test.opus",
+                resolved_path="/path/test.opus",
+                media_kind=MediaKind.AUDIO,
+                status=MediaResolutionStatus.RESOLVED,
+                provenance_message=msg,
+            )
+
+        # Mismatch source_record_id
+        with pytest.raises(ValueError, match="Incoerenza di provenance"):
+            ResolvedMediaAsset(
+                message_id=msg.message_id,
+                source_name=msg.source_name,
+                source_record_id="999",
+                raw_reference="test.opus",
+                resolved_path="/path/test.opus",
+                media_kind=MediaKind.AUDIO,
+                status=MediaResolutionStatus.RESOLVED,
+                provenance_message=msg,
+            )
+
+

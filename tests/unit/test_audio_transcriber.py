@@ -129,6 +129,26 @@ class TestFakeAudioTranscriber:
         assert res.full_transcript == "Uno Due Tre"
         assert res.detected_language == "es"
 
+    def test_transcribe_provenance_and_asset_sha256(self):
+        transcriber = FakeAudioTranscriber()
+        asset = _make_dummy_asset(status=MediaResolutionStatus.RESOLVED, media_kind=MediaKind.AUDIO)
+
+        res = transcriber.transcribe(asset)
+        assert res.provenance_asset is asset
+        assert res.asset_sha256 == "fake_sha256"
+        assert res.asset_sha256 == asset.sha256
+
+    def test_result_without_provenance_asset_has_none_sha256(self):
+        res = AudioTranscriptionResult(
+            message_id="msg:1",
+            source_name="src",
+            source_record_id="1",
+            status=TranscriptionStatus.SUCCESS,
+            full_transcript="Test",
+        )
+        assert res.provenance_asset is None
+        assert res.asset_sha256 is None
+
 
 @pytest.mark.unit
 class TestFasterWhisperTranscriberUnit:
@@ -155,6 +175,51 @@ class TestFasterWhisperTranscriberUnit:
         res = transcriber.transcribe(asset)
         assert res.status == TranscriptionStatus.UNSUPPORTED
         assert transcriber.is_model_loaded() is False
+
+    def test_global_model_load_failure_raises_audio_model_load_error(self, monkeypatch):
+        """Se l'inizializzazione del modello fallisce a livello globale, deve sollevare AudioModelLoadError."""
+        from multimodal.transcriber import AudioModelLoadError
+        import unittest.mock as mock
+
+        transcriber = FasterWhisperTranscriber(model_name="tiny", device="cpu")
+        mock_whisper = mock.MagicMock(side_effect=RuntimeError("Corrupt weights checkpoint"))
+        monkeypatch.setattr("faster_whisper.WhisperModel", mock_whisper)
+
+        asset = _make_dummy_asset(status=MediaResolutionStatus.RESOLVED, media_kind=MediaKind.AUDIO)
+        with pytest.raises(AudioModelLoadError) as excinfo:
+            transcriber.transcribe(asset)
+        assert "Impossibile caricare o inizializzare il modello" in str(excinfo.value)
+
+    def test_missing_package_raises_audio_backend_unavailable_error(self, monkeypatch):
+        """Se il package faster-whisper non è importabile, deve sollevare AudioBackendUnavailableError."""
+        import sys
+        from multimodal.transcriber import AudioBackendUnavailableError
+
+        transcriber = FasterWhisperTranscriber(model_name="tiny", device="cpu")
+        # Simula assenza modulo faster_whisper
+        monkeypatch.setitem(sys.modules, "faster_whisper", None)
+
+        asset = _make_dummy_asset(status=MediaResolutionStatus.RESOLVED, media_kind=MediaKind.AUDIO)
+        with pytest.raises(AudioBackendUnavailableError) as excinfo:
+            transcriber.transcribe(asset)
+        assert "faster-whisper" in str(excinfo.value)
+
+    def test_per_file_decoding_error_produces_failed_status_without_crash(self, monkeypatch):
+        """Un errore di decodifica durante la trascrizione di un singolo file produce FAILED controllato."""
+        import unittest.mock as mock
+
+        transcriber = FasterWhisperTranscriber(model_name="tiny", device="cpu")
+        mock_model = mock.MagicMock()
+        mock_model.transcribe.side_effect = RuntimeError("Failed to decode audio packet: truncated opus header")
+        transcriber._model = mock_model
+
+        asset = _make_dummy_asset(status=MediaResolutionStatus.RESOLVED, media_kind=MediaKind.AUDIO)
+        res = transcriber.transcribe(asset)
+
+        assert res.status == TranscriptionStatus.FAILED
+        assert res.full_transcript == ""
+        assert res.provenance_asset is asset
+        assert "truncated opus header" in (res.error_message or "")
 
 
 @pytest.mark.unit
@@ -274,3 +339,55 @@ class TestTranscriptionModelsDeepImmutability:
 
         with pytest.raises(TypeError):
             res.metadata["extra"]["score"] = 0  # type: ignore[index]
+
+    def test_segment_validation_invariants(self):
+        # Validi
+        AudioTranscriptSegment(start_seconds=0.0, end_seconds=1.5, text="Ciao")
+        AudioTranscriptSegment(start_seconds=1.5, end_seconds=1.5, text="")  # consentito stesso istante
+
+        # Invalidi
+        with pytest.raises(ValueError):
+            AudioTranscriptSegment(start_seconds=-0.1, end_seconds=1.0, text="Negativo")
+
+        with pytest.raises(ValueError):
+            AudioTranscriptSegment(start_seconds=2.0, end_seconds=1.0, text="Invertito")
+
+        with pytest.raises(ValueError):
+            AudioTranscriptSegment(start_seconds=0.0, end_seconds=1.0, text=123)  # type: ignore[arg-type]
+
+    def test_audio_transcription_provenance_mismatch_rejected(self):
+        asset = _make_dummy_asset()
+
+        # Mismatch message_id
+        with pytest.raises(ValueError) as excinfo:
+            AudioTranscriptionResult(
+                message_id="unified:msgstore_db:DIVERSO",
+                source_name=asset.source_name,
+                source_record_id=asset.source_record_id,
+                status=TranscriptionStatus.SUCCESS,
+                provenance_asset=asset,
+            )
+        assert "Incoerenza di provenance" in str(excinfo.value)
+
+        # Mismatch source_name
+        with pytest.raises(ValueError) as excinfo:
+            AudioTranscriptionResult(
+                message_id=asset.message_id,
+                source_name="sorgente_diversa",
+                source_record_id=asset.source_record_id,
+                status=TranscriptionStatus.SUCCESS,
+                provenance_asset=asset,
+            )
+        assert "Incoerenza di provenance" in str(excinfo.value)
+
+        # Mismatch source_record_id
+        with pytest.raises(ValueError) as excinfo:
+            AudioTranscriptionResult(
+                message_id=asset.message_id,
+                source_name=asset.source_name,
+                source_record_id="999",
+                status=TranscriptionStatus.SUCCESS,
+                provenance_asset=asset,
+            )
+        assert "Incoerenza di provenance" in str(excinfo.value)
+

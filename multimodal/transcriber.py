@@ -26,6 +26,21 @@ from multimodal.models import (
 )
 
 
+class AudioBackendError(Exception):
+    """Eccezione base per errori del backend di trascrizione audio."""
+    pass
+
+
+class AudioBackendUnavailableError(AudioBackendError):
+    """Sollevata quando il motore STT o le sue dipendenze runtime non sono disponibili."""
+    pass
+
+
+class AudioModelLoadError(AudioBackendError):
+    """Sollevata quando il caricamento del modello o la configurazione globale STT fallisce."""
+    pass
+
+
 class BaseAudioTranscriber(ABC):
     """
     Contratto astratto per motori di Speech-to-Text.
@@ -82,6 +97,7 @@ class FakeAudioTranscriber(BaseAudioTranscriber):
                 model_name="mock",
                 device="cpu",
                 compute_type="none",
+                provenance_asset=asset,
                 error_message=f"Asset non risolto (status={asset.status.value})",
             )
 
@@ -98,6 +114,7 @@ class FakeAudioTranscriber(BaseAudioTranscriber):
                 model_name="mock",
                 device="cpu",
                 compute_type="none",
+                provenance_asset=asset,
                 error_message=f"Tipo media non supportato per STT ({asset.media_kind.value})",
             )
 
@@ -114,6 +131,7 @@ class FakeAudioTranscriber(BaseAudioTranscriber):
                 model_name="mock",
                 device="cpu",
                 compute_type="none",
+                provenance_asset=asset,
                 error_message=self.failure_error,
             )
 
@@ -140,6 +158,7 @@ class FakeAudioTranscriber(BaseAudioTranscriber):
             model_name="mock",
             device="cpu",
             compute_type="none",
+            provenance_asset=asset,
         )
 
 
@@ -185,23 +204,31 @@ class FasterWhisperTranscriber(BaseAudioTranscriber):
             return False
 
     def load_model(self) -> Any:
-        """Carica il modello in memoria (lazy loading)."""
+        """Carica il modello in memoria (lazy loading). Solleva AudioModelLoadError o AudioBackendUnavailableError."""
         if self._model is None:
             try:
                 from faster_whisper import WhisperModel
             except ImportError as err:
-                raise ImportError(
-                    "Il package 'faster-whisper' non è installato. "
-                    "Installalo con: pip install faster-whisper"
+                raise AudioBackendUnavailableError(
+                    "Il package 'faster-whisper' non è installato o non è importabile."
+                ) from err
+            except Exception as err:
+                raise AudioBackendUnavailableError(
+                    f"Errore durante l'importazione di faster-whisper o CTranslate2 runtime: {err}"
                 ) from err
 
-            self._model = WhisperModel(
-                self.model_name,
-                device=self.device,
-                compute_type=self.compute_type,
-                download_root=self.download_root,
-                cpu_threads=self.cpu_threads,
-            )
+            try:
+                self._model = WhisperModel(
+                    self.model_name,
+                    device=self.device,
+                    compute_type=self.compute_type,
+                    download_root=self.download_root,
+                    cpu_threads=self.cpu_threads,
+                )
+            except Exception as err:
+                raise AudioModelLoadError(
+                    f"Impossibile caricare o inizializzare il modello faster-whisper '{self.model_name}': {err}"
+                ) from err
         return self._model
 
     def is_model_loaded(self) -> bool:
@@ -227,6 +254,7 @@ class FasterWhisperTranscriber(BaseAudioTranscriber):
                 model_name=self.model_name,
                 device=self.device,
                 compute_type=self.compute_type,
+                provenance_asset=asset,
                 error_message=f"Asset non risolto sul filesystem (status={asset.status.value})",
             )
 
@@ -243,13 +271,15 @@ class FasterWhisperTranscriber(BaseAudioTranscriber):
                 model_name=self.model_name,
                 device=self.device,
                 compute_type=self.compute_type,
+                provenance_asset=asset,
                 error_message=f"Media kind {asset.media_kind.value} non supportato per STT (richiesto AUDIO)",
             )
 
-        # 3. Caricamento modello e trascrizione protetta
+        # 3. Caricamento globale modello (se fallisce, solleva AudioModelLoadError senza mascherarlo in FAILED per-file)
+        model = self.load_model()
+
+        # 4. Trascrizione protetta per-file
         try:
-            model = self.load_model()
-            # Task esplicito 'transcribe' (NO translate)
             segments_gen, info = model.transcribe(
                 asset.resolved_path,
                 beam_size=beam_size,
@@ -285,14 +315,15 @@ class FasterWhisperTranscriber(BaseAudioTranscriber):
                 model_name=self.model_name,
                 device=self.device,
                 compute_type=self.compute_type,
+                provenance_asset=asset,
                 metadata={
                     "duration": getattr(info, "duration", None),
-                    "file_path": asset.resolved_path,
                 },
             )
 
         except Exception as e:
-            # Per-file failure: non blocca la pipeline
+            # Per-file failure: errore di decodifica o codec sul singolo file
+            # Non espone stack trace o percorsi ridondanti in error_message
             return AudioTranscriptionResult(
                 message_id=asset.message_id,
                 source_name=asset.source_name,
@@ -304,6 +335,6 @@ class FasterWhisperTranscriber(BaseAudioTranscriber):
                 model_name=self.model_name,
                 device=self.device,
                 compute_type=self.compute_type,
-                error_message=str(e),
-                metadata={"file_path": asset.resolved_path},
+                provenance_asset=asset,
+                error_message=f"Per-file decoding/inference error: {type(e).__name__}: {e}",
             )

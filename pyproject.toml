@@ -27,6 +27,12 @@ dependencies = [
 image = ["Pillow>=10.0"]
 # STT locale con faster-whisper
 stt = ["faster-whisper>=1.0.0"]
+# OCR locale (pytesseract + Pillow) — nota: il binario nativo tesseract.exe non è distribuito via pip
+ocr = [
+    "Pillow>=10.0",
+    "pytesseract>=0.3.10",
+]
+
 
 # Dipendenze di sviluppo (test, linting futuro)
 [dependency-groups]
@@ -40,7 +46,7 @@ dev = [
 # ---------------------------------------------------------------------------
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*", "multimodal*"]
+include = ["core*", "profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*", "multimodal*", "ai*"]
 exclude = ["tests*", "test_data*"]
 
 # ---------------------------------------------------------------------------

@@ -13,6 +13,7 @@ Principi di sicurezza:
 """
 from __future__ import annotations
 
+from collections import defaultdict
 import hashlib
 from pathlib import Path
 from types import MappingProxyType
@@ -46,11 +47,17 @@ class MediaResolutionContext:
     Contesto immutabile per il collegamento intra-source dei metadati multimediali.
 
     In WhatsApp msgstore.db, la tabella media_refs mappa ogni file_path al message_row_id.
-    Questo contesto indicizza tali collegamenti per arricchire la risoluzione con piena provenance.
+    Questo contesto indicizza tali collegamenti preservando TUTTE le referenze osservate,
+    prevenendo sovrascritture silenziose in caso di referenze multiple per lo stesso message_row_id.
+
+    Policy di disambiguazione:
+    - 1 sola referenza deterministica -> risoluzione normale;
+    - Più referenze identiche ed equivalenti (stesso file_path) -> risoluzione normale;
+    - Più referenze discordanti (file_path differenti) -> contrassegnato come AMBIGUOUS.
     """
 
-    def __init__(self, msgstore_refs: dict[str, dict[str, Any]] | None = None) -> None:
-        self._msgstore_refs: MappingProxyType[str, MappingProxyType[str, Any]] = (
+    def __init__(self, msgstore_refs: dict[str, list[dict[str, Any]]] | None = None) -> None:
+        self._msgstore_refs: MappingProxyType[str, tuple[MappingProxyType[str, Any], ...]] = (
             freeze_structural(msgstore_refs or {})
         )
 
@@ -58,8 +65,9 @@ class MediaResolutionContext:
     def from_records(cls, records: Sequence[Any]) -> MediaResolutionContext:
         """
         Estrae e indicizza i record di tipo 'media_ref' da una sequenza di record (Raw o Normalized).
+        Preserva tutte le referenze osservate per lo stesso message_row_id senza sovrascriverle.
         """
-        refs: dict[str, dict[str, Any]] = {}
+        refs: dict[str, list[dict[str, Any]]] = defaultdict(list)
         for rec in records:
             source_name = getattr(rec, "source_name", None)
             record_type = getattr(rec, "record_type", None)
@@ -71,18 +79,40 @@ class MediaResolutionContext:
                     msg_row_id = raw_fields.get("message_row_id")
                     if msg_row_id is not None:
                         row_key = str(msg_row_id)
-                        refs[row_key] = {
+                        refs[row_key].append({
                             "media_ref_id": str(getattr(rec, "source_record_id", "")),
                             "file_path": raw_fields.get("file_path"),
                             "file_size": raw_fields.get("file_size"),
                             "media_type": raw_fields.get("media_type"),
                             "media_job_uuid": raw_fields.get("media_job_uuid"),
-                        }
-        return cls(refs)
+                        })
+        return cls(dict(refs))
+
+    def get_all_msgstore_refs(self, source_record_id: str) -> tuple[MappingProxyType[str, Any], ...]:
+        """Restituisce tutte le referenze media_ref associate a source_record_id come tupla immutabile."""
+        return self._msgstore_refs.get(str(source_record_id), ())
+
+    def is_ambiguous(self, source_record_id: str) -> bool:
+        """
+        True se esistono referenze multiple con percorsi di file differenti (conflittuali).
+        Se esistono referenze multiple ma con percorsi identici ed equivalenti, non è ambiguo.
+        """
+        all_refs = self.get_all_msgstore_refs(source_record_id)
+        if len(all_refs) <= 1:
+            return False
+        distinct_paths = {r.get("file_path") for r in all_refs}
+        return len(distinct_paths) > 1
 
     def get_msgstore_ref(self, source_record_id: str) -> MappingProxyType[str, Any] | None:
-        """Restituisce il metadato media_ref associato al message _id, se presente."""
-        return self._msgstore_refs.get(str(source_record_id))
+        """
+        Restituisce la referenza deterministica univoca associata al message _id.
+        Se le referenze sono multiple e identiche/equivalenti, restituisce la prima.
+        Se le referenze sono discordanti (ambigue), restituisce None.
+        """
+        if self.is_ambiguous(source_record_id):
+            return None
+        all_refs = self.get_all_msgstore_refs(source_record_id)
+        return all_refs[0] if all_refs else None
 
 
 class MediaResolver:
@@ -166,6 +196,22 @@ class MediaResolver:
 
         # 1. Controlla eventuale arricchimento intra-source da media_refs (WhatsApp)
         if source_name == "msgstore_db":
+            if self._context.is_ambiguous(source_record_id):
+                candidate_refs = self._context.get_all_msgstore_refs(source_record_id)
+                metadata_dict["candidate_media_refs"] = candidate_refs
+                metadata_dict["ambiguity_reason"] = "Multiple conflicting media_ref records for message_row_id"
+                media_kind = self._classify_media_kind(raw_ref, message.message_type)
+                return ResolvedMediaAsset(
+                    message_id=message_id,
+                    source_name=source_name,
+                    source_record_id=source_record_id,
+                    raw_reference=raw_ref,
+                    resolved_path=None,
+                    media_kind=media_kind,
+                    status=MediaResolutionStatus.AMBIGUOUS,
+                    provenance_message=message,
+                    metadata=metadata_dict,
+                )
             ref_data = self._context.get_msgstore_ref(source_record_id)
             if ref_data:
                 metadata_dict["whatsapp_media_ref"] = dict(ref_data)
@@ -184,6 +230,7 @@ class MediaResolver:
                 resolved_path=None,
                 media_kind=media_kind,
                 status=MediaResolutionStatus.NO_REFERENCE,
+                provenance_message=message,
                 metadata=metadata_dict,
             )
 
@@ -202,6 +249,7 @@ class MediaResolver:
                 resolved_path=None,
                 media_kind=media_kind,
                 status=MediaResolutionStatus.REMOTE_REFERENCE,
+                provenance_message=message,
                 metadata=metadata_dict,
             )
 
@@ -225,7 +273,8 @@ class MediaResolver:
                     src_dir = Path(message.source_path).resolve().parent
                     if self._is_safe_under_roots(src_dir):
                         search_roots.append(src_dir)
-                except Exception:
+                except (OSError, ValueError, RuntimeError):
+                    # Solo eccezioni attese prodotte da pathlib/filesystem; bug programmatici propagano
                     pass
             for r in self._allowed_roots:
                 if r not in search_roots:
@@ -250,6 +299,7 @@ class MediaResolver:
                 resolved_path=None,
                 media_kind=media_kind,
                 status=MediaResolutionStatus.OUTSIDE_ALLOWED_ROOT,
+                provenance_message=message,
                 metadata=metadata_dict,
             )
 
@@ -263,6 +313,7 @@ class MediaResolver:
                 resolved_path=None,
                 media_kind=media_kind,
                 status=MediaResolutionStatus.MISSING,
+                provenance_message=message,
                 metadata=metadata_dict,
             )
 
@@ -280,6 +331,7 @@ class MediaResolver:
                 status=MediaResolutionStatus.RESOLVED,
                 file_size_bytes=file_size,
                 sha256=sha256_digest,
+                provenance_message=message,
                 metadata=metadata_dict,
             )
         except OSError as e:
@@ -292,6 +344,7 @@ class MediaResolver:
                 resolved_path=None,
                 media_kind=media_kind,
                 status=MediaResolutionStatus.UNSUPPORTED,
+                provenance_message=message,
                 metadata=metadata_dict,
             )
 
