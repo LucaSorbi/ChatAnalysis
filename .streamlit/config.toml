@@ -1,0 +1,18 @@
+# .streamlit/config.toml
+# Configurazione di hardening locale, sicurezza e privacy forense per Streamlit.
+
+[browser]
+# Disabilita rigorosamente la raccolta di telemetria e statistiche d'uso
+gatherUsageStats = false
+serverAddress = "127.0.0.1"
+
+[server]
+# Binding esclusivamente su interfaccia di loopback locale (nessuna esposizione LAN o 0.0.0.0)
+address = "127.0.0.1"
+# Preservazione delle protezioni di sicurezza contro attacchi cross-origin
+enableCORS = true
+enableXsrfProtection = true
+
+[client]
+# Mascheramento dei dettagli e traceback di errore per prevenire data leakage nella UI
+showErrorDetails = "none"

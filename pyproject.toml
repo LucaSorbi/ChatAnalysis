@@ -32,6 +32,10 @@ ocr = [
     "Pillow>=10.0",
     "pytesseract>=0.3.10",
 ]
+# UI locale Streamlit (disaccoppiata dal core)
+ui = [
+    "streamlit>=1.40",
+]
 
 
 # Dipendenze di sviluppo (test, linting futuro)
@@ -46,7 +50,7 @@ dev = [
 # ---------------------------------------------------------------------------
 [tool.setuptools.packages.find]
 where = ["."]
-include = ["core*", "profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*", "multimodal*", "ai*"]
+include = ["core*", "profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*", "multimodal*", "ai*", "search*", "ui*"]
 exclude = ["tests*", "test_data*"]
 
 # ---------------------------------------------------------------------------
