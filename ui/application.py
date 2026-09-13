@@ -34,10 +34,14 @@ from search.models import (
 from search.service import SearchService
 from search.views import hit_to_view_result, hits_to_view_results
 from ui.demo import build_synthetic_demo_dataset
+from ui.ingestion import ingest_file_payload
 from ui.models import (
     DatasetMode,
     DocumentSummary,
     EvidenceFilterCriteria,
+    ImportedConversationInfo,
+    IngestionRequest,
+    IngestionResult,
     SourceFormat,
     TopicFilterDecision,
 )
@@ -257,6 +261,33 @@ def search_all_topic_views(
     return search_service.search_topic_views(query_text=clean_text, decision=decision_val)
 
 
+def execute_real_ingestion(request: IngestionRequest) -> IngestionResult:
+    """
+    Esegue l'ingestion reale di un file caricato delegando all'ingestion bridge.
+    Funzione pura applicativa senza dipendenze Streamlit.
+    """
+    return ingest_file_payload(request)
+
+
+def build_search_service_for_conversation(
+    document: ConversationEvidenceDocument,
+) -> SearchService:
+    """
+    Costruisce in modo deterministico un SearchService per una specifica
+    conversazione estratta dal dataset reale, con risultati AI vuoti.
+    """
+    return SearchService(
+        document=document,
+        detection_results=(),
+        discovery_results=(),
+    )
+
+
+def list_available_conversations(result: IngestionResult) -> list[ImportedConversationInfo]:
+    """Restituisce l'elenco ordinato delle conversazioni disponibili nel risultato di ingestion."""
+    return list(result.summary.conversations)
+
+
 def get_system_status_info(streamlit_version: str) -> dict[str, str]:
     """
     Restituisce le informazioni diagnostiche e architetturali del sistema.
@@ -270,5 +301,6 @@ def get_system_status_info(streamlit_version: str) -> dict[str, str]:
         "network_status": "NOT REQUIRED (100% offline e locale)",
         "semantic_search": "NOT IMPLEMENTED (ricerca deterministica senza vettori)",
         "embeddings": "NOT IMPLEMENTED (nessun embedding o vector database)",
-        "real_file_ingestion": "DEFERRED TO NEXT PHASE (interfaccia preparatoria)",
+        "real_file_ingestion": "INTEGRATED (WhatsApp msgstore, wa.db, Cellebrite CSV, JSON, XML)",
     }
+

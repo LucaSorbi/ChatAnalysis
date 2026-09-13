@@ -14,6 +14,11 @@ from ui.models import (
     DatasetMode,
     DocumentSummary,
     EvidenceFilterCriteria,
+    ImportedConversationInfo,
+    IngestionRequest,
+    IngestionResult,
+    IngestionStatus,
+    IngestionSummary,
     SourceFormat,
     TopicFilterDecision,
 )
@@ -24,4 +29,9 @@ __all__ = [
     "TopicFilterDecision",
     "DocumentSummary",
     "EvidenceFilterCriteria",
+    "IngestionRequest",
+    "IngestionStatus",
+    "ImportedConversationInfo",
+    "IngestionSummary",
+    "IngestionResult",
 ]

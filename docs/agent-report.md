@@ -1,86 +1,90 @@
-# Report Ufficiale di Sviluppo: Streamlit Local Privacy Hardening
+# Official Agent Report: FULL E2E SYSTEM ACCEPTANCE — PRE-HARDWARE GATE
 
-**Data**: 2026-09-13  
-**Repository**: `C:\Users\lucas\Desktop\Tesi`  
-**Autore**: Agente di Sviluppo Software  
-**Pipeline Approvata**:  
-DATI ORIGINALI → IMPORTER → RawRecord → VALIDAZIONE → NORMALIZZAZIONE → ENTITY RESOLUTION → UnifiedMessage → MULTIMODAL → MessageEvidenceBundle → ConversationEvidenceDocument → LOCAL AI → SEARCH → STREAMLIT UI  
+## Stato del Progetto e Gate di Fase
 
----
-
-## 1. STATO DEI GATE & VALUTAZIONE GENERALE
-
-- **STREAMLIT FOUNDATION**: **PASS**
-- **STREAMLIT PRIVACY HARDENING**: **PASS**
-- **LOOPBACK ONLY**: **YES** (`127.0.0.1`, nessun binding `0.0.0.0` o LAN)
-- **STREAMLIT USAGE STATS**: **DISABLED** (`gatherUsageStats = false`)
-- **SEARCH FINAL ACCEPTANCE**: **PASS**
-- **AI REAL PILOT READY**: **YES**
-- **REAL FILE INGESTION**: **DEFERRED TO NEXT PHASE**
-- **REAL LM STUDIO BENCHMARK**: **DEFERRED**
-  - *Causa differimento*: Incompatibilità hardware della CPU host (AMD A8-7410 APU with AMD Radeon R5 Graphics priva di set istruzioni AVX2, con errore runtime `Invalid CPU architecture` in LM Studio/llama.cpp). Benchmark comparativo tra modelli reali (Llama, Qwen, DeepSeek) rinviato alla fase finale su macchina compatibile.
-
----
-
-## 2. RISULTATI DELLA SUITE DI TEST (PYTEST)
-
-Esecuzione completa tramite interprete del virtual environment (`.venv\Scripts\python.exe -m pytest`):
-- **Totale test raccolti**: 984 (incremento rispetto alla baseline di 980)
-- **Passed**: 978 (100% dei test attivi eseguiti con successo)
-- **Failed**: 0
-- **Errors**: 0
-- **Skipped**: 1 (`tests/unit/test_media_resolver.py::TestPathTraversalSecurity::test_immutable_symlink_attack_rejected`, per assenza del privilegio Windows `SeCreateSymbolicLinkPrivilege` per utente non elevato)
-- **Deselected**: 5 (smoke test opzionali con server o modelli reali esclusi da configurazione `addopts = ["-m", "not smoke"]`)
-- **Warnings bloccanti**: 0
+- **FULL E2E PRE-HARDWARE ACCEPTANCE**: PASS
+- **SEARCH E2E NON-VACUOUS**: PASS
+- **SEARCH RESULT DETERMINISM**: PASS
+- **EXTERNAL NETWORK REQUIRED**: NO
+- **PERFORMANCE MEASUREMENTS**: DIAGNOSTIC ONLY
+- **REAL AI INVOKED**: NO
+- **REAL PHYSICAL MULTIMODAL PROCESSING**: NOT EXECUTED
+- **LM STUDIO REAL BENCHMARK**: DEFERRED
+- **REAL INGESTION E2E**: PASS
+- **DETERMINISTIC REIMPORT**: PASS
+- **PROVENANCE INTEGRITY**: PASS
+- **SESSION STATE TRANSITIONS**: PASS
+- **FAILED IMPORT TRANSACTIONALITY**: PASS
+- **TEMP CLEANUP**: PASS
+- **REAL FILE INGESTION**: PASS
+- **REAL FILE UI ACCEPTANCE**: PASS
+- **STREAMLIT FOUNDATION**: PASS
+- **STREAMLIT PRIVACY HARDENING**: PASS
+- **SEARCH FINAL ACCEPTANCE**: PASS
+- **AI REAL PILOT READY**: YES
 
 ---
 
-## 3. INTERVENTI DI LOCAL PRIVACY HARDENING
+## 1. Sintesi Esecutiva
 
-### 3.1 Configurazione di Progetto (`.streamlit/config.toml`)
-Creata la configurazione formale locale contenente:
-```toml
-[browser]
-gatherUsageStats = false
-serverAddress = "127.0.0.1"
+In questa fase è stato completato con successo il consolidamento di qualità e robustezza probatoria del **FULL E2E SYSTEM ACCEPTANCE — PRE-HARDWARE GATE** sull'intera pipeline forense integrata del repository.
 
-[server]
-address = "127.0.0.1"
-enableCORS = true
-enableXsrfProtection = true
-
-[client]
-showErrorDetails = "none"
-```
-
-### 3.2 Verifica delle Opzioni a Runtime
-Verificato tramite `streamlit.config.get_option` che Streamlit carichi correttamente le impostazioni:
-- `browser.gatherUsageStats`: `False` (zero telemetria o statistiche trasmesse all'esterno)
-- `browser.serverAddress`: `127.0.0.1` (nessun redirect broadcast)
-- `server.address`: `127.0.0.1` (binding rigorosamente loopback locale, nessun ascolto su `0.0.0.0` o LAN)
-- `server.enableCORS`: `True` (protezioni cross-origin preservate)
-- `server.enableXsrfProtection`: `True` (protezioni anti-forgery preservate)
-- `client.showErrorDetails`: `none` (traceback, percorsi fisici e dettagli interni mascherati all'utente)
-
-### 3.3 Gestione Controllata degli Errori nella UI (`ui/presentation.py`)
-- Tutte le chiamate di interrogazione (ricerca evidenze, topic detection, topic discovery) sono racchiuse in blocchi `try/except` che espongono esclusivamente la tipologia sanitizzata dell'errore (es. `Errore durante l'esecuzione della ricerca: ValueError`).
-- Nessun path di sistema, dump di memoria o testo di chat originale viene esposto in caso di anomalia.
-
-### 3.4 Modalità Upload Preparatoria
-- La modalità file resta esclusivamente preparatoria (`FILE MODE`). Nessun parsing viene simulato e nessun file viene salvato su disco o inviato all'esterno.
+La verifica ha attestato la solidità e la coerenza del software sul sistema in esame:
+1. **Integrazione Cross-Layer E2E**: La catena `Importer -> Validation -> Normalization -> Entity Resolution -> UnifiedMessage -> MessageEvidenceBundle -> ConversationEvidenceDocument -> SearchService -> Streamlit UI` è pienamente operativa e verificata sui dataset di test per tutti i formati supportati.
+2. **Determinismo verificato sui dataset di test**: Re-import identico verificato per metriche, ID, sequenza delle evidenze e risultati di ricerca, con totale assenza di UUID casuali.
+3. **Integrità della Provenance**: Conservazione e tracciabilità forense verificate per ogni messaggio e sezione di evidenza.
+4. **Audit Multimodale**: Preservazione dei riferimenti multimediali (`media_reference`) senza simulazioni o generazioni fittizie di artefatti STT/OCR/Vision sui dataset reali in assenza di file fisici.
+5. **Isolamento AI su File Reali**: Zero istanziazione di client LLM e rinvio esplicito dell'inferenza nella schermata Analisi Topic.
+6. **Ricerca Deterministica e Non-Vacua**: Funzionamento verificato su tutte le 4 sorgenti reali con le 4 modalità di matching (`PHRASE`, `ALL_TERMS`, `ANY_TERM`, `EXACT`) con riscontri effettivi (`total_hits > 0`, `len(hits) > 0`), validazione dell'`evidence_id` reale in EXACT e ordinamento deterministico identico su ricerche ripetute.
+7. **Transizioni di Stato e Transazionalità**: Gestione coerente di tutte le transizioni (`NONE -> DEMO -> FILE -> FILE B -> DEMO -> RESET`) e salvaguardia del dataset attivo in caso di upload non validi.
+8. **Sandbox e Pulizia Ambientale**: Eliminazione verificata del workspace temporaneo in blocco try/finally sia su esito positivo sia su eccezione, e protezione da attacchi di path traversal.
+9. **EXTERNAL NETWORK REQUIRED: NO**: Nessun tentativo di rete esterna osservato durante i percorsi testati; socket interceptor impostato per consentire unicamente le connessioni loopback locali del framework di test (`127.0.0.1`, `::1`, `localhost`, `0.0.0.0`) e bloccare qualunque connessione esterna.
+10. **Etichette Pseudonimizzate e Distinguibili**: Label UI prive di JID, numeri o titoli grezzi, con suffissi hash terminali distinti per ogni conversazione.
+11. **Accettazione Streamlit AppTest**: Nessuna eccezione registrata durante l'intero percorso di navigazione headless e interazione su tutte le 6 sezioni dell'applicazione.
+12. **Misure Prestazionali Puramente Diagnostiche**: Tempi di esecuzione registrati a solo titolo di osservazione diagnostica, senza alcuna soglia vincolante dipendente dalla velocità della macchina.
 
 ---
 
-## 4. SMOKE TEST STREAMLIT & VALIDAZIONE HEADLESS
+## 2. Conteggi di Regressione e Fixture Forensi
 
-- Esecuzione headless con `streamlit.testing.v1.AppTest`:
-  - Caricamento iniziale di `app.py` privo di eccezioni (`exceptions: 0`).
-  - Navigazione su tutte le 6 sezioni dell'interfaccia verificata con successo.
-  - Test dedicati di configurazione in `tests/unit/test_ui_privacy_hardening.py` superati al 100%.
+Tutti i conteggi approvati del progetto sono stati categoricamente confermati:
+- **WhatsApp msgstore.db**: 622 record raw, 504 messaggi unificati, 3 conversazioni, 118 record ausiliari.
+- **WhatsApp wa.db Companion**: 4 contatti arricchiti nel layer Entity Resolution (122 record ausiliari totali).
+- **WhatsApp wa.db Standalone**: 4 contatti, stato `AUXILIARY_ONLY`, 0 conversazioni fittizie.
+- **Cellebrite CSV**: 302 record raw e messaggi unificati ripartiti su 3 conversazioni.
+- **Cellebrite JSON**: 100 record raw e messaggi unificati ripartiti su 3 conversazioni.
+- **Cellebrite XML**: 50 record raw e messaggi unificati nella partizione protetta `UNRESOLVED`.
+- **Modalità Dimostrativa**: 8 messaggi/bundle, 12 sezioni, 5 sorgenti probatorie, Topic Detection (`PRESENT`, `ABSENT`, `UNCERTAIN`) e Topic Discovery.
 
 ---
 
-## 5. PROSSIMI PASSI
+## 3. Osservazioni Diagnostiche Prestazionali
 
-1. Connessione dell'area "Importazione" agli importer reali WhatsApp (msgstore SQLite, wa.db) e Cellebrite (CSV, JSON, XML).
-2. Esecuzione dei benchmark comparativi LM Studio su macchina dotata di CPU con AVX2.
+- **Ingestion WhatsApp msgstore.db (622 record raw)**: ~`0.266 s`
+- **Query Ricerca Lessicale Deterministica (110 hit)**: ~`0.0015 s`
+
+Le misurazioni prestazionali hanno natura puramente diagnostica; nessuna soglia temporale condiziona l'esito dei test, garantendo indipendenza dalla CPU host.
+
+---
+
+## 4. Risultati Pytest Finali
+
+- **Ambiente**: Python 3.14.7, Streamlit 1.63.0, Windows OS.
+- **Baseline**: `1039 collected, 1033 passed, 0 failed, 0 errors, 1 skipped, 5 deselected`
+- **Risultato Finale**:
+  - **Collected**: 1039
+  - **Passed**: 1033
+  - **Failed**: 0
+  - **Errors**: 0
+  - **Skipped**: 1 (`tests/unit/test_ai_lmstudio.py::TestLmStudioClientIntegration::test_live_inference_phi3` - endpoint live non presente)
+  - **Deselected**: 5 (slow model tests)
+  - **Nessuna failure nella suite corrente**.
+
+---
+
+## 5. Rinvio Benchmark LM Studio Reale
+
+- **CPU Host**: AMD A8-7410 APU (architettura priva del set di istruzioni AVX2).
+- **Causa Tecnica**: Il runtime GGUF/llama.cpp integrato nelle versioni correnti di LM Studio richiede AVX2; sulla CPU host l'avvio genera l'errore hardware irreversibile `Invalid CPU architecture`.
+- **Stato**: Il benchmark empirico su modelli reali (Llama, Qwen, DeepSeek) è categoricamente **DEFERRED** alla fase finale del progetto su workstation adeguata.
+- **AI Layer Status**: L'architettura del Local AI Layer (`ai/`) è strutturalmente e funzionalmente **REAL PILOT READY**.

@@ -58,3 +58,79 @@ class EvidenceFilterCriteria:
     source_type: Optional[str] = None
     language: Optional[str] = None
     source_name: Optional[str] = None
+
+
+class IngestionStatus(str, Enum):
+    """Stato del processo di ingestion di un file reale."""
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    AUXILIARY_ONLY = "AUXILIARY_ONLY"
+
+
+@dataclass(frozen=True)
+class ImportedConversationInfo:
+    """Informazioni descrittive non sensibili per una singola conversazione importata."""
+    document_id: str
+    chat_id: Optional[str]
+    display_label: str
+    bundle_count: int
+    section_count: int
+    languages: tuple[str, ...]
+    source_name: str
+
+
+@dataclass(frozen=True)
+class IngestionRequest:
+    """Richiesta di ingestion di un file caricato dall'utente."""
+    source_format: SourceFormat
+    filename: str
+    file_bytes: bytes | Any
+    companion_filename: Optional[str] = None
+    companion_bytes: Optional[bytes | Any] = None
+
+
+@dataclass(frozen=True)
+class IngestionSummary:
+    """Sintesi non sensibile dell'ingestion eseguita su un file reale."""
+    source_format: SourceFormat
+    original_filename: str
+    sha256: str
+    file_size_bytes: int
+    raw_record_count: int
+    validation_issue_count: int
+    normalized_record_count: int
+    unified_message_count: int
+    conversation_count: int
+    auxiliary_record_count: int
+    warnings: tuple[str, ...] = ()
+    available_conversations: tuple[ImportedConversationInfo, ...] = ()
+    selected_document_id: Optional[str] = None
+    companion_filename: Optional[str] = None
+    companion_sha256: Optional[str] = None
+    status: IngestionStatus = IngestionStatus.SUCCESS
+
+    @property
+    def conversations(self) -> tuple[ImportedConversationInfo, ...]:
+        """Alias compatibile per available_conversations."""
+        return self.available_conversations
+
+
+@dataclass(frozen=True)
+class IngestionResult:
+    """Risultato completo dell'ingestion contenente summary e documenti associati."""
+    summary: IngestionSummary
+    documents: Mapping[str, Any]
+    error_stage: Optional[str] = None
+    error_message: Optional[str] = None
+
+    @property
+    def document_list(self) -> tuple[Any, ...]:
+        """Elenco ordinato dei documenti estratti."""
+        return tuple(self.documents.values())
+
+    @property
+    def status(self) -> IngestionStatus:
+        """Alias per summary.status."""
+        return self.summary.status
+
+

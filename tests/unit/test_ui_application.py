@@ -187,3 +187,58 @@ class TestUiApplicationLayer:
         assert "NOT REQUIRED" in info["network_status"]
         assert "NOT IMPLEMENTED" in info["semantic_search"]
         assert "NOT IMPLEMENTED" in info["embeddings"]
+        assert "INTEGRATED" in info["real_file_ingestion"]
+
+    def test_build_search_service_for_conversation(self):
+        from ai.models import ConversationEvidenceDocument
+        from ui.application import build_search_service_for_conversation
+
+        doc = ConversationEvidenceDocument(
+            document_id="doc::test",
+            bundles=(),
+            chat_id="chat1",
+            source_name="whatsapp",
+        )
+        svc = build_search_service_for_conversation(doc)
+        assert svc is not None
+        assert svc.index is not None
+        assert len(svc.index) == 0
+
+    def test_list_available_conversations(self):
+        from ui.application import list_available_conversations
+        from ui.models import (
+            ImportedConversationInfo,
+            IngestionResult,
+            IngestionStatus,
+            IngestionSummary,
+            SourceFormat,
+        )
+
+        cinfo = ImportedConversationInfo(
+            document_id="doc::test::1",
+            chat_id="chat1",
+            display_label="Chat 1",
+            bundle_count=1,
+            section_count=1,
+            languages=("it",),
+            source_name="whatsapp",
+        )
+        summary = IngestionSummary(
+            source_format=SourceFormat.WHATSAPP_MSGSTORE,
+            original_filename="msgstore.db",
+            sha256="abc",
+            file_size_bytes=100,
+            raw_record_count=1,
+            validation_issue_count=0,
+            normalized_record_count=1,
+            unified_message_count=1,
+            conversation_count=1,
+            auxiliary_record_count=0,
+            available_conversations=(cinfo,),
+            status=IngestionStatus.SUCCESS,
+        )
+        res = IngestionResult(summary=summary, documents={})
+        convs = list_available_conversations(res)
+        assert len(convs) == 1
+        assert convs[0].chat_id == "chat1"
+

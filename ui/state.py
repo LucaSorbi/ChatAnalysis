@@ -12,7 +12,7 @@ Principi:
 """
 from __future__ import annotations
 
-from typing import Any, MutableMapping, Optional
+from typing import Any, Mapping, MutableMapping, Optional
 
 import streamlit as st
 
@@ -23,7 +23,12 @@ from ai.models import (
 )
 from search.service import SearchService
 from ui.application import build_demo_session
-from ui.models import DatasetMode
+from ui.models import (
+    DatasetMode,
+    IngestionResult,
+    IngestionStatus,
+    IngestionSummary,
+)
 
 # Costanti centralizzate per le chiavi di sessione
 KEY_DATASET_LOADED = "dataset_loaded"
@@ -34,6 +39,10 @@ KEY_DISCOVERY_RESULTS = "discovery_results"
 KEY_SEARCH_SERVICE = "search_service"
 KEY_SELECTED_EVIDENCE_ID = "selected_evidence_id"
 KEY_ERROR_MESSAGE = "error_message"
+KEY_REAL_INGESTION_RESULT = "real_ingestion_result"
+KEY_AVAILABLE_DOCUMENTS = "available_documents"
+KEY_SELECTED_DOCUMENT_ID = "selected_document_id"
+KEY_INGESTION_SUMMARY = "ingestion_summary"
 
 
 def _get_target_state(state: MutableMapping[str, Any] | None = None) -> MutableMapping[str, Any]:
@@ -59,6 +68,14 @@ def init_session_state(state: MutableMapping[str, Any] | None = None) -> None:
         target[KEY_SELECTED_EVIDENCE_ID] = None
     if KEY_ERROR_MESSAGE not in target:
         target[KEY_ERROR_MESSAGE] = None
+    if KEY_REAL_INGESTION_RESULT not in target:
+        target[KEY_REAL_INGESTION_RESULT] = None
+    if KEY_AVAILABLE_DOCUMENTS not in target:
+        target[KEY_AVAILABLE_DOCUMENTS] = {}
+    if KEY_SELECTED_DOCUMENT_ID not in target:
+        target[KEY_SELECTED_DOCUMENT_ID] = None
+    if KEY_INGESTION_SUMMARY not in target:
+        target[KEY_INGESTION_SUMMARY] = None
 
 
 def is_dataset_loaded(state: MutableMapping[str, Any] | None = None) -> bool:
@@ -164,6 +181,10 @@ def load_demo_dataset(state: MutableMapping[str, Any] | None = None) -> None:
     target[KEY_SEARCH_SERVICE] = service
     target[KEY_SELECTED_EVIDENCE_ID] = None
     target[KEY_ERROR_MESSAGE] = None
+    target[KEY_REAL_INGESTION_RESULT] = None
+    target[KEY_AVAILABLE_DOCUMENTS] = {}
+    target[KEY_SELECTED_DOCUMENT_ID] = None
+    target[KEY_INGESTION_SUMMARY] = None
 
 
 def reset_dataset(state: MutableMapping[str, Any] | None = None) -> None:
@@ -179,3 +200,109 @@ def reset_dataset(state: MutableMapping[str, Any] | None = None) -> None:
     target[KEY_SEARCH_SERVICE] = None
     target[KEY_SELECTED_EVIDENCE_ID] = None
     target[KEY_ERROR_MESSAGE] = None
+    target[KEY_REAL_INGESTION_RESULT] = None
+    target[KEY_AVAILABLE_DOCUMENTS] = {}
+    target[KEY_SELECTED_DOCUMENT_ID] = None
+    target[KEY_INGESTION_SUMMARY] = None
+
+
+def get_real_ingestion_result(
+    state: MutableMapping[str, Any] | None = None,
+) -> Optional[IngestionResult]:
+    """Restituisce il risultato dell'ultima operazione di real ingestion, se presente."""
+    target = _get_target_state(state)
+    return target.get(KEY_REAL_INGESTION_RESULT, None)
+
+
+def get_ingestion_summary(
+    state: MutableMapping[str, Any] | None = None,
+) -> Optional[IngestionSummary]:
+    """Restituisce il summary dell'ultima ingestion, se presente."""
+    target = _get_target_state(state)
+    return target.get(KEY_INGESTION_SUMMARY, None)
+
+
+def get_available_documents(
+    state: MutableMapping[str, Any] | None = None,
+) -> dict[str, ConversationEvidenceDocument]:
+    """Restituisce la mappatura document_id -> ConversationEvidenceDocument disponibili."""
+    target = _get_target_state(state)
+    docs = target.get(KEY_AVAILABLE_DOCUMENTS, {})
+    return dict(docs) if isinstance(docs, dict) else {}
+
+
+def get_selected_document_id(
+    state: MutableMapping[str, Any] | None = None,
+) -> Optional[str]:
+    """Restituisce il document_id attualmente selezionato."""
+    target = _get_target_state(state)
+    return target.get(KEY_SELECTED_DOCUMENT_ID, None)
+
+
+def set_real_ingestion_result(
+    result: IngestionResult,
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """
+    Registra il risultato di un'ingestion reale, impostando la modalità FILE,
+    azzerando i risultati AI e configurando il documento e SearchService selezionati.
+    """
+    target = _get_target_state(state)
+    target[KEY_REAL_INGESTION_RESULT] = result
+    target[KEY_INGESTION_SUMMARY] = result.summary
+    target[KEY_DATASET_LOADED] = True
+    target[KEY_DATASET_MODE] = DatasetMode.FILE
+    target[KEY_DETECTION_RESULTS] = ()
+    target[KEY_DISCOVERY_RESULTS] = ()
+    target[KEY_SELECTED_EVIDENCE_ID] = None
+    target[KEY_ERROR_MESSAGE] = None
+
+    if result.documents:
+        if isinstance(result.documents, Mapping):
+            docs_map = dict(result.documents)
+            first_doc = next(iter(result.documents.values()))
+        else:
+            docs_map = {doc.document_id: doc for doc in result.documents}
+            first_doc = result.documents[0]
+
+        target[KEY_AVAILABLE_DOCUMENTS] = docs_map
+        target[KEY_SELECTED_DOCUMENT_ID] = first_doc.document_id
+        target[KEY_CONVERSATION_DOCUMENT] = first_doc
+        target[KEY_SEARCH_SERVICE] = SearchService(
+            document=first_doc,
+            detection_results=(),
+            discovery_results=(),
+        )
+    else:
+        target[KEY_AVAILABLE_DOCUMENTS] = {}
+        target[KEY_SELECTED_DOCUMENT_ID] = None
+        target[KEY_CONVERSATION_DOCUMENT] = None
+        target[KEY_SEARCH_SERVICE] = None
+
+
+def select_conversation(
+    document_id: str,
+    state: MutableMapping[str, Any] | None = None,
+) -> bool:
+    """
+    Seleziona una conversazione tra quelle disponibili per il dataset reale corrente.
+    Ricostruisce in modo deterministico il SearchService per il documento selezionato.
+    """
+    target = _get_target_state(state)
+    available = target.get(KEY_AVAILABLE_DOCUMENTS, {})
+    if not isinstance(available, dict) or document_id not in available:
+        return False
+
+    doc = available[document_id]
+    target[KEY_SELECTED_DOCUMENT_ID] = document_id
+    target[KEY_CONVERSATION_DOCUMENT] = doc
+    target[KEY_DETECTION_RESULTS] = ()
+    target[KEY_DISCOVERY_RESULTS] = ()
+    target[KEY_SEARCH_SERVICE] = SearchService(
+        document=doc,
+        detection_results=(),
+        discovery_results=(),
+    )
+    target[KEY_SELECTED_EVIDENCE_ID] = None
+    return True
+

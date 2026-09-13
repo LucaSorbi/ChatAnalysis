@@ -12,6 +12,11 @@ from ui.models import (
     DatasetMode,
     DocumentSummary,
     EvidenceFilterCriteria,
+    ImportedConversationInfo,
+    IngestionRequest,
+    IngestionResult,
+    IngestionStatus,
+    IngestionSummary,
     SourceFormat,
     TopicFilterDecision,
 )
@@ -76,3 +81,90 @@ class TestUiModels:
 
         with pytest.raises(FrozenInstanceError):
             crit_custom.language = "en"  # type: ignore
+
+    def test_ingestion_status_enum(self):
+        assert IngestionStatus.SUCCESS.value == "SUCCESS"
+        assert IngestionStatus.FAILED.value == "FAILED"
+        assert IngestionStatus.AUXILIARY_ONLY.value == "AUXILIARY_ONLY"
+
+    def test_ingestion_request_immutable(self):
+        req = IngestionRequest(
+            source_format=SourceFormat.WHATSAPP_MSGSTORE,
+            filename="msgstore.db",
+            file_bytes=b"sample",
+            companion_filename="wa.db",
+            companion_bytes=b"companion",
+        )
+        assert req.source_format == SourceFormat.WHATSAPP_MSGSTORE
+        assert req.filename == "msgstore.db"
+        assert req.file_bytes == b"sample"
+        assert req.companion_filename == "wa.db"
+        assert req.companion_bytes == b"companion"
+
+        with pytest.raises(FrozenInstanceError):
+            req.filename = "other.db"  # type: ignore
+
+    def test_imported_conversation_info_immutable(self):
+        info = ImportedConversationInfo(
+            document_id="doc::test::123",
+            chat_id="chat_1",
+            display_label="Chat 1 (5 msg)",
+            bundle_count=5,
+            section_count=10,
+            languages=("it",),
+            source_name="whatsapp_msgstore",
+        )
+        assert info.document_id == "doc::test::123"
+        assert info.chat_id == "chat_1"
+        assert info.bundle_count == 5
+        assert info.section_count == 10
+        assert info.languages == ("it",)
+
+        with pytest.raises(FrozenInstanceError):
+            info.bundle_count = 10  # type: ignore
+
+    def test_ingestion_summary_and_result_immutable(self):
+        info = ImportedConversationInfo(
+            document_id="doc::test::123",
+            chat_id="chat_1",
+            display_label="Chat 1",
+            bundle_count=2,
+            section_count=2,
+            languages=("it",),
+            source_name="whatsapp",
+        )
+        summary = IngestionSummary(
+            source_format=SourceFormat.WHATSAPP_MSGSTORE,
+            original_filename="msgstore.db",
+            sha256="abcdef123456",
+            file_size_bytes=1024,
+            raw_record_count=10,
+            validation_issue_count=0,
+            normalized_record_count=10,
+            unified_message_count=2,
+            conversation_count=1,
+            auxiliary_record_count=8,
+            warnings=("test warning",),
+            available_conversations=(info,),
+            selected_document_id="doc::test::123",
+            companion_filename="wa.db",
+            companion_sha256="fedcba654321",
+            status=IngestionStatus.SUCCESS,
+        )
+        assert summary.source_format == SourceFormat.WHATSAPP_MSGSTORE
+        assert summary.conversations == (info,)
+        assert summary.warnings == ("test warning",)
+        assert summary.status == IngestionStatus.SUCCESS
+
+        res = IngestionResult(
+            summary=summary,
+            documents={"doc::test::123": "dummy_doc"},
+        )
+        assert res.summary == summary
+        assert "doc::test::123" in res.documents
+        assert res.document_list == ("dummy_doc",)
+        assert res.status == IngestionStatus.SUCCESS
+
+        with pytest.raises(FrozenInstanceError):
+            res.summary = None  # type: ignore
+

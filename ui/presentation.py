@@ -23,6 +23,7 @@ from search.models import MatchMode
 from ui import state
 from ui.application import (
     execute_evidence_search,
+    execute_real_ingestion,
     filter_evidence_sections,
     get_evidence_filter_options,
     get_system_status_info,
@@ -30,9 +31,17 @@ from ui.application import (
     search_topic_discoveries,
     summarize_document,
 )
+from ui.ingestion import (
+    IngestionError,
+    InvalidUploadedFileError,
+    PipelineStageError,
+    UnsupportedSourceFormatError,
+)
 from ui.models import (
     DatasetMode,
     EvidenceFilterCriteria,
+    IngestionRequest,
+    IngestionStatus,
     SourceFormat,
     TopicFilterDecision,
 )
@@ -46,7 +55,7 @@ def render_overview() -> None:
         st.info("Nessun dataset attualmente caricato in memoria.")
         st.markdown(
             "Per esplorare le funzionalità del sistema locale, è possibile caricare il "
-            "**dataset dimostrativo sintetico** oppure preparare i parametri di importazione."
+            "**dataset dimostrativo sintetico** oppure importare un file reale nella sezione Importazione."
         )
         col1, _ = st.columns([1, 2])
         with col1:
@@ -55,18 +64,45 @@ def render_overview() -> None:
                 st.rerun()
         return
 
+    is_real_file = state.get_dataset_mode() == DatasetMode.FILE
+    ing_summary = state.get_ingestion_summary()
     doc = state.get_conversation_document()
     detections = state.get_detection_results()
     discoveries = state.get_discovery_results()
+
+    # Caso wa.db standalone (auxiliary-only, nessun documento conversazione)
+    if is_real_file and doc is None and ing_summary is not None:
+        st.info("ℹ️ wa.db contiene dati contatto/identità e non costituisce da solo una conversazione analizzabile.")
+        c1, c2, c3, c4 = st.columns(4)
+        with c1:
+            st.metric("Modalità Dataset", "REAL FILE")
+        with c2:
+            st.metric("Formato Sorgente", ing_summary.source_format.value)
+        with c3:
+            st.metric("Record Ausiliari", ing_summary.auxiliary_record_count)
+        with c4:
+            st.metric("Validation Issues", ing_summary.validation_issue_count)
+
+        st.markdown(f"- **Filename**: `{ing_summary.original_filename}`")
+        st.markdown(f"- **Dimensione file**: `{ing_summary.file_size_bytes} byte`")
+        st.markdown(f"- **SHA-256**: `{ing_summary.sha256}`")
+        st.divider()
+        if st.button("🔄 Reimposta Sessione / Rimuovi Dataset"):
+            state.reset_dataset()
+            st.rerun()
+        return
 
     if doc is None:
         st.warning("Stato inconsistente: dataset marcato come caricato ma documento non presente.")
         return
 
     summary = summarize_document(doc, detections, discoveries)
+    unresolved_media = sum(1 for b in doc.bundles if b.message.media_reference)
 
     # Metriche principali
-    c1, c2, c3, c4 = st.columns(4)
+    c0, c1, c2, c3, c4 = st.columns(5)
+    with c0:
+        st.metric("Modalità", "REAL FILE" if is_real_file else "DEMO")
     with c1:
         st.metric("Messaggi (Bundle)", summary.bundle_count)
     with c2:
@@ -80,13 +116,41 @@ def render_overview() -> None:
 
     # Dettagli identificativi
     st.subheader("Identificativi e Provenance")
-    col_id1, col_id2, col_id3 = st.columns(3)
+    col_id1, col_id2, col_id3, col_id4 = st.columns(4)
     with col_id1:
         st.text_input("Document ID", value=summary.document_id, disabled=True)
     with col_id2:
-        st.text_input("Chat ID", value=doc.chat_id or "N/D", disabled=True)
+        # Label pseudonimizzata della conversazione (nessun JID, numero telefonico o nome in chiaro)
+        active_label = "Conversazione Attiva"
+        if ing_summary:
+            matching_c = next((c for c in ing_summary.conversations if c.document_id == doc.document_id), None)
+            if matching_c:
+                active_label = matching_c.display_label
+        elif doc.chat_id:
+            active_label = "Conversazione (Demo)"
+        st.text_input("Conversazione", value=active_label, disabled=True)
     with col_id3:
         st.text_input("Sorgente Forense", value=doc.source_name or "N/D", disabled=True)
+    with col_id4:
+        if ing_summary:
+            st.text_input("SHA-256", value=f"{ing_summary.sha256[:16]}...", help=ing_summary.sha256, disabled=True)
+        else:
+            st.text_input("SHA-256", value="N/D (Sintetico)", disabled=True)
+
+    with st.expander("Provenance Tecnica (Metadati Interni)"):
+        st.write(f"- **Document ID**: `{doc.document_id}`")
+        st.write(f"- **Sorgente**: `{doc.source_name or 'N/D'}`")
+        st.write(f"- **Chat ID Tecnico**: `{doc.chat_id or 'UNRESOLVED'}`")
+        if doc.metadata:
+            for k, v in doc.metadata.items():
+                st.write(f"- **{k}**: `{v}`")
+
+    if ing_summary:
+        st.markdown(
+            f"**File Sorgente**: `{ing_summary.original_filename}` ({ing_summary.file_size_bytes} byte) | "
+            f"**Conversazioni nel dataset**: `{ing_summary.conversation_count}` | "
+            f"**Media reference non risolti**: `{unresolved_media}`"
+        )
 
     # Distribuzione sorgenti e lingue
     col_src, col_lang = st.columns(2)
@@ -109,7 +173,7 @@ def render_overview() -> None:
 
 
 def render_import() -> None:
-    """Schermata Importazione: gestione demo e interfaccia preparatoria per file reali."""
+    """Schermata Importazione: gestione demo e ingestion reale di file forensi."""
     st.header("📥 Importazione Dati Forensi")
 
     st.subheader("1. Modalità Dimostrativa (Dati Sintetici)")
@@ -131,29 +195,133 @@ def render_import() -> None:
 
     st.divider()
 
-    st.subheader("2. Modalità File Reale (Preparazione Ingestion)")
+    st.subheader("2. Modalità File Reale (Ingestion Forense Locale)")
     st.markdown(
-        "Interfaccia preparatoria per l'ingestion reale di archivi e database WhatsApp e Cellebrite. "
-        "I file non vengono inviati in rete né analizzati in questa fase della fondazione UI."
+        "Ingestion locale offline di archivi e database WhatsApp e Cellebrite. "
+        "I file vengono elaborati in una sandbox temporanea volatile con calcolo SHA-256 "
+        "e distruzione immediata della cartella al termine dell'operazione."
     )
 
-    source_format = st.selectbox(
+    source_format_str = st.selectbox(
         "Tipo di sorgente forense da importare",
         options=[f.value for f in SourceFormat],
     )
+    source_format = SourceFormat(source_format_str)
 
     uploaded_file = st.file_uploader(
-        f"Seleziona file conforme a: {source_format}",
+        f"Seleziona file primario ({source_format.value})",
         type=["db", "sqlite", "csv", "json", "xml"],
-        help="Upload locale preparatorio.",
+        help="Il file viene elaborato esclusivamente in spazio temporaneo locale isolato con cleanup deterministico.",
+        key="primary_file_uploader",
     )
 
-    if uploaded_file is not None:
-        st.info(
-            f"ℹ️ File selezionato: `{uploaded_file.name}` ({uploaded_file.size} byte)\n\n"
-            "**Collegamento agli importer reali previsto nella prossima fase.**\n\n"
-            "Nessun dato del file selezionato è stato memorizzato permanentemente o inviato a server esterni."
+    companion_file = None
+    if source_format == SourceFormat.WHATSAPP_MSGSTORE:
+        companion_file = st.file_uploader(
+            "wa.db contatti — opzionale",
+            type=["db", "sqlite"],
+            help="Opzionale database contatti/identità WhatsApp per l'arricchimento dei sender.",
+            key="companion_wa_uploader",
         )
+
+    import_btn = st.button("📥 Importa e analizza struttura", type="primary")
+
+    if import_btn:
+        if uploaded_file is None:
+            st.warning("Selezionare un file primario prima di procedere con l'importazione.")
+        else:
+            primary_bytes = uploaded_file.getvalue()
+            companion_bytes = companion_file.getvalue() if companion_file is not None else None
+            companion_name = companion_file.name if companion_file is not None else None
+
+            req = IngestionRequest(
+                source_format=source_format,
+                filename=uploaded_file.name,
+                file_bytes=primary_bytes,
+                companion_filename=companion_name,
+                companion_bytes=companion_bytes,
+            )
+
+            try:
+                with st.spinner("Importazione, validazione e normalizzazione in corso..."):
+                    result = execute_real_ingestion(req)
+                    state.set_real_ingestion_result(result)
+                st.success(f"✅ Ingestion completata: {result.summary.raw_record_count} record raw, {result.summary.unified_message_count} messaggi unificati.")
+                st.rerun()
+            except PipelineStageError as err:
+                st.error(f"[{err.stage}] {type(err).__name__}: {err.safe_message}")
+            except InvalidUploadedFileError as err:
+                st.error(f"{type(err).__name__}: {err.safe_message}")
+            except UnsupportedSourceFormatError as err:
+                st.error(f"{type(err).__name__}: {err.safe_message}")
+            except IngestionError as err:
+                st.error(f"IngestionError: {err.safe_message}")
+            except Exception as exc:
+                st.error(f"Errore imprevisto durante l'elaborazione del file: {type(exc).__name__}")
+
+    # Visualizzazione Summary Ingestion e Selezione Conversazione se presente
+    real_res = state.get_real_ingestion_result()
+    if real_res is not None and state.get_dataset_mode() == DatasetMode.FILE:
+        st.divider()
+        st.subheader("📋 Riepilogo Ultima Ingestion Reale")
+        sm = real_res.summary
+
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("Formato", sm.source_format.value)
+        with m2:
+            st.metric("Dimensione File", f"{sm.file_size_bytes} B")
+        with m3:
+            st.metric("Record Raw", sm.raw_record_count)
+        with m4:
+            st.metric("Record Normalizzati", sm.normalized_record_count)
+
+        m5, m6, m7, m8 = st.columns(4)
+        with m5:
+            st.metric("Messaggi Unificati", sm.unified_message_count)
+        with m6:
+            st.metric("Conversazioni", sm.conversation_count)
+        with m7:
+            st.metric("Record Ausiliari", sm.auxiliary_record_count)
+        with m8:
+            st.metric("Validation Issues", sm.validation_issue_count)
+
+        st.markdown(f"- **Filename**: `{sm.original_filename}`")
+        st.markdown(f"- **SHA-256**: `{sm.sha256}`")
+
+        if sm.warnings:
+            with st.expander(f"⚠️ Avvisi Non Bloccanti ({len(sm.warnings)})"):
+                for w in sm.warnings:
+                    st.write(f"- {w}")
+
+        if real_res.status == IngestionStatus.AUXILIARY_ONLY:
+            st.info("ℹ️ wa.db contiene dati contatto/identità e non costituisce da solo una conversazione analizzabile.")
+        elif real_res.documents:
+            st.subheader("💬 Selezione Conversazione")
+            conv_options = [c.document_id for c in sm.conversations]
+            conv_labels = {
+                c.document_id: c.display_label
+                for c in sm.conversations
+            }
+
+            curr_sel_id = state.get_selected_document_id()
+            default_idx = 0
+            if curr_sel_id and curr_sel_id in conv_options:
+                default_idx = conv_options.index(curr_sel_id)
+
+            chosen_id = st.selectbox(
+                "Seleziona la conversazione attiva per l'analisi e la ricerca",
+                options=conv_options,
+                index=default_idx,
+                format_func=lambda doc_id: conv_labels.get(doc_id, doc_id),
+                key="conv_selectbox",
+            )
+
+            if st.button("📂 Apri conversazione", key="open_conv_btn"):
+                if chosen_id:
+                    state.select_conversation(chosen_id)
+                    st.success(f"Conversazione attivata: {conv_labels.get(chosen_id, chosen_id)}")
+                    st.rerun()
 
 
 def render_explore() -> None:
@@ -166,6 +334,8 @@ def render_explore() -> None:
 
     doc = state.get_conversation_document()
     if doc is None:
+        if state.get_dataset_mode() == DatasetMode.FILE:
+            st.info("Nessuna conversazione selezionabile per il dataset corrente (es. archivio solo ausiliario o contatti).")
         return
 
     options = get_evidence_filter_options(doc)
@@ -224,7 +394,10 @@ def render_search() -> None:
     service = state.get_search_service()
     doc = state.get_conversation_document()
     if service is None or doc is None:
-        st.warning("Servizio di ricerca non configurato.")
+        if state.get_dataset_mode() == DatasetMode.FILE:
+            st.info("Nessuna conversazione attiva per la ricerca (es. archivio solo ausiliario o contatti).")
+        else:
+            st.warning("Servizio di ricerca non configurato.")
         return
 
     options = get_evidence_filter_options(doc)
@@ -314,6 +487,19 @@ def render_topics() -> None:
 
     if not state.is_dataset_loaded():
         st.info("Nessun dataset caricato. Caricare un dataset per visualizzare l'analisi dei topic.")
+        return
+
+    # Gestione specifica per Real File Mode senza risultati AI
+    if (
+        state.get_dataset_mode() == DatasetMode.FILE
+        and not state.get_detection_results()
+        and not state.get_discovery_results()
+    ):
+        st.info(
+            "Il dataset reale è stato importato correttamente.\n\n"
+            "L'analisi AI non è stata eseguita in questa fase.\n\n"
+            "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
+        )
         return
 
     service = state.get_search_service()
