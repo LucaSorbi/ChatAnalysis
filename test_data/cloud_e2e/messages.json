@@ -1,0 +1,503 @@
+[
+  {
+    "id": "ce2e_c1_001",
+    "chat_id": "cloud_case_1",
+    "sender": "+39 555 0010001",
+    "timestamp": "2025-03-10T09:00:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ciao Fabio, hai visto che hanno inaugurato la nuova pista ciclabile lungo il fiume?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c1_002",
+    "chat_id": "cloud_case_1",
+    "sender": "+39 555 0010002",
+    "timestamp": "2025-03-10T09:05:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Sì, ho letto che il percorso ciclabile copre 12 chilometri e collega tre parchi urbani. Perfetto per il weekend!",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c1_003",
+    "chat_id": "cloud_case_1",
+    "sender": "+39 555 0010001",
+    "timestamp": "2025-03-10T09:12:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Organizziamo un giro in bicicletta sabato mattina? Posso portare anche la bici da corsa nuova che ho comprato.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c1_004",
+    "chat_id": "cloud_case_1",
+    "sender": "+39 555 0010002",
+    "timestamp": "2025-03-10T09:18:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ottimo! Partiamo alle 8 dal parcheggio del parco nord. Porto acqua e barrette energetiche per entrambi.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c1_005",
+    "chat_id": "cloud_case_1",
+    "sender": "+39 555 0010001",
+    "timestamp": "2025-03-10T09:25:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Perfetto, ricordati il casco e le luci. Il tratto lungo il fiume è bellissimo al mattino presto.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+
+  {
+    "id": "ce2e_c2_001",
+    "chat_id": "cloud_case_2",
+    "sender": "+39 555 0020001",
+    "timestamp": "2025-03-11T14:00:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ho trovato quello che cercavi. Non ha numeri di serie né documenti, quindi non è rintracciabile.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c2_002",
+    "chat_id": "cloud_case_2",
+    "sender": "+39 555 0020002",
+    "timestamp": "2025-03-11T14:08:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Perfetto, quanto mi costerà? Il prezzo che avevamo detto è rimasto invariato o è cambiato qualcosa?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c2_003",
+    "chat_id": "cloud_case_2",
+    "sender": "+39 555 0020001",
+    "timestamp": "2025-03-11T14:15:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Lo stesso di prima. 350 in contanti, niente bonifici. Ci troviamo al solito posto dopo le 22, evita la strada con le telecamere.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c2_004",
+    "chat_id": "cloud_case_2",
+    "sender": "+39 555 0020002",
+    "timestamp": "2025-03-11T14:22:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ok. Vengo da solo. La roba è come il campione che mi hai fatto vedere? Il mio contatto mi ha detto che il canale ufficiale non la passa più.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c2_005",
+    "chat_id": "cloud_case_2",
+    "sender": "+39 555 0020001",
+    "timestamp": "2025-03-11T14:30:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Identica, stessa qualità. Cancella questa chat dopo. Se ti serve altro la prossima settimana, solo tramite questo numero.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+
+  {
+    "id": "ce2e_c3_001",
+    "chat_id": "cloud_case_3",
+    "sender": "+39 555 0030001",
+    "timestamp": "2025-03-12T10:00:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ci vediamo al solito posto stasera? Ho qualcosa di importante da darti.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c3_002",
+    "chat_id": "cloud_case_3",
+    "sender": "+39 555 0030002",
+    "timestamp": "2025-03-12T10:10:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Va bene, verso le otto? Non vedo l'ora, è da tanto che aspetto.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c3_003",
+    "chat_id": "cloud_case_3",
+    "sender": "+39 555 0030001",
+    "timestamp": "2025-03-12T10:18:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Sì, alle otto. Porta una borsa capiente perché è un po' ingombrante. Ah, e non ne parlare con gli altri per adesso.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c3_004",
+    "chat_id": "cloud_case_3",
+    "sender": "+39 555 0030002",
+    "timestamp": "2025-03-12T10:25:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ok nessun problema. Devo portare anche qualcosa per te, un compenso?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c3_005",
+    "chat_id": "cloud_case_3",
+    "sender": "+39 555 0030001",
+    "timestamp": "2025-03-12T10:30:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Non ti preoccupare del prezzo, ne parliamo di persona. Meglio non scrivere i dettagli qui.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+
+  {
+    "id": "ce2e_c4_001",
+    "chat_id": "cloud_case_4",
+    "sender": "+39 555 0040001",
+    "timestamp": "2025-03-13T08:00:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Buongiorno! Come è andata la lezione di chitarra ieri sera?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c4_002",
+    "chat_id": "cloud_case_4",
+    "sender": "+39 555 0040002",
+    "timestamp": "2025-03-13T08:10:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Molto bene! Il maestro dice che sto migliorando con gli accordi barré. Sto imparando una canzone nuova.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c4_003",
+    "chat_id": "cloud_case_4",
+    "sender": "+39 555 0040001",
+    "timestamp": "2025-03-13T08:20:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Bravissimo! Quale canzone? Io intanto sto provando a cucinare quel risotto ai funghi porcini.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c4_004",
+    "chat_id": "cloud_case_4",
+    "sender": "+39 555 0040002",
+    "timestamp": "2025-03-13T08:30:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Una ballata acustica molto bella. Per il risotto usa il brodo caldo, viene più cremoso!",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c4_005",
+    "chat_id": "cloud_case_4",
+    "sender": "+39 555 0040001",
+    "timestamp": "2025-03-13T08:40:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Grazie del consiglio! Domani ho anche la partita di pallavolo alle 18. Settimana piena!",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+
+  {
+    "id": "ce2e_c5_001",
+    "chat_id": "cloud_case_5",
+    "sender": "+39 555 0050001",
+    "timestamp": "2025-03-14T11:00:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ciao! Hai prenotato il volo per la conferenza di Barcellona?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c5_002",
+    "chat_id": "cloud_case_5",
+    "sender": "+39 555 0050002",
+    "timestamp": "2025-03-14T11:10:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Yes, I booked the flight yesterday. Departure on April 5th, return on April 8th. The hotel is near La Rambla.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c5_003",
+    "chat_id": "cloud_case_5",
+    "sender": "+39 555 0050001",
+    "timestamp": "2025-03-14T11:20:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "¡Excelente! Yo también tengo el vuelo confirmado. Podemos compartir un taxi desde el aeropuerto al hotel.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c5_004",
+    "chat_id": "cloud_case_5",
+    "sender": "+39 555 0050002",
+    "timestamp": "2025-03-14T11:30:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Good idea! La conferenza inizia il 6 aprile alle 9. The keynote speaker is a professor from Berlin.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c5_005",
+    "chat_id": "cloud_case_5",
+    "sender": "+39 555 0050001",
+    "timestamp": "2025-03-14T11:40:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Perfetto. Después de la conferencia podemos visitar el Parque Güell. I've always wanted to see Gaudí's work in person!",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+
+  {
+    "id": "ce2e_c6_001",
+    "chat_id": "cloud_case_6",
+    "sender": "+39 555 0060001",
+    "timestamp": "2025-03-15T16:00:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ciao, ti confermo che la riunione di condominio è stata spostata a giovedì alle 19. Ordine del giorno: manutenzione ascensore e pulizia scale.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c6_002",
+    "chat_id": "cloud_case_6",
+    "sender": "+39 555 0060002",
+    "timestamp": "2025-03-15T16:10:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ok grazie. A proposito, sabato c'è la partita di calcetto al campo sportivo. Servono due giocatori, ti va di venire?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c6_003",
+    "chat_id": "cloud_case_6",
+    "sender": "+39 555 0060001",
+    "timestamp": "2025-03-15T16:20:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Sì ci sto! Intanto ho prenotato per domenica sera al ristorante giapponese in centro. Ho voglia di sushi e ramen.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c6_004",
+    "chat_id": "cloud_case_6",
+    "sender": "+39 555 0060002",
+    "timestamp": "2025-03-15T16:30:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Ottimo! Ricordami di passare in libreria prima della cena, devo comprare quel romanzo giallo che mi hanno consigliato.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c6_005",
+    "chat_id": "cloud_case_6",
+    "sender": "+39 555 0060001",
+    "timestamp": "2025-03-15T16:40:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Certo. Lunedì mattina invece devo portare il gatto dal veterinario per il vaccino annuale. Puoi darmi un passaggio?",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  },
+  {
+    "id": "ce2e_c6_006",
+    "chat_id": "cloud_case_6",
+    "sender": "+39 555 0060002",
+    "timestamp": "2025-03-15T16:50:00+00:00",
+    "type": "text",
+    "content": {
+      "text": "Nessun problema, passo alle 9. Ho anche comprato due biglietti per il concerto jazz di venerdì prossimo al teatro comunale.",
+      "media_path": null
+    },
+    "metadata": {
+      "deleted": false,
+      "forwarded": false,
+      "starred": false
+    }
+  }
+]

@@ -21,7 +21,7 @@ from typing import Any, Mapping
 
 from ai.backend import (
     AiModelMismatchError,
-    BaseLocalLlmClient,
+    BaseLlmClient,
 )
 from ai.chunking import verify_translated_document_size
 from ai.models import (
@@ -54,7 +54,7 @@ class TopicDetectionAnalyzer:
     Analizzatore per la verifica mirata di un singolo topic su un ConversationEvidenceDocument.
     """
 
-    def __init__(self, client: BaseLocalLlmClient, default_model_id: str | None = None) -> None:
+    def __init__(self, client: BaseLlmClient, default_model_id: str | None = None) -> None:
         self.client = client
         self.default_model_id = default_model_id
 
@@ -173,7 +173,7 @@ class TopicDiscoveryAnalyzer:
     Analizzatore per l'Open Topic Discovery su un ConversationEvidenceDocument.
     """
 
-    def __init__(self, client: BaseLocalLlmClient, default_model_id: str | None = None) -> None:
+    def __init__(self, client: BaseLlmClient, default_model_id: str | None = None) -> None:
         self.client = client
         self.default_model_id = default_model_id
 

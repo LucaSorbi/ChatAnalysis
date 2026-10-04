@@ -27,7 +27,10 @@ from __future__ import annotations
 import json
 from typing import Any, Mapping, Sequence
 
-from ai.backend import AiStructuredOutputError
+from ai.backend import (
+    AiInvalidEvidenceCitationError,
+    AiStructuredOutputError,
+)
 from ai.models import (
     DiscoveredTopic,
     EvidenceTranslationItem,
@@ -202,8 +205,9 @@ def validate_topic_detection_payload(
     # Verifica allucinazioni: ogni evidence_id citato deve esistere nel documento
     hallucinated = set(raw_eids) - valid_evidence_ids
     if hallucinated:
-        raise AiStructuredOutputError(
-            f"Il modello ha citato evidence_id inesistenti o allucinati: {sorted(hallucinated)}"
+        raise AiInvalidEvidenceCitationError(
+            f"Il modello ha citato evidence_id inesistenti o allucinati: {sorted(hallucinated)}",
+            invalid_evidence_ids=tuple(sorted(hallucinated)),
         )
 
     # Invarianti per decisione
@@ -275,8 +279,9 @@ def validate_topic_discovery_payload(
 
         hallucinated = set(eids_raw) - valid_evidence_ids
         if hallucinated:
-            raise AiStructuredOutputError(
-                f"topic[{idx}] ('{item['label']}') cita evidence_id inesistenti: {sorted(hallucinated)}"
+            raise AiInvalidEvidenceCitationError(
+                f"topic[{idx}] ('{item['label']}') cita evidence_id inesistenti: {sorted(hallucinated)}",
+                invalid_evidence_ids=tuple(sorted(hallucinated)),
             )
 
         discovered.append(
@@ -342,7 +347,10 @@ def validate_translation_payload(
             raise AiStructuredOutputError(f"Traduzione duplicata per evidence_id '{eid}'")
 
         if eid not in expected_evidence_ids:
-            raise AiStructuredOutputError(f"Traduzione per evidence_id non richiesto o inesistente: '{eid}'")
+            raise AiInvalidEvidenceCitationError(
+                f"Traduzione per evidence_id non richiesto o inesistente: '{eid}'",
+                invalid_evidence_ids=(eid,),
+            )
 
         # D6: Controllo traduzione vuota: ammessa solo se il testo sorgente era vuoto
         original_sec = sections_map[eid]

@@ -1,16 +1,27 @@
 """
 ai/backend.py
 -------------
-Contratto astratto, risposte ed eccezioni per i client LLM locali (BaseLocalLlmClient, FakeLocalLlmClient).
+Contratti astratti, risposte ed eccezioni per i client LLM (BaseLlmClient, BaseLocalLlmClient, FakeLocalLlmClient).
+
+Architettura delle interfacce:
+- BaseLlmClient:
+  Contratto fondamentale generico per l'operazione di chat_completion() con model_id esplicito,
+  schema JSON e parametri di riproducibilità (temperature, seed, max_tokens, timeout_seconds).
+  Implementato sia da runtime locali sia da adapter remoti sperimentali (es. RemoteOpenAICompatibleTestClient).
+- BaseLocalLlmClient:
+  Specializzazione locale del contratto base che estende BaseLlmClient richiedendo metodi di verifica
+  presenza locale (is_available()) e introspezione dei modelli residenti (list_models()).
+  Implementato da LmStudioClient e FakeLocalLlmClient.
 
 Principi architetturali:
-1. NESSUNA DIPENDENZA CLOUD:
-   Interfaccia progettata esclusivamente per runtime locali (LM Studio, Ollama locale, CTranslate2).
+1. PERCORSO FORENSE LOCALE PRIORITARIO:
+   L'architettura definitiva della tesi si fonda su runtime locali (LM Studio su loopback)
+   e modelli Open Weight (Qwen, Llama, DeepSeek). Nessun dato reale transita su canali esterni.
 2. CONTRATTO UNIFORME CON MODEL ID ESPLICITO:
-   Supporto per is_available(), list_models() e chat_completion() con model_id esplicito
-   e parametri di riproducibilità (temperature, seed).
-3. ISOLAMENTO TEST OFFLINE:
-   FakeLocalLlmClient garantisce l'esecuzione deterministica, veloce e offline della suite pytest senza richiedere server accesi o modelli scaricati.
+   Ogni invocazione richiede model_id esplicito per garantire tracciabilità e riproducibilità scientifica.
+3. ISOLAMENTO TEST DETERMINISTICI E OFFLINE:
+   FakeLocalLlmClient garantisce l'esecuzione deterministica, veloce e offline della suite pytest
+   senza richiedere server attivi o modelli residenti in memoria.
 """
 from __future__ import annotations
 
@@ -48,6 +59,18 @@ class AiStructuredOutputError(AiBackendError):
     pass
 
 
+class AiInvalidEvidenceCitationError(AiStructuredOutputError):
+    """Sollevata quando il modello cita evidence_id inesistenti, allucinati o non consentiti."""
+
+    def __init__(
+        self,
+        message: str,
+        invalid_evidence_ids: tuple[str, ...] = (),
+    ) -> None:
+        super().__init__(message)
+        self.invalid_evidence_ids = invalid_evidence_ids
+
+
 class AnalysisInputTooLargeError(AiBackendError):
     """Sollevata quando l'input supera la dimensione massima gestibile dal contesto o dal chunker."""
     pass
@@ -60,7 +83,16 @@ class AiModelNotSpecifiedError(AiBackendError):
 
 class AiModelMismatchError(AiBackendError):
     """Sollevata quando il modello restituito/utilizzato dal backend differisce da quello atteso."""
-    pass
+
+    def __init__(
+        self,
+        message: str,
+        requested_model: str | None = None,
+        returned_model: str | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.requested_model = requested_model
+        self.returned_model = returned_model
 
 
 class AiBackendProtocolError(AiBackendError):
@@ -92,9 +124,33 @@ class LlmCompletionResponse:
         object.__setattr__(self, "metadata", freeze_structural(self.metadata))
 
 
-class BaseLocalLlmClient(ABC):
+class BaseLlmClient(ABC):
+    """
+    Contratto astratto fondamentale per client LLM (locali o sperimentali remoti).
+    Definisce l'operazione essenziale di chat completion.
+    """
+
+    @abstractmethod
+    def chat_completion(
+        self,
+        messages: list[dict[str, str]],
+        model_id: str | None = None,
+        schema: dict[str, Any] | None = None,
+        temperature: float = 0.0,
+        seed: int | None = None,
+        max_tokens: int | None = None,
+        timeout_seconds: float = 30.0,
+    ) -> LlmCompletionResponse:
+        """
+        Esegue una chiamata di chat completion con configurazione orientata alla riproducibilità.
+        """
+        raise NotImplementedError
+
+
+class BaseLocalLlmClient(BaseLlmClient):
     """
     Contratto astratto unificato per client LLM locali.
+    Estende BaseLlmClient richiedendo controlli di presenza locale e introspezione dei modelli residenti.
     """
 
     @abstractmethod

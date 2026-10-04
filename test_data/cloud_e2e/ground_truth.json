@@ -1,0 +1,194 @@
+{
+  "_meta": {
+    "purpose": "Ground truth for cloud E2E synthetic benchmark — NOT to be included in LLM prompts",
+    "data_policy": "SYNTHETIC DATA ONLY — no real personal data",
+    "version": "1.1.0",
+    "source_format": "cellebrite_json",
+    "source_file": "test_data/cloud_e2e/messages.json"
+  },
+  "cases": [
+    {
+      "case_id": "CASE_1_EXPLICIT_PRESENT",
+      "conversation_chat_id": "chat:cellebrite_json:cloud_case_1",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::240f5828436d",
+      "language_profile": ["it"],
+      "difficulty": "explicit",
+      "target_topic_id": "top_cycling",
+      "target_topic_label": "Ciclismo e Percorsi Ciclabili",
+      "target_topic_description": "Pianificazione di uscite in bicicletta, percorsi ciclabili, attrezzatura ciclistica e attività sportive su due ruote.",
+      "expected_decision": "PRESENT",
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c1_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_005::ORIGINAL_TEXT"
+      ],
+      "expected_source_record_ids": [
+        "ce2e_c1_001",
+        "ce2e_c1_002",
+        "ce2e_c1_003",
+        "ce2e_c1_004",
+        "ce2e_c1_005"
+      ],
+      "human_rationale": "La conversazione è esplicitamente incentrata sulla pianificazione di un giro in bicicletta: pista ciclabile, bici da corsa, casco, luci, barrette energetiche. Il topic 'ciclismo' è nominato direttamente e ripetutamente. Serve come baseline facile per la detection.",
+      "expected_discovery_topics": null
+    },
+    {
+      "case_id": "CASE_2_IMPLICIT_PRESENT",
+      "conversation_chat_id": "chat:cellebrite_json:cloud_case_2",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::ccace1c455cf",
+      "language_profile": ["it"],
+      "difficulty": "implicit",
+      "target_topic_id": "top_illicit_trade",
+      "target_topic_label": "Compravendita Illecita",
+      "target_topic_description": "Scambi clandestini di merci non specificate, accordi segreti su prezzi, incontri furtivi e comunicazioni riservate riguardanti transazioni sospette.",
+      "expected_decision": "PRESENT",
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c2_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_005::ORIGINAL_TEXT"
+      ],
+      "expected_source_record_ids": [
+        "ce2e_c2_001",
+        "ce2e_c2_002",
+        "ce2e_c2_003",
+        "ce2e_c2_004",
+        "ce2e_c2_005"
+      ],
+      "human_rationale": "Nessun termine illegale esplicito né menzione di una sostanza o bene specifico, ma il contesto complessivo rende difendibile la conclusione che si tratti di compravendita illecita. Indicatori convergenti: (1) l'oggetto è privo di numeri di serie e documenti, dunque non rintracciabile (ce2e_c2_001); (2) pagamento solo in contanti, niente bonifici (ce2e_c2_003); (3) appuntamento notturno con istruzione di evitare la strada con telecamere (ce2e_c2_003); (4) il 'canale ufficiale non la passa più', implicando che l'oggetto non è ottenibile per via legale (ce2e_c2_004); (5) ordine di cancellare la chat e usare un solo numero di contatto (ce2e_c2_005). La convergenza di non-rintracciabilità, evasione della sorveglianza, canale ufficiale precluso e distruzione delle comunicazioni fa concludere che la transazione riguarda beni non commerciabili legalmente, anche senza identificarne la natura esatta.",
+      "expected_discovery_topics": null
+    },
+    {
+      "case_id": "CASE_3_AMBIGUOUS_UNCERTAIN",
+      "conversation_chat_id": "chat:cellebrite_json:cloud_case_3",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::60d22ea935cb",
+      "language_profile": ["it"],
+      "difficulty": "ambiguous",
+      "target_topic_id": "top_illicit_trade",
+      "target_topic_label": "Compravendita Illecita",
+      "target_topic_description": "Scambi clandestini di merci non specificate, accordi segreti su prezzi, incontri furtivi e comunicazioni riservate riguardanti transazioni sospette.",
+      "expected_decision": "UNCERTAIN",
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c3_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_005::ORIGINAL_TEXT"
+      ],
+      "expected_source_record_ids": [
+        "ce2e_c3_001",
+        "ce2e_c3_002",
+        "ce2e_c3_003",
+        "ce2e_c3_004",
+        "ce2e_c3_005"
+      ],
+      "human_rationale": "La conversazione contiene segnali che possono essere letti in due chiavi opposte, entrambe plausibili, senza che il contesto completo risolva l'ambiguità. Interpretazione sospetta: 'qualcosa di importante da darti' in un luogo abituale (ce2e_c3_001), richiesta di riservatezza ('non ne parlare con gli altri', ce2e_c3_003), offerta di un 'compenso' (ce2e_c3_004), rifiuto di discutere prezzo e dettagli per iscritto ('meglio non scrivere i dettagli qui', ce2e_c3_005). Interpretazione innocente: potrebbe trattarsi di un favore tra amici, una sorpresa, un regalo o un oggetto legale ingombrante; la riservatezza potrebbe servire a mantenere una sorpresa, non a occultare illeciti; 'ne parliamo di persona' può essere semplice preferenza comunicativa. Nessun indicatore decisivo di illiceità (nessuna menzione di non-rintracciabilità, evasione della sorveglianza o canali ufficiali preclusi) — ma neppure alcuna spiegazione innocente esplicita. PRESENT non è giustificabile perché mancano prove di irregolarità nella transazione; ABSENT non è giustificabile perché i segnali di segretezza e compenso rimangono senza spiegazione. UNCERTAIN è la ground truth metodologicamente difendibile.",
+      "expected_discovery_topics": null
+    },
+    {
+      "case_id": "CASE_4_ABSENT",
+      "conversation_chat_id": "chat:cellebrite_json:cloud_case_4",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::b281cafe2a92",
+      "language_profile": ["it"],
+      "difficulty": "absent",
+      "target_topic_id": "top_illicit_trade",
+      "target_topic_label": "Compravendita Illecita",
+      "target_topic_description": "Scambi clandestini di merci non specificate, accordi segreti su prezzi, incontri furtivi e comunicazioni riservate riguardanti transazioni sospette.",
+      "expected_decision": "ABSENT",
+      "expected_evidence_ids": [],
+      "expected_source_record_ids": [],
+      "human_rationale": "La conversazione riguarda esclusivamente attività quotidiane innocue: lezioni di chitarra, cucina (risotto), pallavolo. Nessun indicatore di compravendita illecita. Serve a rilevare falsi positivi del modello.",
+      "expected_discovery_topics": null
+    },
+    {
+      "case_id": "CASE_5_MULTILINGUAL_PRESENT",
+      "conversation_chat_id": "chat:cellebrite_json:cloud_case_5",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::8ed1a9efaa3d",
+      "language_profile": ["it", "en", "es"],
+      "difficulty": "multilingual",
+      "target_topic_id": "top_conference_travel",
+      "target_topic_label": "Viaggio per Conferenza Accademica",
+      "target_topic_description": "Organizzazione di un viaggio internazionale per partecipare a una conferenza accademica o professionale, incluse prenotazioni di voli, hotel e programma dell'evento.",
+      "expected_decision": "PRESENT",
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c5_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_005::ORIGINAL_TEXT"
+      ],
+      "expected_source_record_ids": [
+        "ce2e_c5_001",
+        "ce2e_c5_002",
+        "ce2e_c5_003",
+        "ce2e_c5_004",
+        "ce2e_c5_005"
+      ],
+      "human_rationale": "Conversazione trilingue (IT/EN/ES) su un viaggio a Barcellona per una conferenza. Tutti i messaggi contribuiscono: prenotazione volo, hotel, taxi, keynote speaker, date. Il topic è supportato da evidenze in tutte e tre le lingue. Caso dedicato al confronto futuro DIRECT_MULTILINGUAL vs TRANSLATE_FIRST.",
+      "expected_discovery_topics": null
+    },
+    {
+      "case_id": "CASE_6_TOPIC_DISCOVERY",
+      "conversation_chat_id": "chat:cellebrite_json:cloud_case_6",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::985ee94ed2ee",
+      "language_profile": ["it"],
+      "difficulty": "discovery",
+      "target_topic_id": null,
+      "target_topic_label": null,
+      "target_topic_description": null,
+      "expected_decision": null,
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c6_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c6_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c6_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c6_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c6_005::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c6_006::ORIGINAL_TEXT"
+      ],
+      "expected_source_record_ids": [
+        "ce2e_c6_001",
+        "ce2e_c6_002",
+        "ce2e_c6_003",
+        "ce2e_c6_004",
+        "ce2e_c6_005",
+        "ce2e_c6_006"
+      ],
+      "human_rationale": "Conversazione aperta su argomenti multipli senza topic target predefinito: riunione di condominio, calcetto, cena sushi, libro/thriller, cane dal veterinario, concerto jazz. Serve a valutare la capacità del modello di estrarre topic emergenti non pre-configurati.",
+      "expected_discovery_topics": [
+        {
+          "topic_id": "top_condominium",
+          "label": "Riunione di Condominio",
+          "keywords": ["condominio", "riunione", "amministratore", "spese", "assemblea"]
+        },
+        {
+          "topic_id": "top_sports",
+          "label": "Calcetto e Attività Sportive",
+          "keywords": ["calcetto", "partita", "giovedì", "campo", "squadra"]
+        },
+        {
+          "topic_id": "top_dining",
+          "label": "Ristorazione e Cucina",
+          "keywords": ["ristorante", "sushi", "giapponese", "cena", "prenotare"]
+        },
+        {
+          "topic_id": "top_books",
+          "label": "Libri e Lettura",
+          "keywords": ["libro", "romanzo", "thriller", "libreria", "leggere"]
+        },
+        {
+          "topic_id": "top_pets",
+          "label": "Animali Domestici e Cure Veterinarie",
+          "keywords": ["cane", "veterinario", "vaccino", "visita", "clinica"]
+        },
+        {
+          "topic_id": "top_music_events",
+          "label": "Eventi Musicali e Concerti",
+          "keywords": ["concerto", "jazz", "biglietti", "festival", "musica"]
+        }
+      ]
+    }
+  ]
+}

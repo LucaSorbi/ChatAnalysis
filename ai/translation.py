@@ -22,7 +22,7 @@ from typing import Any
 
 from ai.backend import (
     AiModelMismatchError,
-    BaseLocalLlmClient,
+    BaseLlmClient,
 )
 from ai.models import (
     AnalysisLanguageStrategy,
@@ -49,7 +49,7 @@ class EvidenceTranslator:
 
     def __init__(
         self,
-        client: BaseLocalLlmClient,
+        client: BaseLlmClient,
         default_target_language: str = "it",
         default_model_id: str | None = None,
     ) -> None:
