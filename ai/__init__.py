@@ -21,10 +21,14 @@ from ai.backend import (
 )
 from ai.benchmark import (
     TopicDetectionMetrics,
+    check_metadata_discrepancies,
     create_synthetic_benchmark_documents,
+    metadata_values_match,
     run_synthetic_benchmark,
     run_synthetic_discovery_benchmark,
     save_benchmark_report,
+    save_json_report,
+    to_json_native,
 )
 from ai.chunking import (
     ChunkAnalysisOutcome,
@@ -128,6 +132,10 @@ __all__ = [
     "run_synthetic_benchmark",
     "run_synthetic_discovery_benchmark",
     "save_benchmark_report",
+    "save_json_report",
+    "to_json_native",
+    "check_metadata_discrepancies",
+    "metadata_values_match",
     "TopicDetectionMetrics",
     # Versions
     "PROMPT_VERSION_DETECTION",

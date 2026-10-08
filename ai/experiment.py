@@ -32,9 +32,11 @@ from ai.backend import (
     LmStudioUnavailableError,
 )
 from ai.benchmark import (
+    check_metadata_discrepancies,
     run_synthetic_benchmark,
     run_synthetic_discovery_benchmark,
     save_benchmark_report,
+    save_json_report,
 )
 from ai.discovery import infer_model_family
 from ai.lmstudio import LmStudioClient
@@ -201,19 +203,21 @@ def main(cli_args: list[str] | None = None) -> int:
             if isinstance(d, dict) and (d.get("id") == args.model_id or d.get("key") == args.model_id):
                 obs_q = d.get("quantization")
                 obs_p = d.get("params_string") or d.get("parameter_size")
-                obs_c = d.get("max_context_length")
-                observed_metadata["quantization"] = str(obs_q) if obs_q else None
-                observed_metadata["parameter_size"] = str(obs_p) if obs_p else None
-                observed_metadata["context_length"] = int(obs_c) if obs_c and str(obs_c).isdigit() else None
+                obs_c = d.get("max_context_length") or d.get("context_length")
+                observed_metadata["quantization"] = obs_q if obs_q is not None else None
+                observed_metadata["parameter_size"] = obs_p if obs_p is not None else None
+                if obs_c is not None:
+                    if isinstance(obs_c, (int, float)) and float(obs_c).is_integer():
+                        observed_metadata["context_length"] = int(obs_c)
+                    elif isinstance(obs_c, str) and obs_c.strip().isdigit():
+                        observed_metadata["context_length"] = int(obs_c.strip())
+                    else:
+                        observed_metadata["context_length"] = obs_c
                 break
     except AiBackendError:
         pass
 
-    for k in ("quantization", "parameter_size", "context_length"):
-        dec_v = declared_metadata[k]
-        obs_v = observed_metadata[k]
-        if dec_v is not None and obs_v is not None and str(dec_v).strip().lower() != str(obs_v).strip().lower():
-            discrepancies.append(f"{k}: dichiarato={dec_v!r}, osservato={obs_v!r}")
+    discrepancies = check_metadata_discrepancies(declared_metadata, observed_metadata)
 
     if discrepancies:
         print(f"AVVISO DISCREPANZA METADATI: {'; '.join(discrepancies)}", file=sys.stderr)
@@ -268,9 +272,7 @@ def main(cli_args: list[str] | None = None) -> int:
     )
 
     disc_json = out_dir / f"real_discovery_{safe_name}.json"
-    import json
-    with open(disc_json, "w", encoding="utf-8") as f:
-        json.dump(discovery_result, f, indent=2, ensure_ascii=False)
+    save_json_report(discovery_result, disc_json)
 
     print("\nBenchmark completato con successo!")
     print(f"Report Detection JSON: {json_path}")

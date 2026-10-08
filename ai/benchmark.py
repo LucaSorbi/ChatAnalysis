@@ -23,12 +23,17 @@ Principi architetturali (Fasi J, K):
 """
 from __future__ import annotations
 
+import dataclasses
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import Enum
 import json
+import os
 from pathlib import Path
+import re
 import time
-from typing import Any, Mapping
+from typing import Any
+from collections.abc import Mapping
 
 from ai.backend import (
     AiBackendError,
@@ -804,6 +809,188 @@ def run_synthetic_discovery_benchmark(
     }
 
 
+# ============================================================================
+# METADATA NORMALIZATION & COMPARISON
+# ============================================================================
+
+def _normalize_quantization(val: Any) -> str | None:
+    """Normalizza la quantizzazione per confronto semantico (case/whitespace insensitive)."""
+    if val is None:
+        return None
+    if isinstance(val, Mapping):
+        if "name" in val and val["name"] is not None:
+            val = val["name"]
+        elif "quantization" in val and val["quantization"] is not None:
+            val = val["quantization"]
+    if val is None:
+        return None
+    return str(val).strip().lower()
+
+
+def _normalize_parameter_size(val: Any) -> str | None:
+    """Normalizza la dimensione dei parametri (es. '7B', '7.0B', ' 7b ' -> '7b')."""
+    if val is None:
+        return None
+    if isinstance(val, Mapping):
+        for candidate_key in ("params_string", "parameter_size", "name", "value", "size"):
+            if candidate_key in val and val[candidate_key] is not None:
+                val = val[candidate_key]
+                break
+    if val is None:
+        return None
+    cleaned = str(val).strip().lower()
+    m = re.match(r"^([0-9]+(?:\.[0-9]+)?)\s*([a-z]*)$", cleaned)
+    if m:
+        num_str, unit = m.groups()
+        try:
+            num_val = float(num_str)
+            norm_num = int(num_val) if num_val.is_integer() else num_val
+            return f"{norm_num}{unit}"
+        except ValueError:
+            pass
+    return cleaned.replace(" ", "")
+
+
+def _normalize_context_length(val: Any) -> Any:
+    """Normalizza la lunghezza del contesto a intero o valore numerico se possibile."""
+    if val is None:
+        return None
+    if isinstance(val, Mapping):
+        for candidate_key in ("max_context_length", "context_length", "value", "length"):
+            if candidate_key in val and val[candidate_key] is not None:
+                val = val[candidate_key]
+                break
+    if val is None:
+        return None
+    if isinstance(val, (int, float)):
+        return int(val) if float(val).is_integer() else float(val)
+    if isinstance(val, str):
+        cleaned = val.strip()
+        try:
+            num = float(cleaned)
+            return int(num) if num.is_integer() else num
+        except ValueError:
+            return cleaned.lower()
+    return val
+
+
+def metadata_values_match(key: str, dec_v: Any, obs_v: Any) -> bool:
+    """
+    Verifica se un valore di metadato dichiarato e uno osservato sono semanticamente equivalenti.
+    Evita falsi positivi per differenze di rappresentazione preservando le vere discrepanze.
+    """
+    if dec_v is None or obs_v is None:
+        return True
+
+    if key == "quantization":
+        return _normalize_quantization(dec_v) == _normalize_quantization(obs_v)
+
+    if key == "parameter_size":
+        return _normalize_parameter_size(dec_v) == _normalize_parameter_size(obs_v)
+
+    if key == "context_length":
+        return _normalize_context_length(dec_v) == _normalize_context_length(obs_v)
+
+    return str(dec_v).strip().lower() == str(obs_v).strip().lower()
+
+
+def check_metadata_discrepancies(
+    declared_metadata: Mapping[str, Any],
+    observed_metadata: Mapping[str, Any],
+) -> list[str]:
+    """
+    Confronta i metadati dichiarati e osservati per quantization, parameter_size e context_length.
+    Restituisce una lista di stringhe descrittive per ciascuna discrepanza rilevata.
+    """
+    discrepancies: list[str] = []
+    for k in ("quantization", "parameter_size", "context_length"):
+        dec_v = declared_metadata.get(k)
+        obs_v = observed_metadata.get(k)
+        if dec_v is not None and obs_v is not None and not metadata_values_match(k, dec_v, obs_v):
+            discrepancies.append(f"{k}: dichiarato={dec_v!r}, osservato={obs_v!r}")
+    return discrepancies
+
+
+# ============================================================================
+# REPORT SERIALIZATION & PERSISTENCE
+# ============================================================================
+
+def to_json_native(val: Any) -> Any:
+    """
+    Converte ricorsivamente una struttura dati in tipi nativi JSON in modo non mutante.
+
+    Regole:
+    - Mapping / MappingProxyType -> dict (chiavi e valori convertiti ricorsivamente)
+    - list / tuple -> list (elementi convertiti ricorsivamente)
+    - set / frozenset -> list deterministica ordinata
+    - Enum -> value (convertito ricorsivamente)
+    - Path / os.PathLike -> str
+    - primitive JSON (str, int, float, bool) e None -> invariati
+    - dataclass -> dict dei campi (convertiti ricorsivamente)
+    - Non modifica l'oggetto originale in-place (non-mutating)
+    - Solleva TypeError su oggetti sconosciuti non serializzabili (nessun fallback generico a str)
+    """
+    if val is None or isinstance(val, (str, int, float, bool)):
+        return val
+
+    if isinstance(val, Enum):
+        return to_json_native(val.value)
+
+    if isinstance(val, (os.PathLike, Path)):
+        return str(val)
+
+    if isinstance(val, Mapping):
+        result_dict: dict[str, Any] = {}
+        for k, v in val.items():
+            if isinstance(k, Enum):
+                key_str = str(k.value)
+            elif isinstance(k, (os.PathLike, Path)):
+                key_str = str(k)
+            elif isinstance(k, str):
+                key_str = k
+            else:
+                key_str = str(k)
+            result_dict[key_str] = to_json_native(v)
+        return result_dict
+
+    if isinstance(val, (list, tuple)):
+        return [to_json_native(item) for item in val]
+
+    if isinstance(val, (set, frozenset)):
+        converted_items = [to_json_native(item) for item in val]
+        try:
+            return sorted(converted_items)
+        except TypeError:
+            return sorted(converted_items, key=lambda x: str(x))
+
+    if dataclasses.is_dataclass(val) and not isinstance(val, type):
+        return {
+            f.name: to_json_native(getattr(val, f.name))
+            for f in dataclasses.fields(val)
+        }
+
+    raise TypeError(f"Object of type {type(val).__name__} is not JSON serializable")
+
+
+def save_json_report(
+    data: Any,
+    file_path: Path | str,
+    indent: int = 2,
+    ensure_ascii: bool = False,
+) -> Path:
+    """
+    Serializza in JSON una struttura dati convertendola ricorsivamente in tipi nativi JSON.
+    Garantisce che MappingProxyType, tuple e set congelati siano serializzati correttamente
+    senza alterare la struttura in memoria.
+    """
+    path = Path(file_path)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    json_native_data = to_json_native(data)
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(json_native_data, f, indent=indent, ensure_ascii=ensure_ascii)
+    return path
+
+
 def save_benchmark_report(
     benchmark_data: dict[str, Any],
     output_dir: Path | str = "output",
@@ -819,16 +1006,20 @@ def save_benchmark_report(
     md_file = out_path / f"{filename_prefix}.md"
 
     # 1. Scrittura JSON completo
-    with open(json_file, "w", encoding="utf-8") as f:
-        json.dump(benchmark_data, f, indent=2, ensure_ascii=False)
+    save_json_report(benchmark_data, json_file)
 
     # 2. Scrittura Markdown sintetico
     spec = benchmark_data.get("model_spec", {})
+    quant_display = spec.get("quantization")
+    if isinstance(quant_display, Mapping):
+        quant_display = quant_display.get("name", str(quant_display))
+    quant_display = quant_display or "N/D"
+
     md_lines = [
         "# Benchmark Sperimentale AI Locale — Topic Detection Multilingue",
         "",
         f"**Modalità**: `{benchmark_data.get('benchmark_mode')}`  ",
-        f"**Modello**: `{spec.get('model_id')}` (Famiglia: `{spec.get('family')}`, Quant: `{spec.get('quantization') or 'N/D'}`)  ",
+        f"**Modello**: `{spec.get('model_id')}` (Famiglia: `{spec.get('family')}`, Quant: `{quant_display}`)  ",
         f"**Data e Ora (UTC)**: {benchmark_data.get('timestamp')}  ",
         f"**Avviso**: {benchmark_data.get('notice')}  ",
         "",

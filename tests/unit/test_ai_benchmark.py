@@ -10,6 +10,7 @@ l'audit hardware (ai/hardware.py) e la scoperta modelli (ai/discovery.py):
 - Latenza end-to-end comprensiva di traduzione per TRANSLATE_FIRST
 - Rilevamento hardware non-privilegiato e categorizzazione famiglie di modelli (UNVERIFIED se offline)
 """
+from types import MappingProxyType
 import json
 from pathlib import Path
 import pytest
@@ -20,10 +21,14 @@ from ai.backend import (
 )
 from ai.benchmark import (
     TopicDetectionMetrics,
+    check_metadata_discrepancies,
     create_synthetic_benchmark_documents,
+    metadata_values_match,
     run_synthetic_benchmark,
     run_synthetic_discovery_benchmark,
     save_benchmark_report,
+    save_json_report,
+    to_json_native,
 )
 from ai.discovery import (
     discover_models_on_client,
@@ -390,6 +395,298 @@ class TestAiBenchmarkAndDiscovery:
         assert res.metadata["prompt_tokens"] is None
         assert res.metadata["completion_tokens"] is None
         assert res.metadata["total_tokens"] is None
+
+
+@pytest.mark.unit
+class TestBenchmarkSerializationAndMetadata:
+    """Test per la serializzazione JSON robusta e la normalizzazione dei metadati."""
+
+    def test_to_json_native_primitives_and_containers(self):
+        # Primitivi e None
+        assert to_json_native(None) is None
+        assert to_json_native("string") == "string"
+        assert to_json_native(42) == 42
+        assert to_json_native(3.14) == 3.14
+        assert to_json_native(True) is True
+
+        # Enum e Path
+        assert to_json_native(ModelFamily.QWEN) == "QWEN"
+        assert to_json_native(Path("my/path")) == str(Path("my/path"))
+
+        # Tuple e List ricorsive
+        assert to_json_native((1, 2, "a")) == [1, 2, "a"]
+        assert to_json_native([1, (2, 3), [4, 5]]) == [1, [2, 3], [4, 5]]
+
+        # Set e Frozenset deterministici ordinati
+        assert to_json_native(set([3, 1, 2])) == [1, 2, 3]
+        assert to_json_native(frozenset(["c", "a", "b"])) == ["a", "b", "c"]
+
+        # Mapping e MappingProxyType
+        nested_mp = MappingProxyType({
+            "num": 1,
+            "sub": MappingProxyType({"tup": (10, 20)}),
+            "tags": frozenset(["b", "a"]),
+        })
+        converted = to_json_native(nested_mp)
+        assert converted == {
+            "num": 1,
+            "sub": {"tup": [10, 20]},
+            "tags": ["a", "b"],
+        }
+        assert isinstance(converted, dict)
+        assert isinstance(converted["sub"], dict)
+        assert isinstance(converted["sub"]["tup"], list)
+        assert isinstance(converted["tags"], list)
+
+    def test_to_json_native_unsupported_type_raises_type_error(self):
+        class NonSerializable:
+            pass
+
+        with pytest.raises(TypeError, match="is not JSON serializable"):
+            to_json_native(NonSerializable())
+
+    def test_to_json_native_source_remains_unmutated(self):
+        inner_tuple = (1, 2, 3)
+        inner_set = frozenset(["x", "y"])
+        inner_mp = MappingProxyType({"tuple": inner_tuple, "set": inner_set})
+        outer_mp = MappingProxyType({"inner": inner_mp})
+
+        res = to_json_native(outer_mp)
+
+        # Verifica che il risultato sia convertito in dict/list
+        assert res == {"inner": {"tuple": [1, 2, 3], "set": ["x", "y"]}}
+        # Verifica immutabilità della sorgente
+        assert isinstance(outer_mp, MappingProxyType)
+        assert isinstance(outer_mp["inner"], MappingProxyType)
+        assert isinstance(outer_mp["inner"]["tuple"], tuple)
+        assert isinstance(outer_mp["inner"]["set"], frozenset)
+
+    def test_save_benchmark_report_with_frozen_metadata(self, tmp_path):
+        # Costruisce spec con metadata profondamente congelati da freeze_structural
+        declared_meta = {
+            "quantization": "Q4_K_M",
+            "parameter_size": "7B",
+            "context_length": 8192,
+        }
+        observed_meta = {
+            "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+            "parameter_size": "7B",
+            "context_length": 8192,
+        }
+        discrepancies = []
+
+        spec = ExperimentModelSpec(
+            family=ModelFamily.QWEN,
+            model_id="qwen2.5-7b-instruct",
+            quantization="Q4_K_M",
+            parameter_size="7B",
+            context_length=8192,
+            metadata={
+                "declared_model_metadata": declared_meta,
+                "observed_model_metadata": observed_meta,
+                "metadata_discrepancies": discrepancies,
+            },
+        )
+
+        # Verifica che spec.metadata sia effettivamente MappingProxyType
+        assert isinstance(spec.metadata, MappingProxyType)
+        assert isinstance(spec.metadata["declared_model_metadata"], MappingProxyType)
+        assert isinstance(spec.metadata["observed_model_metadata"], MappingProxyType)
+        assert isinstance(spec.metadata["observed_model_metadata"]["quantization"], MappingProxyType)
+        assert isinstance(spec.metadata["metadata_discrepancies"], tuple)
+
+        client = FakeLocalLlmClient(
+            models=("qwen2.5-7b-instruct",),
+            canned_responses={
+                ("Viaggi e Vacanze", "Firenze"): '{"decision": "PRESENT", "evidence_ids": ["synth:synthetic_benchmark:scenario_it_travel_0::ORIGINAL_TEXT"], "rationale": "Viaggi"}',
+                ("Lavoro e Riunioni", "budget"): '{"decision": "PRESENT", "evidence_ids": ["synth:synthetic_benchmark:scenario_en_work_0::ORIGINAL_TEXT"], "rationale": "Lavoro"}',
+                ("Cibo e Ristorazione", "margherita"): '{"decision": "PRESENT", "evidence_ids": ["synth:synthetic_benchmark:scenario_es_food_0::ORIGINAL_TEXT"], "rationale": "Cibo"}',
+                ("Sport e Fitness", "racchette"): '{"decision": "PRESENT", "evidence_ids": ["synth:synthetic_benchmark:scenario_mixed_sport_0::ORIGINAL_TEXT"], "rationale": "Sport"}',
+            },
+            default_response='{"decision": "ABSENT", "evidence_ids": [], "rationale": "No"}',
+            model_name="qwen2.5-7b-instruct",
+        )
+
+        res = run_synthetic_benchmark(
+            client=client,
+            model_spec=spec,
+            strategies=[AnalysisLanguageStrategy.DIRECT_MULTILINGUAL],
+        )
+
+        # Verifica che il benchmark result contenga MappingProxyType nei metadati
+        assert isinstance(res["model_spec"]["declared_model_metadata"], MappingProxyType)
+        assert isinstance(res["model_spec"]["observed_model_metadata"], MappingProxyType)
+
+        # Salvataggio report
+        json_file, md_file = save_benchmark_report(res, output_dir=tmp_path, filename_prefix="bench_frozen")
+        assert json_file.exists()
+        assert md_file.exists()
+
+        # Verifica lettura JSON con json.load
+        with open(json_file, "r", encoding="utf-8") as f:
+            loaded_data = json.load(f)
+
+        assert loaded_data["model_spec"]["model_id"] == "qwen2.5-7b-instruct"
+        assert loaded_data["model_spec"]["declared_model_metadata"] == {
+            "quantization": "Q4_K_M",
+            "parameter_size": "7B",
+            "context_length": 8192,
+        }
+        assert loaded_data["model_spec"]["observed_model_metadata"] == {
+            "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+            "parameter_size": "7B",
+            "context_length": 8192,
+        }
+        assert loaded_data["model_spec"]["metadata_discrepancies"] == []
+
+        # L'oggetto sorgente deve rimanere MappingProxyType
+        assert isinstance(res["model_spec"]["declared_model_metadata"], MappingProxyType)
+
+    def test_discovery_result_with_frozen_metadata_serialization(self, tmp_path):
+        spec = ExperimentModelSpec(
+            family=ModelFamily.QWEN,
+            model_id="qwen2.5-7b-instruct",
+            quantization="Q4_K_M",
+            metadata={
+                "declared_model_metadata": {"quantization": "Q4_K_M"},
+                "observed_model_metadata": {"quantization": {"name": "Q4_K_M", "bits_per_weight": 4}},
+                "metadata_discrepancies": (),
+            },
+        )
+        canned_disc = {
+            ("OPEN TOPIC DISCOVERY", "scenario_it_travel"): '{"topics": [{"label": "Viaggi", "short_description": "Viaggi", "evidence_ids": ["synth:synthetic_benchmark:scenario_it_travel_0::ORIGINAL_TEXT"]}]}',
+            ("OPEN TOPIC DISCOVERY", "scenario_en_work"): '{"topics": [{"label": "Lavoro", "short_description": "Lavoro", "evidence_ids": ["synth:synthetic_benchmark:scenario_en_work_0::ORIGINAL_TEXT"]}]}',
+            ("OPEN TOPIC DISCOVERY", "scenario_es_food"): '{"topics": [{"label": "Cibo", "short_description": "Cibo", "evidence_ids": ["synth:synthetic_benchmark:scenario_es_food_0::ORIGINAL_TEXT"]}]}',
+            ("OPEN TOPIC DISCOVERY", "scenario_mixed_sport"): '{"topics": [{"label": "Sport", "short_description": "Sport", "evidence_ids": ["synth:synthetic_benchmark:scenario_mixed_sport_0::ORIGINAL_TEXT"]}]}',
+        }
+        client = FakeLocalLlmClient(
+            models=("qwen2.5-7b-instruct",),
+            canned_responses=canned_disc,
+            default_response='{"topics": []}',
+            model_name="qwen2.5-7b-instruct",
+        )
+
+        disc_res = run_synthetic_discovery_benchmark(client=client, model_spec=spec)
+        disc_file = tmp_path / "discovery.json"
+
+        # Serializzazione con save_json_report
+        saved_path = save_json_report(disc_res, disc_file)
+        assert saved_path == disc_file
+        assert disc_file.exists()
+
+        with open(disc_file, "r", encoding="utf-8") as f:
+            loaded_disc = json.load(f)
+
+        assert loaded_disc["task"] == "OPEN_TOPIC_DISCOVERY"
+        assert loaded_disc["model_spec"]["observed_model_metadata"]["quantization"] == {
+            "name": "Q4_K_M",
+            "bits_per_weight": 4,
+        }
+
+    def test_metadata_discrepancy_quantization_dict_match(self):
+        # Valore dichiarato stringa, valore osservato dict con 'name'
+        dec = {"quantization": "Q4_K_M"}
+        obs = {"quantization": {"name": "Q4_K_M", "bits_per_weight": 4}}
+        assert metadata_values_match("quantization", dec["quantization"], obs["quantization"]) is True
+        assert check_metadata_discrepancies(dec, obs) == []
+
+        # Anche con MappingProxyType
+        obs_frozen = {"quantization": MappingProxyType({"name": "q4_k_m", "bits_per_weight": 4})}
+        assert check_metadata_discrepancies(dec, obs_frozen) == []
+
+    def test_metadata_discrepancy_quantization_mismatch(self):
+        dec = {"quantization": "Q4_K_M"}
+        obs = {"quantization": {"name": "Q8_0", "bits_per_weight": 8}}
+        assert metadata_values_match("quantization", dec["quantization"], obs["quantization"]) is False
+        disc = check_metadata_discrepancies(dec, obs)
+        assert len(disc) == 1
+        assert "quantization: dichiarato='Q4_K_M'" in disc[0]
+        assert "osservato={'name': 'Q8_0', 'bits_per_weight': 8}" in disc[0]
+
+    def test_metadata_discrepancy_parameter_size_equivalences(self):
+        # Varianti equivalenti di 7B
+        dec = {"parameter_size": "7B"}
+        for equiv in ["7b", " 7B ", "7 B", "7.0B", "7.0b", {"params_string": "7B"}, {"name": "7.0B"}]:
+            obs = {"parameter_size": equiv}
+            assert metadata_values_match("parameter_size", dec["parameter_size"], equiv) is True
+            assert check_metadata_discrepancies(dec, obs) == []
+
+        # Discrepanze reali
+        for mismatch in ["14B", "8B", "7M", "1.5B", {"params_string": "14B"}]:
+            obs = {"parameter_size": mismatch}
+            assert metadata_values_match("parameter_size", dec["parameter_size"], mismatch) is False
+            disc = check_metadata_discrepancies(dec, obs)
+            assert len(disc) == 1
+
+    def test_metadata_discrepancy_context_length_equivalences(self):
+        # Equivalenze numeriche di 8192
+        dec = {"context_length": 8192}
+        for equiv in [8192, "8192", 8192.0, " 8192 ", "8192.0", {"max_context_length": 8192}]:
+            obs = {"context_length": equiv}
+            assert metadata_values_match("context_length", dec["context_length"], equiv) is True
+            assert check_metadata_discrepancies(dec, obs) == []
+
+        # Discrepanze reali
+        for mismatch in [4096, "4096", 32768, "32768"]:
+            obs = {"context_length": mismatch}
+            assert metadata_values_match("context_length", dec["context_length"], mismatch) is False
+            disc = check_metadata_discrepancies(dec, obs)
+            assert len(disc) == 1
+
+    def test_direct_benchmark_data_with_frozen_metadata_roundtrip(self, tmp_path):
+        from core.immutability import freeze_structural
+        raw_meta = {
+            "declared_model_metadata": {
+                "quantization": "Q4_K_M",
+                "parameter_size": "7B",
+                "context_length": 8192,
+            },
+            "observed_model_metadata": {
+                "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                "parameter_size": "7B",
+                "context_length": 8192,
+            },
+            "metadata_discrepancies": ["discrepancy_1"],
+        }
+        frozen_meta = freeze_structural(raw_meta)
+        assert isinstance(frozen_meta, MappingProxyType)
+
+        benchmark_data = {
+            "benchmark_mode": "REAL_MODEL_BENCHMARK",
+            "model_spec": {
+                "family": "QWEN",
+                "model_id": "qwen2.5-7b-instruct",
+                "quantization": "Q4_K_M",
+                "parameter_size": "7B",
+                "context_length": 8192,
+                "declared_model_metadata": frozen_meta["declared_model_metadata"],
+                "observed_model_metadata": frozen_meta["observed_model_metadata"],
+                "metadata_discrepancies": frozen_meta["metadata_discrepancies"],
+            },
+            "timestamp": "2026-10-08T12:00:00Z",
+            "notice": "Test notice",
+            "results_by_strategy": {},
+        }
+
+        json_path, md_path = save_benchmark_report(benchmark_data, output_dir=tmp_path, filename_prefix="direct_frozen")
+        assert json_path.exists()
+        assert md_path.exists()
+
+        with open(json_path, "r", encoding="utf-8") as f:
+            loaded = json.load(f)
+
+        assert loaded["model_spec"]["declared_model_metadata"] == {
+            "quantization": "Q4_K_M",
+            "parameter_size": "7B",
+            "context_length": 8192,
+        }
+        assert loaded["model_spec"]["observed_model_metadata"] == {
+            "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+            "parameter_size": "7B",
+            "context_length": 8192,
+        }
+        assert loaded["model_spec"]["metadata_discrepancies"] == ["discrepancy_1"]
+
 
 
 

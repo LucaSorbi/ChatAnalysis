@@ -7,6 +7,8 @@ Test unitari per il CLI Pilot Runner ai/experiment.py:
 - Distinzione tra metadati dichiarati e osservati da get_models_detailed (Sezione H)
 - Propagazione dei bug di programmazione senza mascheramento da except Exception (Sezione F)
 """
+import json
+from types import MappingProxyType
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -202,4 +204,129 @@ class TestAiExperimentCliRunner:
 
                 with pytest.raises(AttributeError, match="Attributo mancante"):
                     main(["--model-id", "qwen2.5-1.5b-instruct", "--family", "QWEN"])
+
+    def test_lmstudio_dict_quantization_preserves_structure_no_false_discrepancy(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("RUN_LM_STUDIO_BENCHMARK", "1")
+        with patch("ai.experiment.LmStudioClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.is_available.return_value = True
+            mock_client.list_models.return_value = ("qwen2.5-7b-instruct",)
+            # LM Studio restituisce quantization come dizionario
+            mock_client.get_models_detailed.return_value = [{
+                "id": "qwen2.5-7b-instruct",
+                "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                "params_string": "7B",
+                "max_context_length": "8192",
+            }]
+            mock_client_cls.return_value = mock_client
+
+            with patch("ai.experiment.run_synthetic_benchmark") as mock_bench:
+                # Simula risultato benchmark con model_spec frozen
+                def fake_bench(*args, **kwargs):
+                    spec = kwargs["model_spec"]
+                    return {
+                        "benchmark_mode": "REAL_MODEL_BENCHMARK",
+                        "model_spec": {
+                            "model_id": spec.model_id,
+                            "family": spec.family.value,
+                            "quantization": spec.quantization,
+                            "parameter_size": spec.parameter_size,
+                            "context_length": spec.context_length,
+                            "declared_model_metadata": spec.metadata["declared_model_metadata"],
+                            "observed_model_metadata": spec.metadata["observed_model_metadata"],
+                            "metadata_discrepancies": spec.metadata["metadata_discrepancies"],
+                        },
+                        "results_by_strategy": {},
+                        "timestamp": "2026-10-08T12:00:00Z",
+                    }
+                mock_bench.side_effect = fake_bench
+
+                with patch("ai.experiment.run_synthetic_discovery_benchmark") as mock_disc:
+                    def fake_disc(*args, **kwargs):
+                        spec = kwargs["model_spec"]
+                        return {
+                            "task": "OPEN_TOPIC_DISCOVERY",
+                            "model_spec": {
+                                "model_id": spec.model_id,
+                                "declared_model_metadata": spec.metadata["declared_model_metadata"],
+                                "observed_model_metadata": spec.metadata["observed_model_metadata"],
+                            },
+                        }
+                    mock_disc.side_effect = fake_disc
+
+                    ret = main([
+                        "--model-id", "qwen2.5-7b-instruct",
+                        "--family", "QWEN",
+                        "--quantization", "Q4_K_M",
+                        "--parameter-size", "7B",
+                        "--context-length", "8192",
+                        "--output-dir", str(tmp_path),
+                    ])
+                    assert ret == 0
+
+                    called_spec = mock_bench.call_args[1]["model_spec"]
+                    # Verifica che quantization osservata NON sia stata convertita in stringa
+                    obs_q = called_spec.metadata["observed_model_metadata"]["quantization"]
+                    assert isinstance(obs_q, MappingProxyType)
+                    assert dict(obs_q) == {"name": "Q4_K_M", "bits_per_weight": 4}
+                    # Nessuna discrepanza
+                    assert list(called_spec.metadata["metadata_discrepancies"]) == []
+
+                    # Verifica che entrambi i file JSON siano stati scritti e leggibili
+                    bench_json = tmp_path / "real_benchmark_qwen2.5-7b-instruct.json"
+                    disc_json = tmp_path / "real_discovery_qwen2.5-7b-instruct.json"
+                    assert bench_json.exists()
+                    assert disc_json.exists()
+
+                    with open(bench_json, "r", encoding="utf-8") as f:
+                        bench_data = json.load(f)
+                    assert bench_data["model_spec"]["observed_model_metadata"]["quantization"] == {
+                        "name": "Q4_K_M",
+                        "bits_per_weight": 4,
+                    }
+
+                    with open(disc_json, "r", encoding="utf-8") as f:
+                        disc_data = json.load(f)
+                    assert disc_data["model_spec"]["observed_model_metadata"]["quantization"] == {
+                        "name": "Q4_K_M",
+                        "bits_per_weight": 4,
+                    }
+
+    def test_lmstudio_dict_quantization_detects_real_mismatch(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("RUN_LM_STUDIO_BENCHMARK", "1")
+        with patch("ai.experiment.LmStudioClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.is_available.return_value = True
+            mock_client.list_models.return_value = ("qwen2.5-7b-instruct",)
+            # Restituisce Q8_0 quando dichiarato è Q4_K_M
+            mock_client.get_models_detailed.return_value = [{
+                "id": "qwen2.5-7b-instruct",
+                "quantization": {"name": "Q8_0", "bits_per_weight": 8},
+                "params_string": "7B",
+                "max_context_length": "8192",
+            }]
+            mock_client_cls.return_value = mock_client
+
+            with patch("ai.experiment.run_synthetic_benchmark") as mock_bench:
+                mock_bench.return_value = {
+                    "benchmark_mode": "REAL_MODEL_BENCHMARK",
+                    "model_spec": {"model_id": "qwen2.5-7b-instruct"},
+                    "results_by_strategy": {},
+                }
+                with patch("ai.experiment.run_synthetic_discovery_benchmark") as mock_disc:
+                    mock_disc.return_value = {"task": "OPEN_TOPIC_DISCOVERY"}
+
+                    ret = main([
+                        "--model-id", "qwen2.5-7b-instruct",
+                        "--family", "QWEN",
+                        "--quantization", "Q4_K_M",
+                        "--output-dir", str(tmp_path),
+                    ])
+                    assert ret == 0
+
+                    called_spec = mock_bench.call_args[1]["model_spec"]
+                    discrepancies = list(called_spec.metadata["metadata_discrepancies"])
+                    assert len(discrepancies) == 1
+                    assert "quantization: dichiarato='Q4_K_M'" in discrepancies[0]
+                    assert "Q8_0" in discrepancies[0]
 
