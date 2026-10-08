@@ -330,3 +330,125 @@ class TestAiExperimentCliRunner:
                     assert "quantization: dichiarato='Q4_K_M'" in discrepancies[0]
                     assert "Q8_0" in discrepancies[0]
 
+    def test_lmstudio_real_benchmark_context_separation_and_notices(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("RUN_LM_STUDIO_BENCHMARK", "1")
+        with patch("ai.experiment.LmStudioClient") as mock_client_cls:
+            mock_client = MagicMock()
+            mock_client.is_available.return_value = True
+            mock_client.list_models.return_value = ("qwen2.5-7b-instruct",)
+            # Modello reale Qwen con max_context_length = 32768
+            mock_client.get_models_detailed.return_value = [{
+                "id": "qwen2.5-7b-instruct",
+                "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                "params_string": "7B",
+                "max_context_length": "32768",
+            }]
+            mock_client_cls.return_value = mock_client
+
+            with patch("ai.experiment.run_synthetic_benchmark") as mock_bench:
+                def fake_bench(*args, **kwargs):
+                    spec = kwargs["model_spec"]
+                    return {
+                        "benchmark_mode": "REAL_MODEL_BENCHMARK",
+                        "model_spec": {
+                            "model_id": spec.model_id,
+                            "family": spec.family.value,
+                            "quantization": spec.quantization,
+                            "parameter_size": spec.parameter_size,
+                            "context_length": spec.context_length,
+                            "runtime_context_length": spec.runtime_context_length,
+                            "max_context_length": spec.max_context_length,
+                            "declared_model_metadata": spec.metadata["declared_model_metadata"],
+                            "observed_model_metadata": spec.metadata["observed_model_metadata"],
+                            "metadata_discrepancies": spec.metadata["metadata_discrepancies"],
+                        },
+                        "timestamp": "2026-10-08T15:00:00Z",
+                        "notice": "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio.",
+                        "results_by_strategy": {},
+                    }
+                mock_bench.side_effect = fake_bench
+
+                with patch("ai.experiment.run_synthetic_discovery_benchmark") as mock_disc:
+                    def fake_disc(*args, **kwargs):
+                        spec = kwargs["model_spec"]
+                        return {
+                            "benchmark_mode": "REAL_MODEL_BENCHMARK",
+                            "task": "OPEN_TOPIC_DISCOVERY",
+                            "model_spec": {
+                                "model_id": spec.model_id,
+                                "family": spec.family.value,
+                                "quantization": spec.quantization,
+                                "parameter_size": spec.parameter_size,
+                                "context_length": spec.context_length,
+                                "runtime_context_length": spec.runtime_context_length,
+                                "max_context_length": spec.max_context_length,
+                                "declared_model_metadata": spec.metadata["declared_model_metadata"],
+                                "observed_model_metadata": spec.metadata["observed_model_metadata"],
+                                "metadata_discrepancies": spec.metadata["metadata_discrepancies"],
+                            },
+                            "timestamp": "2026-10-08T15:00:00Z",
+                            "notice": "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio.",
+                            "metrics": {"attempted_runs": 4, "completed_runs": 4},
+                            "runs": [],
+                        }
+                    mock_disc.side_effect = fake_disc
+
+                    ret = main([
+                        "--model-id", "qwen2.5-7b-instruct",
+                        "--family", "QWEN",
+                        "--quantization", "Q4_K_M",
+                        "--parameter-size", "7B",
+                        "--context-length", "8192",
+                        "--output-dir", str(tmp_path),
+                    ])
+                    assert ret == 0
+
+                    called_spec = mock_bench.call_args[1]["model_spec"]
+
+                    # 1. Distinzione runtime_context_length (8192) vs max_context_length (32768)
+                    assert called_spec.runtime_context_length == 8192
+                    assert called_spec.context_length == 8192
+                    assert called_spec.max_context_length == 32768
+                    assert called_spec.metadata["declared_model_metadata"]["runtime_context_length"] == 8192
+                    assert called_spec.metadata["observed_model_metadata"]["max_context_length"] == 32768
+
+                    # 2. Nessuna discrepancy generata tra 8192 e 32768
+                    assert list(called_spec.metadata["metadata_discrepancies"]) == []
+
+                    # 3. Oggetti immutabili originali preservati
+                    from types import MappingProxyType
+                    assert isinstance(called_spec.metadata, MappingProxyType)
+                    assert isinstance(called_spec.metadata["observed_model_metadata"]["quantization"], MappingProxyType)
+
+                    # 4. JSON files scritti e leggibili con json.load
+                    bench_json = tmp_path / "real_benchmark_qwen2.5-7b-instruct.json"
+                    bench_md = tmp_path / "real_benchmark_qwen2.5-7b-instruct.md"
+                    disc_json = tmp_path / "real_discovery_qwen2.5-7b-instruct.json"
+
+                    assert bench_json.exists()
+                    assert bench_md.exists()
+                    assert disc_json.exists()
+
+                    with open(bench_json, "r", encoding="utf-8") as f:
+                        b_data = json.load(f)
+                    assert b_data["model_spec"]["runtime_context_length"] == 8192
+                    assert b_data["model_spec"]["max_context_length"] == 32768
+                    assert b_data["model_spec"]["observed_model_metadata"]["quantization"] == {
+                        "name": "Q4_K_M",
+                        "bits_per_weight": 4,
+                    }
+
+                    with open(disc_json, "r", encoding="utf-8") as f:
+                        d_data = json.load(f)
+                    assert d_data["model_spec"]["runtime_context_length"] == 8192
+                    assert d_data["model_spec"]["max_context_length"] == 32768
+
+                    # 5. Markdown report mostra chiaramente runtime e max context separati e nota corretta
+                    md_text = bench_md.read_text(encoding="utf-8")
+                    assert "**Contesto Runtime Benchmark**: 8192 token" in md_text
+                    assert "**Capacità Massima Modello (Max Context)**: 32768 token" in md_text
+                    assert "Fake client" not in md_text
+                    assert "Benchmark eseguito tramite modello locale reale su LM Studio." in md_text
+                    assert "Campione sperimentale pilota non generalizzabile statisticamente." in md_text
+
+

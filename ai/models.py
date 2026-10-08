@@ -49,6 +49,8 @@ class ExperimentModelSpec:
     quantization: str | None = None
     parameter_size: str | None = None
     context_length: int | None = None
+    runtime_context_length: int | None = None
+    max_context_length: int | None = None
     metadata: Mapping[str, Any] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
@@ -56,6 +58,15 @@ class ExperimentModelSpec:
             object.__setattr__(self, "family", ModelFamily(self.family))
         if not isinstance(self.model_id, str) or not self.model_id.strip():
             raise ValueError("model_id deve essere una stringa non vuota")
+
+        # Sincronizza context_length e runtime_context_length per retrocompatibilità e rigore semantico
+        rtl = self.runtime_context_length
+        cl = self.context_length
+        if rtl is None and cl is not None:
+            object.__setattr__(self, "runtime_context_length", cl)
+        elif cl is None and rtl is not None:
+            object.__setattr__(self, "context_length", rtl)
+
         object.__setattr__(self, "metadata", freeze_structural(self.metadata))
 
 

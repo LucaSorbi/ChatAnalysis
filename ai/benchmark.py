@@ -613,13 +613,18 @@ def run_synthetic_benchmark(
     declared_meta = model_spec.metadata.get("declared_model_metadata", {
         "quantization": model_spec.quantization,
         "parameter_size": model_spec.parameter_size,
-        "context_length": model_spec.context_length,
+        "runtime_context_length": getattr(model_spec, "runtime_context_length", model_spec.context_length),
     })
     observed_meta = model_spec.metadata.get("observed_model_metadata", {
         "quantization": None,
         "parameter_size": None,
-        "context_length": None,
+        "max_context_length": getattr(model_spec, "max_context_length", None),
     })
+
+    if is_fake:
+        notice = "Campione sperimentale pilota non generalizzabile statisticamente. I risultati ottenuti con Fake client non costituiscono inferenza reale sui pesi."
+    else:
+        notice = "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio."
 
     return {
         "benchmark_mode": benchmark_mode,
@@ -629,13 +634,15 @@ def run_synthetic_benchmark(
             "quantization": model_spec.quantization,
             "parameter_size": model_spec.parameter_size,
             "context_length": model_spec.context_length,
+            "runtime_context_length": getattr(model_spec, "runtime_context_length", model_spec.context_length),
+            "max_context_length": getattr(model_spec, "max_context_length", None) or (observed_meta.get("max_context_length") if isinstance(observed_meta, Mapping) else None),
             "declared_model_metadata": declared_meta,
             "observed_model_metadata": observed_meta,
             "metadata_discrepancies": model_spec.metadata.get("metadata_discrepancies", []),
         },
         "timestamp": runtime_timestamp,
         "sample_type": "pilot_synthetic_non_sensitive",
-        "notice": "Campione sperimentale pilota non generalizzabile statisticamente. I risultati ottenuti con Fake client non costituiscono inferenza reale sui pesi.",
+        "notice": notice,
         "results_by_strategy": results_by_strategy,
         "results_by_language": by_language_summary,
     }
@@ -766,13 +773,18 @@ def run_synthetic_discovery_benchmark(
     declared_meta = model_spec.metadata.get("declared_model_metadata", {
         "quantization": model_spec.quantization,
         "parameter_size": model_spec.parameter_size,
-        "context_length": model_spec.context_length,
+        "runtime_context_length": getattr(model_spec, "runtime_context_length", model_spec.context_length),
     })
     observed_meta = model_spec.metadata.get("observed_model_metadata", {
         "quantization": None,
         "parameter_size": None,
-        "context_length": None,
+        "max_context_length": getattr(model_spec, "max_context_length", None),
     })
+
+    if is_fake:
+        notice = "Campione sperimentale pilota non generalizzabile statisticamente. I risultati ottenuti con Fake client non costituiscono inferenza reale sui pesi."
+    else:
+        notice = "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio."
 
     return {
         "benchmark_mode": benchmark_mode,
@@ -783,11 +795,14 @@ def run_synthetic_discovery_benchmark(
             "quantization": model_spec.quantization,
             "parameter_size": model_spec.parameter_size,
             "context_length": model_spec.context_length,
+            "runtime_context_length": getattr(model_spec, "runtime_context_length", model_spec.context_length),
+            "max_context_length": getattr(model_spec, "max_context_length", None) or (observed_meta.get("max_context_length") if isinstance(observed_meta, Mapping) else None),
             "declared_model_metadata": declared_meta,
             "observed_model_metadata": observed_meta,
             "metadata_discrepancies": model_spec.metadata.get("metadata_discrepancies", []),
         },
         "timestamp": runtime_timestamp,
+        "notice": notice,
         "manual_review_status": "NOT_REVIEWED",
         "metrics": {
             "attempted_runs": attempted_runs,
@@ -856,7 +871,7 @@ def _normalize_context_length(val: Any) -> Any:
     if val is None:
         return None
     if isinstance(val, Mapping):
-        for candidate_key in ("max_context_length", "context_length", "value", "length"):
+        for candidate_key in ("max_context_length", "runtime_context_length", "context_length", "value", "length"):
             if candidate_key in val and val[candidate_key] is not None:
                 val = val[candidate_key]
                 break
@@ -888,7 +903,7 @@ def metadata_values_match(key: str, dec_v: Any, obs_v: Any) -> bool:
     if key == "parameter_size":
         return _normalize_parameter_size(dec_v) == _normalize_parameter_size(obs_v)
 
-    if key == "context_length":
+    if key in ("context_length", "runtime_context_length", "max_context_length"):
         return _normalize_context_length(dec_v) == _normalize_context_length(obs_v)
 
     return str(dec_v).strip().lower() == str(obs_v).strip().lower()
@@ -899,15 +914,38 @@ def check_metadata_discrepancies(
     observed_metadata: Mapping[str, Any],
 ) -> list[str]:
     """
-    Confronta i metadati dichiarati e osservati per quantization, parameter_size e context_length.
-    Restituisce una lista di stringhe descrittive per ciascuna discrepanza rilevata.
+    Confronta i metadati dichiarati e osservati per quantization, parameter_size,
+    runtime_context_length e max_context_length.
+    Garantisce che runtime_context_length e max_context_length restino concetti distinti
+    e non vengano mai confrontati direttamente tra loro.
     """
     discrepancies: list[str] = []
-    for k in ("quantization", "parameter_size", "context_length"):
+
+    # 1. Quantization e Parameter Size
+    for k in ("quantization", "parameter_size"):
         dec_v = declared_metadata.get(k)
         obs_v = observed_metadata.get(k)
         if dec_v is not None and obs_v is not None and not metadata_values_match(k, dec_v, obs_v):
             discrepancies.append(f"{k}: dichiarato={dec_v!r}, osservato={obs_v!r}")
+
+    # 2. Runtime Context Length (confronto solo tra grandezze omogenee di runtime)
+    dec_rtc = declared_metadata.get("runtime_context_length")
+    obs_rtc = observed_metadata.get("observed_runtime_context_length") or observed_metadata.get("runtime_context_length")
+    if dec_rtc is not None and obs_rtc is not None and not metadata_values_match("runtime_context_length", dec_rtc, obs_rtc):
+        discrepancies.append(f"runtime_context_length: dichiarato={dec_rtc!r}, osservato={obs_rtc!r}")
+
+    # 3. Max Context Length (confronto solo tra grandezze omogenee di capacità massima)
+    dec_max = declared_metadata.get("max_context_length")
+    obs_max = observed_metadata.get("max_context_length")
+    if dec_max is not None and obs_max is not None and not metadata_values_match("max_context_length", dec_max, obs_max):
+        discrepancies.append(f"max_context_length: dichiarato={dec_max!r}, osservato={obs_max!r}")
+
+    # 4. Campo generico legacy context_length (solo se entrambi valorizzati e non differenziati)
+    dec_ctx = declared_metadata.get("context_length")
+    obs_ctx = observed_metadata.get("context_length")
+    if dec_ctx is not None and obs_ctx is not None and not metadata_values_match("context_length", dec_ctx, obs_ctx):
+        discrepancies.append(f"context_length: dichiarato={dec_ctx!r}, osservato={obs_ctx!r}")
+
     return discrepancies
 
 
@@ -1015,13 +1053,47 @@ def save_benchmark_report(
         quant_display = quant_display.get("name", str(quant_display))
     quant_display = quant_display or "N/D"
 
+    declared_meta = spec.get("declared_model_metadata") or {}
+    observed_meta = spec.get("observed_model_metadata") or {}
+
+    runtime_ctx = (
+        spec.get("runtime_context_length")
+        or (declared_meta.get("runtime_context_length") if isinstance(declared_meta, Mapping) else None)
+        or spec.get("context_length")
+        or (declared_meta.get("context_length") if isinstance(declared_meta, Mapping) else None)
+    )
+    max_ctx = (
+        spec.get("max_context_length")
+        or (observed_meta.get("max_context_length") if isinstance(observed_meta, Mapping) else None)
+    )
+    runtime_ctx_display = f"{runtime_ctx} token" if runtime_ctx is not None else "N/D"
+    max_ctx_display = f"{max_ctx} token" if max_ctx is not None else "N/D"
+
+    obs_q = observed_meta.get("quantization") if isinstance(observed_meta, Mapping) else None
+    if isinstance(obs_q, Mapping) and obs_q.get("bits_per_weight") is not None:
+        quant_header_str = f"`{quant_display}` ({obs_q.get('bits_per_weight')}-bit)"
+    else:
+        quant_header_str = f"`{quant_display}`"
+
+    benchmark_mode = benchmark_data.get("benchmark_mode")
+    notice = benchmark_data.get("notice")
+    if not notice:
+        if benchmark_mode == "REAL_MODEL_BENCHMARK":
+            notice = "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio."
+        else:
+            notice = "Campione sperimentale pilota non generalizzabile statisticamente. I risultati ottenuti con Fake client non costituiscono inferenza reale sui pesi."
+    elif benchmark_mode == "REAL_MODEL_BENCHMARK" and "Fake client" in notice:
+        notice = "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio."
+
     md_lines = [
         "# Benchmark Sperimentale AI Locale — Topic Detection Multilingue",
         "",
-        f"**Modalità**: `{benchmark_data.get('benchmark_mode')}`  ",
-        f"**Modello**: `{spec.get('model_id')}` (Famiglia: `{spec.get('family')}`, Quant: `{quant_display}`)  ",
+        f"**Modalità**: `{benchmark_mode}`  ",
+        f"**Modello**: `{spec.get('model_id')}` (Famiglia: `{spec.get('family')}`, Quant: {quant_header_str})  ",
+        f"**Contesto Runtime Benchmark**: {runtime_ctx_display}  ",
+        f"**Capacità Massima Modello (Max Context)**: {max_ctx_display}  ",
         f"**Data e Ora (UTC)**: {benchmark_data.get('timestamp')}  ",
-        f"**Avviso**: {benchmark_data.get('notice')}  ",
+        f"**Avviso**: {notice}  ",
         "",
         "## 1. Metriche per Strategia Linguistica (Confronto Primario su Latenza End-to-End)",
         "",

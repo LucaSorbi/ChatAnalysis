@@ -687,6 +687,161 @@ class TestBenchmarkSerializationAndMetadata:
         }
         assert loaded["model_spec"]["metadata_discrepancies"] == ["discrepancy_1"]
 
+    def test_notice_fake_vs_real_benchmark(self, tmp_path):
+        # 1. Benchmark con Fake client produce avviso sul fake client
+        fake_spec = ExperimentModelSpec(
+            family=ModelFamily.QWEN,
+            model_id="qwen-fake",
+            context_length=8192,
+        )
+        fake_client = FakeLocalLlmClient(model_name="qwen-fake")
+        fake_bench_res = run_synthetic_benchmark(client=fake_client, model_spec=fake_spec)
+        assert "Fake client" in fake_bench_res["notice"]
+        assert "Campione sperimentale pilota non generalizzabile statisticamente." in fake_bench_res["notice"]
+
+        _, fake_md = save_benchmark_report(fake_bench_res, output_dir=tmp_path, filename_prefix="fake_report")
+        fake_md_text = fake_md.read_text(encoding="utf-8")
+        assert "Fake client" in fake_md_text
+        assert "Campione sperimentale pilota non generalizzabile statisticamente." in fake_md_text
+
+        # 2. Benchmark con client reale / REAL_MODEL_BENCHMARK non contiene avviso fake ma LM Studio reale
+        real_bench_data = {
+            "benchmark_mode": "REAL_MODEL_BENCHMARK",
+            "model_spec": {
+                "family": "QWEN",
+                "model_id": "qwen2.5-7b-instruct",
+                "quantization": "Q4_K_M",
+                "parameter_size": "7B",
+                "runtime_context_length": 8192,
+                "max_context_length": 32768,
+                "declared_model_metadata": {
+                    "quantization": "Q4_K_M",
+                    "parameter_size": "7B",
+                    "runtime_context_length": 8192,
+                },
+                "observed_model_metadata": {
+                    "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                    "parameter_size": "7B",
+                    "max_context_length": 32768,
+                },
+                "metadata_discrepancies": [],
+            },
+            "timestamp": "2026-10-08T15:00:00Z",
+            "notice": "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio.",
+            "results_by_strategy": {},
+        }
+        json_real, md_real = save_benchmark_report(real_bench_data, output_dir=tmp_path, filename_prefix="real_report")
+        md_real_text = md_real.read_text(encoding="utf-8")
+        assert "Fake client" not in md_real_text
+        assert "Benchmark eseguito tramite modello locale reale su LM Studio." in md_real_text
+        assert "Campione sperimentale pilota non generalizzabile statisticamente." in md_real_text
+
+        # 3. Discovery con fake vs real notice
+        fake_disc_res = run_synthetic_discovery_benchmark(client=fake_client, model_spec=fake_spec)
+        assert "Fake client" in fake_disc_res["notice"]
+
+    def test_context_distinction_runtime_vs_max_no_discrepancy(self):
+        # runtime_context_length = 8192 e max_context_length = 32768 rappresentano grandezze diverse
+        # Non devono essere considerate equivalenti e NON devono generare discrepancy
+        declared = {
+            "quantization": "Q4_K_M",
+            "parameter_size": "7B",
+            "runtime_context_length": 8192,
+        }
+        observed = {
+            "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+            "parameter_size": "7B",
+            "max_context_length": 32768,
+        }
+        discrepancies = check_metadata_discrepancies(declared, observed)
+        assert discrepancies == []
+
+    def test_runtime_context_real_discrepancy_detected(self):
+        # Se invece LM Studio espone un runtime context diverso da quello dichiarato, deve rilevare discrepancy
+        declared = {
+            "runtime_context_length": 8192,
+        }
+        observed = {
+            "observed_runtime_context_length": 4096,
+            "max_context_length": 32768,
+        }
+        discrepancies = check_metadata_discrepancies(declared, observed)
+        assert len(discrepancies) == 1
+        assert "runtime_context_length" in discrepancies[0]
+        assert "8192" in discrepancies[0]
+        assert "4096" in discrepancies[0]
+
+    def test_markdown_report_displays_runtime_and_max_context_separately(self, tmp_path):
+        from core.immutability import freeze_structural
+        spec_meta = freeze_structural({
+            "declared_model_metadata": {
+                "quantization": "Q4_K_M",
+                "parameter_size": "7B",
+                "runtime_context_length": 8192,
+            },
+            "observed_model_metadata": {
+                "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                "parameter_size": "7B",
+                "max_context_length": 32768,
+            },
+            "metadata_discrepancies": [],
+        })
+
+        spec = ExperimentModelSpec(
+            family=ModelFamily.QWEN,
+            model_id="qwen2.5-7b-instruct",
+            quantization="Q4_K_M",
+            parameter_size="7B",
+            runtime_context_length=8192,
+            max_context_length=32768,
+            metadata=spec_meta,
+        )
+
+        assert spec.runtime_context_length == 8192
+        assert spec.context_length == 8192
+        assert spec.max_context_length == 32768
+
+        bench_data = {
+            "benchmark_mode": "REAL_MODEL_BENCHMARK",
+            "model_spec": {
+                "family": spec.family.value,
+                "model_id": spec.model_id,
+                "quantization": spec.quantization,
+                "parameter_size": spec.parameter_size,
+                "runtime_context_length": spec.runtime_context_length,
+                "max_context_length": spec.max_context_length,
+                "declared_model_metadata": spec.metadata["declared_model_metadata"],
+                "observed_model_metadata": spec.metadata["observed_model_metadata"],
+                "metadata_discrepancies": spec.metadata["metadata_discrepancies"],
+            },
+            "timestamp": "2026-10-08T15:00:00Z",
+            "notice": "Campione sperimentale pilota non generalizzabile statisticamente. Benchmark eseguito tramite modello locale reale su LM Studio.",
+            "results_by_strategy": {},
+        }
+
+        json_path, md_path = save_benchmark_report(bench_data, output_dir=tmp_path, filename_prefix="ctx_report")
+        assert json_path.exists()
+        assert md_path.exists()
+
+        md_content = md_path.read_text(encoding="utf-8")
+        assert "**Contesto Runtime Benchmark**: 8192 token" in md_content
+        assert "**Capacità Massima Modello (Max Context)**: 32768 token" in md_content
+        assert "Quant: `Q4_K_M` (4-bit)" in md_content
+        assert "Fake client" not in md_content
+        assert "Benchmark eseguito tramite modello locale reale su LM Studio." in md_content
+
+        with open(json_path, "r", encoding="utf-8") as f:
+            loaded_json = json.load(f)
+        assert loaded_json["model_spec"]["runtime_context_length"] == 8192
+        assert loaded_json["model_spec"]["max_context_length"] == 32768
+        assert loaded_json["model_spec"]["declared_model_metadata"]["runtime_context_length"] == 8192
+        assert loaded_json["model_spec"]["observed_model_metadata"]["max_context_length"] == 32768
+        assert loaded_json["model_spec"]["observed_model_metadata"]["quantization"] == {
+            "name": "Q4_K_M",
+            "bits_per_weight": 4,
+        }
+
+
 
 
 

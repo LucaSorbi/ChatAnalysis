@@ -127,7 +127,10 @@ def discover_models_on_client(client: BaseLocalLlmClient) -> ModelDiscoveryRepor
 
         quant = d_meta.get("quantization")
         param_size = d_meta.get("params_string") or d_meta.get("parameter_size")
-        ctx = d_meta.get("max_context_length")
+        max_ctx = d_meta.get("max_context_length")
+        runtime_ctx = d_meta.get("runtime_context_length") or d_meta.get("loaded_context_length")
+        parsed_max = int(max_ctx) if max_ctx and str(max_ctx).isdigit() else None
+        parsed_run = int(runtime_ctx) if runtime_ctx and str(runtime_ctx).isdigit() else None
 
         specs.append(
             ExperimentModelSpec(
@@ -135,7 +138,9 @@ def discover_models_on_client(client: BaseLocalLlmClient) -> ModelDiscoveryRepor
                 model_id=mid,
                 quantization=str(quant) if quant else None,
                 parameter_size=str(param_size) if param_size else None,
-                context_length=int(ctx) if ctx and str(ctx).isdigit() else None,
+                context_length=parsed_run or parsed_max,
+                runtime_context_length=parsed_run,
+                max_context_length=parsed_max,
                 metadata={k: v for k, v in d_meta.items() if k not in ("id", "key")},
             )
         )

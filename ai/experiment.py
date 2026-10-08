@@ -72,7 +72,7 @@ def parse_args(args: list[str] | None = None) -> argparse.Namespace:
         "--context-length",
         type=int,
         default=None,
-        help="Lunghezza massima del contesto in token.",
+        help="Lunghezza del contesto di runtime per il benchmark (es. 8192 token).",
     )
     parser.add_argument(
         "--base-url",
@@ -183,16 +183,18 @@ def main(cli_args: list[str] | None = None) -> int:
             return 1
 
     # 5. Distinzione Metadati Dichiarati vs Osservati (SEZIONE H)
+    # runtime_context_length: contesto effettivamente configurato ed utilizzato nel benchmark (CLI --context-length)
+    # max_context_length: capacità massima supportata dal modello secondo le specifiche osservate dal backend
     declared_metadata = {
         "quantization": args.quantization,
         "parameter_size": args.parameter_size,
-        "context_length": args.context_length,
+        "runtime_context_length": args.context_length,
     }
 
     observed_metadata: dict[str, Any] = {
         "quantization": None,
         "parameter_size": None,
-        "context_length": None,
+        "max_context_length": None,
     }
 
     discrepancies: list[str] = []
@@ -203,16 +205,27 @@ def main(cli_args: list[str] | None = None) -> int:
             if isinstance(d, dict) and (d.get("id") == args.model_id or d.get("key") == args.model_id):
                 obs_q = d.get("quantization")
                 obs_p = d.get("params_string") or d.get("parameter_size")
-                obs_c = d.get("max_context_length") or d.get("context_length")
+                obs_max_c = d.get("max_context_length") or d.get("context_length")
+                obs_run_c = d.get("runtime_context_length") or d.get("loaded_context_length")
+
                 observed_metadata["quantization"] = obs_q if obs_q is not None else None
                 observed_metadata["parameter_size"] = obs_p if obs_p is not None else None
-                if obs_c is not None:
-                    if isinstance(obs_c, (int, float)) and float(obs_c).is_integer():
-                        observed_metadata["context_length"] = int(obs_c)
-                    elif isinstance(obs_c, str) and obs_c.strip().isdigit():
-                        observed_metadata["context_length"] = int(obs_c.strip())
+
+                if obs_max_c is not None:
+                    if isinstance(obs_max_c, (int, float)) and float(obs_max_c).is_integer():
+                        observed_metadata["max_context_length"] = int(obs_max_c)
+                    elif isinstance(obs_max_c, str) and obs_max_c.strip().isdigit():
+                        observed_metadata["max_context_length"] = int(obs_max_c.strip())
                     else:
-                        observed_metadata["context_length"] = obs_c
+                        observed_metadata["max_context_length"] = obs_max_c
+
+                if obs_run_c is not None:
+                    if isinstance(obs_run_c, (int, float)) and float(obs_run_c).is_integer():
+                        observed_metadata["observed_runtime_context_length"] = int(obs_run_c)
+                    elif isinstance(obs_run_c, str) and obs_run_c.strip().isdigit():
+                        observed_metadata["observed_runtime_context_length"] = int(obs_run_c.strip())
+                    else:
+                        observed_metadata["observed_runtime_context_length"] = obs_run_c
                 break
     except AiBackendError:
         pass
@@ -228,6 +241,8 @@ def main(cli_args: list[str] | None = None) -> int:
         quantization=args.quantization,
         parameter_size=args.parameter_size,
         context_length=args.context_length,
+        runtime_context_length=args.context_length,
+        max_context_length=observed_metadata.get("max_context_length"),
         metadata={
             "declared_model_metadata": declared_metadata,
             "observed_model_metadata": observed_metadata,
