@@ -62,20 +62,47 @@ class HardwareProfile:
         return tiers
 
 
-def probe_local_hardware() -> HardwareProfile:
+def _parse_meminfo_content(content: str) -> dict[str, int]:
     """
-    Rileva le risorse hardware del sistema locale senza richiedere privilegi amministrativi.
+    Effettua il parsing del contenuto testuale di /proc/meminfo.
+    Converte tutti i valori numerici in byte.
     """
-    os_name = f"{platform.system()} {platform.release()} ({platform.platform()})"
-    arch = platform.machine()
-    proc = platform.processor() or "Sconosciuto"
-    py_ver = sys.version.split()[0]
+    result: dict[str, int] = {}
+    for line in content.splitlines():
+        line = line.strip()
+        if not line or ":" not in line:
+            continue
+        key, _, rest = line.partition(":")
+        key = key.strip()
+        parts = rest.strip().split()
+        if not parts:
+            continue
+        try:
+            val = int(parts[0])
+        except ValueError:
+            continue
+        unit = parts[1].lower() if len(parts) > 1 else "kb"
+        if unit == "kb":
+            multiplier = 1024
+        elif unit == "mb":
+            multiplier = 1024**2
+        elif unit == "gb":
+            multiplier = 1024**3
+        elif unit == "b":
+            multiplier = 1
+        else:
+            multiplier = 1024
+        result[key] = val * multiplier
+    return result
 
+
+def _probe_ram_windows() -> tuple[float, float]:
+    """
+    Rileva RAM totale e disponibile su Windows tramite GlobalMemoryStatusEx.
+    """
     total_ram = 0.0
     avail_ram = 0.0
-
-    # Rilevamento RAM su Windows tramite GlobalMemoryStatusEx
-    if platform.system() == "Windows":
+    try:
         class MEMORYSTATUSEX(ctypes.Structure):
             _fields_ = [
                 ("dwLength", ctypes.c_uint32),
@@ -89,37 +116,218 @@ def probe_local_hardware() -> HardwareProfile:
                 ("ullAvailExtendedVirtual", ctypes.c_uint64),
             ]
 
+        stat = MEMORYSTATUSEX()
+        stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
+        if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
+            total_ram = round(stat.ullTotalPhys / (1024**3), 2)
+            avail_ram = round(stat.ullAvailPhys / (1024**3), 2)
+    except Exception:
+        pass
+    return total_ram, avail_ram
+
+
+def _probe_gpu_windows() -> tuple[str | None, float | None]:
+    """
+    Rileva GPU su Windows senza privilegi amministrativi tramite PowerShell/CIM.
+    """
+    gpu_name: str | None = None
+    gpu_ram_mb: float | None = None
+    try:
+        cmd = [
+            "powershell", "-NoProfile", "-Command",
+            "Get-CimInstance Win32_VideoController | Select-Object -Property Name, AdapterRAM | ConvertTo-Csv -NoTypeInformation",
+        ]
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=4.0)
+        if p.returncode == 0 and p.stdout:
+            lines = [line.strip() for line in p.stdout.strip().splitlines() if line.strip()]
+            if len(lines) >= 2:
+                row = lines[1].replace('"', '').split(",")
+                if len(row) >= 2:
+                    gpu_name = row[0]
+                    try:
+                        gpu_ram_mb = round(float(row[1]) / (1024**2), 1)
+                    except (ValueError, IndexError):
+                        pass
+    except Exception:
+        pass
+    return gpu_name, gpu_ram_mb
+
+
+def _probe_ram_linux(meminfo_path: str = "/proc/meminfo") -> tuple[float, float]:
+    """
+    Rileva RAM totale e disponibile su Linux senza privilegi amministrativi.
+    Sorgente primaria: /proc/meminfo (MemTotal e MemAvailable).
+    Fallback per RAM totale: os.sysconf (SC_PHYS_PAGES * SC_PAGE_SIZE).
+    Fallback per RAM disponibile: MemFree + Buffers + Cached o SC_AVPHYS_PAGES.
+    """
+    total_ram = 0.0
+    avail_ram = 0.0
+
+    # 1. Lettura /proc/meminfo
+    try:
+        if os.path.exists(meminfo_path):
+            with open(meminfo_path, "r", encoding="utf-8", errors="replace") as f:
+                content = f.read()
+            info = _parse_meminfo_content(content)
+            if "MemTotal" in info:
+                total_ram = round(info["MemTotal"] / (1024**3), 2)
+            if "MemAvailable" in info:
+                avail_ram = round(info["MemAvailable"] / (1024**3), 2)
+            elif "MemFree" in info:
+                free_b = info.get("MemFree", 0) + info.get("Buffers", 0) + info.get("Cached", 0)
+                if free_b > 0:
+                    avail_ram = round(free_b / (1024**3), 2)
+    except Exception:
+        pass
+
+    # 2. Fallback tramite os.sysconf
+    if total_ram <= 0.0 and hasattr(os, "sysconf"):
         try:
-            stat = MEMORYSTATUSEX()
-            stat.dwLength = ctypes.sizeof(MEMORYSTATUSEX)
-            if ctypes.windll.kernel32.GlobalMemoryStatusEx(ctypes.byref(stat)):
-                total_ram = round(stat.ullTotalPhys / (1024**3), 2)
-                avail_ram = round(stat.ullAvailPhys / (1024**3), 2)
-        except Exception:
+            pages = os.sysconf("SC_PHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            if isinstance(pages, int) and isinstance(page_size, int) and pages > 0 and page_size > 0:
+                total_ram = round((pages * page_size) / (1024**3), 2)
+        except (ValueError, OSError, AttributeError):
             pass
 
+    if avail_ram <= 0.0 and hasattr(os, "sysconf"):
+        try:
+            av_pages = os.sysconf("SC_AVPHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            if isinstance(av_pages, int) and isinstance(page_size, int) and av_pages > 0 and page_size > 0:
+                avail_ram = round((av_pages * page_size) / (1024**3), 2)
+        except (ValueError, OSError, AttributeError):
+            pass
+
+    return total_ram, avail_ram
+
+
+def _probe_gpu_linux() -> tuple[str | None, float | None]:
+    """
+    Rileva GPU dedicata NVIDIA tramite nvidia-smi in modalità non privilegiata.
+    Se nvidia-smi non è disponibile o fallisce, degrada restituendo (None, None).
+    """
+    cmd = ["nvidia-smi", "--query-gpu=name,memory.total", "--format=csv,noheader,nounits"]
+    try:
+        p = subprocess.run(cmd, capture_output=True, text=True, timeout=3.0)
+        if p.returncode == 0 and p.stdout:
+            lines = [line.strip() for line in p.stdout.strip().splitlines() if line.strip()]
+            if lines:
+                parts = [part.strip() for part in lines[0].split(",")]
+                if len(parts) >= 2:
+                    name = parts[0]
+                    try:
+                        ram_mb = round(float(parts[1]), 1)
+                        return name, ram_mb
+                    except (ValueError, IndexError):
+                        return name, None
+                elif len(parts) == 1 and parts[0]:
+                    return parts[0], None
+    except (FileNotFoundError, PermissionError, subprocess.TimeoutExpired, subprocess.SubprocessError, OSError):
+        pass
+    except Exception:
+        pass
+
+    return None, None
+
+
+def _probe_ram_darwin() -> tuple[float, float]:
+    """
+    Rileva RAM totale e disponibile su macOS (Darwin) tramite sysctl/sysconf/vm_stat.
+    """
+    total_ram = 0.0
+    avail_ram = 0.0
+
+    try:
+        p = subprocess.run(["sysctl", "-n", "hw.memsize"], capture_output=True, text=True, timeout=2.0)
+        if p.returncode == 0 and p.stdout.strip().isdigit():
+            total_ram = round(int(p.stdout.strip()) / (1024**3), 2)
+    except Exception:
+        pass
+
+    if total_ram <= 0.0 and hasattr(os, "sysconf"):
+        try:
+            pages = os.sysconf("SC_PHYS_PAGES")
+            page_size = os.sysconf("SC_PAGE_SIZE")
+            if isinstance(pages, int) and isinstance(page_size, int) and pages > 0 and page_size > 0:
+                total_ram = round((pages * page_size) / (1024**3), 2)
+        except (ValueError, OSError, AttributeError):
+            pass
+
+    try:
+        p = subprocess.run(["vm_stat"], capture_output=True, text=True, timeout=2.0)
+        if p.returncode == 0 and p.stdout:
+            lines = p.stdout.splitlines()
+            page_size = 4096
+            if lines and "page size of" in lines[0]:
+                try:
+                    page_size = int(lines[0].split("page size of")[1].split()[0])
+                except Exception:
+                    page_size = 4096
+            stats: dict[str, int] = {}
+            for line in lines[1:]:
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    val_str = v.strip().rstrip(".")
+                    if val_str.isdigit():
+                        stats[k.strip()] = int(val_str)
+            free_pages = stats.get("Pages free", 0) + stats.get("Pages inactive", 0)
+            if free_pages > 0:
+                avail_ram = round((free_pages * page_size) / (1024**3), 2)
+    except Exception:
+        pass
+
+    return total_ram, avail_ram
+
+
+def _probe_gpu_darwin() -> tuple[str | None, float | None]:
+    """
+    Rileva GPU su macOS tramite system_profiler SPDisplaysDataType.
+    """
+    try:
+        p = subprocess.run(["system_profiler", "SPDisplaysDataType"], capture_output=True, text=True, timeout=3.0)
+        if p.returncode == 0 and p.stdout:
+            for line in p.stdout.splitlines():
+                if "Chipset Model:" in line:
+                    model = line.split("Chipset Model:", 1)[1].strip()
+                    if model:
+                        return model, None
+    except Exception:
+        pass
+    return None, None
+
+
+def probe_local_hardware() -> HardwareProfile:
+    """
+    Rileva le risorse hardware del sistema locale senza richiedere privilegi amministrativi.
+    Supporta Windows, Linux e macOS in modo portabile e offline.
+    """
+    system = platform.system()
+    os_name = f"{system} {platform.release()} ({platform.platform()})"
+    arch = platform.machine()
+    proc = platform.processor() or "Sconosciuto"
+    py_ver = sys.version.split()[0]
+
+    total_ram = 0.0
+    avail_ram = 0.0
     gpu_name: str | None = None
     gpu_ram_mb: float | None = None
 
-    # Rilevamento GPU su Windows senza privilegi
-    if platform.system() == "Windows":
-        try:
-            cmd = ["powershell", "-NoProfile", "-Command",
-                   "Get-CimInstance Win32_VideoController | Select-Object -Property Name, AdapterRAM | ConvertTo-Csv -NoTypeInformation"]
-            p = subprocess.run(cmd, capture_output=True, text=True, timeout=4)
-            if p.returncode == 0:
-                lines = [line.strip() for line in p.stdout.strip().splitlines() if line.strip()]
-                if len(lines) >= 2:
-                    # Prima riga header, seconda riga valori
-                    row = lines[1].replace('"', '').split(",")
-                    if len(row) >= 2:
-                        gpu_name = row[0]
-                        try:
-                            gpu_ram_mb = round(float(row[1]) / (1024**2), 1)
-                        except (ValueError, IndexError):
-                            pass
-        except Exception:
-            pass
+    if system == "Windows":
+        total_ram, avail_ram = _probe_ram_windows()
+        gpu_name, gpu_ram_mb = _probe_gpu_windows()
+        if gpu_name is None:
+            gpu_name, gpu_ram_mb = _probe_gpu_linux()
+    elif system == "Linux":
+        total_ram, avail_ram = _probe_ram_linux()
+        gpu_name, gpu_ram_mb = _probe_gpu_linux()
+    elif system == "Darwin":
+        total_ram, avail_ram = _probe_ram_darwin()
+        gpu_name, gpu_ram_mb = _probe_gpu_darwin()
+    else:
+        # Fallback generico per altri sistemi operativi POSIX
+        total_ram, avail_ram = _probe_ram_linux()
+        gpu_name, gpu_ram_mb = _probe_gpu_linux()
 
     return HardwareProfile(
         os_name=os_name,
@@ -131,3 +339,4 @@ def probe_local_hardware() -> HardwareProfile:
         gpu_name=gpu_name,
         gpu_adapter_ram_mb=gpu_ram_mb,
     )
+
