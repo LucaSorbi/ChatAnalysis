@@ -38,6 +38,7 @@ from importer.base import BaseImporter
 from importer.cellebrite_csv import CellebriteCsvImporter
 from importer.cellebrite_json import CellebriteJsonImporter
 from importer.cellebrite_xml import CellebriteXmlImporter
+from importer.whatsapp_export import WhatsAppExportImporter
 from importer.whatsapp_msgstore import WhatsAppMsgstoreImporter
 from importer.whatsapp_wa import WhatsAppWaDbImporter
 from multimodal.evidence import MessageEvidenceBundle
@@ -99,6 +100,8 @@ def get_importer_for_format(source_format: SourceFormat | str) -> BaseImporter:
         return CellebriteJsonImporter()
     elif fmt_val == SourceFormat.CELLEBRITE_XML.value:
         return CellebriteXmlImporter()
+    elif fmt_val == SourceFormat.WHATSAPP_EXPORT.value:
+        return WhatsAppExportImporter()
     else:
         raise UnsupportedSourceFormatError(f"Formato sorgente non supportato: {fmt_val}")
 

@@ -13,14 +13,26 @@ Principi architetturali:
 """
 from __future__ import annotations
 
+import hashlib
+import re
 from typing import Iterable, Mapping, Optional, Sequence
 
+from ai.backend import (
+    AiBackendProtocolError,
+    AiModelNotSpecifiedError,
+    BaseLlmClient,
+    LmStudioUnavailableError,
+)
+from ai.lmstudio import LmStudioClient
 from ai.models import (
+    AnalysisLanguageStrategy,
     ConversationEvidenceDocument,
     TopicDecision,
     TopicDetectionResult,
     TopicDiscoveryResult,
+    TopicQuery,
 )
+from ai.topics import TopicDetectionAnalyzer
 from multimodal.evidence import EvidenceSourceType, TextEvidenceSection
 from search.models import (
     EvidenceSearchHit,
@@ -303,4 +315,100 @@ def get_system_status_info(streamlit_version: str) -> dict[str, str]:
         "embeddings": "NOT IMPLEMENTED (nessun embedding o vector database)",
         "real_file_ingestion": "INTEGRATED (WhatsApp msgstore, wa.db, Cellebrite CSV, JSON, XML)",
     }
+
+
+def build_topic_query(
+    label: str,
+    description: str | None = None,
+    topic_id: str | None = None,
+) -> TopicQuery:
+    """
+    Costruisce un TopicQuery deterministico e validato.
+    Se description è vuota o None, viene utilizzata la label come descrizione.
+    Se topic_id non è specificato, viene generato un identificativo deterministico basato su slug e hash.
+    """
+    if not isinstance(label, str) or not label.strip():
+        raise ValueError("L'argomento (label) deve essere una stringa non vuota.")
+
+    clean_label = label.strip()
+    if description is not None and isinstance(description, str) and description.strip():
+        clean_desc = description.strip()
+    else:
+        clean_desc = clean_label
+
+    if not topic_id:
+        slug = re.sub(r"[^a-zA-Z0-9_]+", "_", clean_label.lower()).strip("_")[:24] or "topic"
+        h = hashlib.sha256(f"{clean_label}::{clean_desc}".encode("utf-8")).hexdigest()[:8]
+        topic_id = f"custom_{slug}_{h}"
+
+    return TopicQuery(topic_id=topic_id, label=clean_label, description=clean_desc)
+
+
+def check_lm_studio_status(
+    base_url: str = "http://127.0.0.1:1234",
+    client: BaseLlmClient | None = None,
+) -> tuple[bool, tuple[str, ...], str | None]:
+    """
+    Verifica la disponibilità di LM Studio locale ed elenca i modelli disponibili.
+    Restituisce (is_available, models_tuple, error_message).
+    """
+    target_client = client or LmStudioClient(base_url=base_url)
+    try:
+        if hasattr(target_client, "is_available"):
+            if not target_client.is_available():
+                return False, (), f"LM Studio non raggiungibile su {base_url}."
+        if hasattr(target_client, "list_models"):
+            models = target_client.list_models()
+            return True, tuple(models), None
+        return True, (), None
+    except (LmStudioUnavailableError, AiBackendProtocolError, OSError) as exc:
+        return False, (), f"Errore di connessione a LM Studio: {exc}"
+    except Exception as exc:
+        return False, (), f"Errore durante l'interrogazione di LM Studio: {exc}"
+
+
+def execute_manual_topic_detection(
+    document: ConversationEvidenceDocument,
+    topic: TopicQuery,
+    client: BaseLlmClient | None = None,
+    model_id: str | None = None,
+    base_url: str = "http://127.0.0.1:1234",
+    strategy: AnalysisLanguageStrategy = AnalysisLanguageStrategy.DIRECT_MULTILINGUAL,
+    temperature: float = 0.0,
+    seed: int | None = 42,
+    timeout_seconds: float = 30.0,
+) -> TopicDetectionResult:
+    """
+    Esegue una vera inferenza di Topic Detection sulla conversazione corrente
+    utilizzando il motore esistente TopicDetectionAnalyzer e il client LM Studio locale.
+    """
+    target_client = client or LmStudioClient(base_url=base_url, model_id=model_id)
+
+    # Risoluzione del modello target
+    target_model = model_id
+    if not target_model:
+        if hasattr(target_client, "model_id") and target_client.model_id:
+            target_model = target_client.model_id
+        elif hasattr(target_client, "list_models"):
+            models = target_client.list_models()
+            if models:
+                target_model = models[0]
+                if hasattr(target_client, "model_id"):
+                    target_client.model_id = target_model
+            else:
+                raise AiModelNotSpecifiedError("Nessun modello caricato o disponibile in LM Studio.")
+        else:
+            raise AiModelNotSpecifiedError("Nessun model_id specificato per l'inferenza.")
+
+    analyzer = TopicDetectionAnalyzer(client=target_client, default_model_id=target_model)
+    return analyzer.detect_topic(
+        document=document,
+        topic=topic,
+        strategy=strategy,
+        model_id=target_model,
+        temperature=temperature,
+        seed=seed,
+        timeout_seconds=timeout_seconds,
+    )
+
 

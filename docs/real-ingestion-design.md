@@ -7,16 +7,17 @@ Il modulo **Real File Ingestion** costituisce il ponte sicuro, disaccoppiato e r
 L'integrazione consente alla UI di operare direttamente sui formati sorgente reali supportati dagli importer approvati del progetto:
 1. **WhatsApp msgstore SQLite** (`WhatsAppMsgstoreImporter`, `msgstore_db`)
 2. **WhatsApp wa.db SQLite** (`WhatsAppWaDbImporter`, `wa_db`)
-3. **Cellebrite CSV** (`CellebriteCsvImporter`, `cellebrite_csv`)
-4. **Cellebrite JSON** (`CellebriteJsonImporter`, `cellebrite_json`)
-5. **Cellebrite XML** (`CellebriteXmlImporter`, `cellebrite_xml`)
+3. **WhatsApp export chat (TXT / ZIP)** (`WhatsAppExportImporter`, `whatsapp_export`)
+4. **Cellebrite CSV** (`CellebriteCsvImporter`, `cellebrite_csv`)
+5. **Cellebrite JSON** (`CellebriteJsonImporter`, `cellebrite_json`)
+6. **Cellebrite XML** (`CellebriteXmlImporter`, `cellebrite_xml`)
 
 L'intero ciclo di elaborazione rispetta la sequenza canonica approvata:
 ```
 UPLOAD IN MEMORIA
   → ISOLAMENTO SANDBOX VOLATILE (tempfile.TemporaryDirectory)
   → HASHING STREAMING SHA-256
-  → PREFLIGHT SIGNATURE CHECK (SQLite)
+  → PREFLIGHT SIGNATURE CHECK (SQLite o ZIP/TXT)
   → DISPATCH ESPLICITO IMPORTER
   → RawRecord STREAM
   → VALIDAZIONE (RecordValidator)
@@ -39,6 +40,7 @@ Nessuna auto-detection euristica o silenziosa è consentita. La selezione del fo
 | :--- | :--- | :--- | :--- |
 | `WHATSAPP_MSGSTORE` | `WhatsAppMsgstoreImporter` | SQLite `msgstore.db` | Messaggi, chat, allegati metadata |
 | `WHATSAPP_WA` | `WhatsAppWaDbImporter` | SQLite `wa.db` | Contatti / identità (AUXILIARY_ONLY) |
+| `WHATSAPP_EXPORT` | `WhatsAppExportImporter` | Export TXT o archivio ZIP | Messaggi chat WhatsApp, timeline, allegati |
 | `CELLEBRITE_CSV` | `CellebriteCsvImporter` | CSV `messages.csv` | Record di messaggistica tabellare |
 | `CELLEBRITE_JSON` | `CellebriteJsonImporter` | JSON strutturato | Messaggi estratti da report Cellebrite |
 | `CELLEBRITE_XML` | `CellebriteXmlImporter` | XML report Cellebrite | Messaggi XML (partizione UNRESOLVED) |

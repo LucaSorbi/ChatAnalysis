@@ -437,3 +437,119 @@ class TestKeyFromMeTriState:
         assert norm.actor_to is None
         assert norm.raw_record.raw_fields["key_from_me"] == "UNKNOWN"
 
+
+# ---------------------------------------------------------------------------
+# Test Normalizzazione WhatsApp Export (TXT / ZIP)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestWhatsAppExportNormalization:
+
+    def test_timestamp_naive_unknown(self, normalizer):
+        rec = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"raw_timestamp": "12/09/2026, 14:35"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.timestamp.status == TimestampTzStatus.NAIVE_UNKNOWN
+        assert norm.timestamp.naive_datetime == datetime(2026, 9, 12, 14, 35)
+        assert norm.timestamp.iso_string == "2026-09-12T14:35:00"
+        assert norm.timestamp.raw_value == "12/09/2026, 14:35"
+
+    def test_timestamp_ios_brackets(self, normalizer):
+        rec = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"raw_timestamp": "[12/09/2026, 14:35:12]"},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.timestamp.status == TimestampTzStatus.NAIVE_UNKNOWN
+        assert norm.timestamp.naive_datetime == datetime(2026, 9, 12, 14, 35, 12)
+
+    def test_timestamp_absent_or_invalid(self, normalizer):
+        rec_empty = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"raw_timestamp": ""},
+        )
+        assert normalizer.normalize(make_val_result(rec_empty)).timestamp.status == TimestampTzStatus.ABSENT
+
+        rec_invalid = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"raw_timestamp": "invalid_date_xyz"},
+        )
+        assert normalizer.normalize(make_val_result(rec_invalid)).timestamp.status == TimestampTzStatus.ABSENT
+
+    def test_actor_from_regular_sender(self, normalizer):
+        rec = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"sender": "Mario Rossi", "is_system_message": False},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.actor_from is not None
+        assert norm.actor_from.raw_value == "Mario Rossi"
+        assert norm.actor_to is None
+
+    def test_actor_from_system_message(self, normalizer):
+        rec = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"sender": None, "is_system_message": True},
+        )
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.actor_from is None
+        assert norm.actor_to is None
+
+    def test_chat_id_extraction(self, normalizer):
+        rec_default = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"chat_id": "chat_1"},
+        )
+        assert normalizer.normalize(make_val_result(rec_default)).chat_id == "chat_1"
+
+    def test_message_type_taxonomy(self, normalizer):
+        rec_text = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"text": "Ciao", "attachment_name": None, "is_system_message": False},
+        )
+        assert normalizer.normalize(make_val_result(rec_text)).message_type == CanonicalMessageType.TEXT
+
+        rec_sys = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"text": "Crittografati", "is_system_message": True},
+        )
+        assert normalizer.normalize(make_val_result(rec_sys)).message_type == CanonicalMessageType.SYSTEM
+
+        rec_img = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"text": "Foto", "attachment_name": "foto.jpg", "is_system_message": False},
+        )
+        assert normalizer.normalize(make_val_result(rec_img)).message_type == CanonicalMessageType.IMAGE
+
+        rec_aud = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"text": "Audio", "attachment_name": "nota.opus", "is_system_message": False},
+        )
+        assert normalizer.normalize(make_val_result(rec_aud)).message_type == CanonicalMessageType.AUDIO
+
+        rec_vid = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"text": "Video", "attachment_name": "clip.mp4", "is_system_message": False},
+        )
+        assert normalizer.normalize(make_val_result(rec_vid)).message_type == CanonicalMessageType.VIDEO
+
+        rec_doc = make_raw_record(
+            "whatsapp_export",
+            raw_fields={"text": "Documento", "attachment_name": "file.pdf", "is_system_message": False},
+        )
+        assert normalizer.normalize(make_val_result(rec_doc)).message_type == CanonicalMessageType.OTHER
+
+    def test_deleted_is_none(self, normalizer):
+        rec = make_raw_record("whatsapp_export", raw_fields={})
+        norm = normalizer.normalize(make_val_result(rec))
+        assert norm.is_deleted is None
+        assert norm.raw_deleted is None
+
+    def test_multiline_text_content_extracted(self, normalizer):
+        body = "Riga 1\nRiga 2\nRiga 3"
+        rec = make_raw_record("whatsapp_export", raw_fields={"text": body})
+        assert normalizer.normalize(make_val_result(rec)).text_content == body
+
+

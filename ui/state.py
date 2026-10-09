@@ -43,6 +43,11 @@ KEY_REAL_INGESTION_RESULT = "real_ingestion_result"
 KEY_AVAILABLE_DOCUMENTS = "available_documents"
 KEY_SELECTED_DOCUMENT_ID = "selected_document_id"
 KEY_INGESTION_SUMMARY = "ingestion_summary"
+KEY_CUSTOM_TOPIC_LABEL = "custom_topic_label"
+KEY_CUSTOM_TOPIC_DESCRIPTION = "custom_topic_description"
+KEY_LAST_MANUAL_DETECTION = "last_manual_detection"
+KEY_LM_STUDIO_CLIENT = "lm_studio_client"
+KEY_LM_STUDIO_MODEL = "lm_studio_model"
 
 
 def _get_target_state(state: MutableMapping[str, Any] | None = None) -> MutableMapping[str, Any]:
@@ -76,6 +81,16 @@ def init_session_state(state: MutableMapping[str, Any] | None = None) -> None:
         target[KEY_SELECTED_DOCUMENT_ID] = None
     if KEY_INGESTION_SUMMARY not in target:
         target[KEY_INGESTION_SUMMARY] = None
+    if KEY_CUSTOM_TOPIC_LABEL not in target:
+        target[KEY_CUSTOM_TOPIC_LABEL] = ""
+    if KEY_CUSTOM_TOPIC_DESCRIPTION not in target:
+        target[KEY_CUSTOM_TOPIC_DESCRIPTION] = ""
+    if KEY_LAST_MANUAL_DETECTION not in target:
+        target[KEY_LAST_MANUAL_DETECTION] = None
+    if KEY_LM_STUDIO_CLIENT not in target:
+        target[KEY_LM_STUDIO_CLIENT] = None
+    if KEY_LM_STUDIO_MODEL not in target:
+        target[KEY_LM_STUDIO_MODEL] = None
 
 
 def is_dataset_loaded(state: MutableMapping[str, Any] | None = None) -> bool:
@@ -204,6 +219,9 @@ def reset_dataset(state: MutableMapping[str, Any] | None = None) -> None:
     target[KEY_AVAILABLE_DOCUMENTS] = {}
     target[KEY_SELECTED_DOCUMENT_ID] = None
     target[KEY_INGESTION_SUMMARY] = None
+    target[KEY_CUSTOM_TOPIC_LABEL] = ""
+    target[KEY_CUSTOM_TOPIC_DESCRIPTION] = ""
+    target[KEY_LAST_MANUAL_DETECTION] = None
 
 
 def get_real_ingestion_result(
@@ -305,4 +323,129 @@ def select_conversation(
     )
     target[KEY_SELECTED_EVIDENCE_ID] = None
     return True
+
+
+def get_custom_topic_label(state: MutableMapping[str, Any] | None = None) -> str:
+    """Restituisce il valore corrente per il campo argomento libero."""
+    target = _get_target_state(state)
+    return str(target.get(KEY_CUSTOM_TOPIC_LABEL, ""))
+
+
+def set_custom_topic_label(
+    label: str,
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Imposta il valore del campo argomento libero."""
+    target = _get_target_state(state)
+    target[KEY_CUSTOM_TOPIC_LABEL] = label
+
+
+def get_custom_topic_description(state: MutableMapping[str, Any] | None = None) -> str:
+    """Restituisce la descrizione opzionale del topic."""
+    target = _get_target_state(state)
+    return str(target.get(KEY_CUSTOM_TOPIC_DESCRIPTION, ""))
+
+
+def set_custom_topic_description(
+    description: str,
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Imposta la descrizione opzionale del topic."""
+    target = _get_target_state(state)
+    target[KEY_CUSTOM_TOPIC_DESCRIPTION] = description
+
+
+def get_last_manual_detection(
+    state: MutableMapping[str, Any] | None = None,
+) -> Optional[TopicDetectionResult]:
+    """Restituisce il risultato dell'ultima Topic Detection manuale eseguita."""
+    target = _get_target_state(state)
+    return target.get(KEY_LAST_MANUAL_DETECTION, None)
+
+
+def set_last_manual_detection(
+    result: Optional[TopicDetectionResult],
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Memorizza il risultato dell'ultima Topic Detection manuale eseguita."""
+    target = _get_target_state(state)
+    target[KEY_LAST_MANUAL_DETECTION] = result
+
+
+def get_lm_studio_client(
+    state: MutableMapping[str, Any] | None = None,
+) -> Any:
+    """Restituisce l'eventuale client LM Studio custom/iniettato per test."""
+    target = _get_target_state(state)
+    return target.get(KEY_LM_STUDIO_CLIENT, None)
+
+
+def set_lm_studio_client(
+    client: Any,
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Imposta o inietta un client LM Studio per la sessione (usato nei test o per override)."""
+    target = _get_target_state(state)
+    target[KEY_LM_STUDIO_CLIENT] = client
+
+
+def get_lm_studio_model(
+    state: MutableMapping[str, Any] | None = None,
+) -> Optional[str]:
+    """Restituisce il model_id LM Studio configurato per la sessione."""
+    target = _get_target_state(state)
+    return target.get(KEY_LM_STUDIO_MODEL, None)
+
+
+def set_lm_studio_model(
+    model_id: Optional[str],
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Imposta il model_id LM Studio configurato per la sessione."""
+    target = _get_target_state(state)
+    target[KEY_LM_STUDIO_MODEL] = model_id
+
+
+def add_detection_result(
+    result: TopicDetectionResult,
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """
+    Aggiunge un risultato di Topic Detection alla sessione corrente,
+    sostituendo eventuali risultati preesistenti con lo stesso topic_id
+    (o stessa coppia label/provenance) per evitare duplicati identici,
+    e sincronizza deterministicamente il SearchService senza alterare
+    il ConversationEvidenceDocument originale.
+    """
+    target = _get_target_state(state)
+    current = list(get_detection_results(state))
+
+    existing_idx = None
+    for idx, r in enumerate(current):
+        if r.topic.topic_id == result.topic.topic_id:
+            existing_idx = idx
+            break
+        if (
+            r.topic.label == result.topic.label
+            and r.provenance_document_id == result.provenance_document_id
+        ):
+            existing_idx = idx
+            break
+
+    if existing_idx is not None:
+        current[existing_idx] = result
+    else:
+        current.insert(0, result)
+
+    target[KEY_DETECTION_RESULTS] = tuple(current)
+
+    doc = get_conversation_document(state)
+    discoveries = get_discovery_results(state)
+    if doc is not None:
+        target[KEY_SEARCH_SERVICE] = SearchService(
+            document=doc,
+            detection_results=tuple(current),
+            discovery_results=discoveries,
+        )
+
 

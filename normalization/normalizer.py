@@ -21,6 +21,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from datetime import datetime, timezone
+from pathlib import Path
+import re
 from typing import Any
 
 from normalization.base import BaseNormalizer
@@ -33,6 +35,59 @@ from normalization.models import (
 )
 from normalization.phone import canonicalize_phone_syntax
 from validation.models import ValidationResult
+
+
+def _parse_whatsapp_timestamp(raw_str: str) -> datetime | None:
+    """
+    Esegue parsing conservativo dei timestamp esportati da WhatsApp (Android e iOS).
+    Supporta date D/M/Y, M/D/Y (quando rilevabile), Y/M/D, anni a 2 o 4 cifre,
+    separatori /, -, ., orari a 24h e a 12h AM/PM con secondi opzionali.
+    Non assume fusi orari arbitrari: restituisce datetime naive.
+    """
+    clean = raw_str.strip().lstrip("[").rstrip("]").strip()
+    clean = re.sub(r"[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]", "", clean)
+    clean = re.sub(r"[\u202f\xa0]", " ", clean)
+    clean = re.sub(r"\s+", " ", clean).strip()
+
+    fmts = (
+        "%d/%m/%Y, %H:%M:%S", "%d/%m/%Y, %H:%M",
+        "%d/%m/%y, %H:%M:%S", "%d/%m/%y, %H:%M",
+        "%d/%m/%Y, %I:%M:%S %p", "%d/%m/%Y, %I:%M %p",
+        "%d/%m/%y, %I:%M:%S %p", "%d/%m/%y, %I:%M %p",
+        "%d/%m/%Y %H:%M:%S", "%d/%m/%Y %H:%M",
+        "%d/%m/%y %H:%M:%S", "%d/%m/%y %H:%M",
+        "%d/%m/%Y %I:%M:%S %p", "%d/%m/%Y %I:%M %p",
+        "%d/%m/%y %I:%M:%S %p", "%d/%m/%y %I:%M %p",
+        "%d.%m.%Y, %H:%M:%S", "%d.%m.%Y, %H:%M",
+        "%d.%m.%y, %H:%M:%S", "%d.%m.%y, %H:%M",
+        "%d.%m.%Y %H:%M:%S", "%d.%m.%Y %H:%M",
+        "%d.%m.%y %H:%M:%S", "%d.%m.%y %H:%M",
+        "%d-%m-%Y, %H:%M:%S", "%d-%m-%Y, %H:%M",
+        "%d-%m-%y, %H:%M:%S", "%d-%m-%y, %H:%M",
+        "%Y-%m-%d, %H:%M:%S", "%Y-%m-%d, %H:%M",
+        "%Y-%m-%d %H:%M:%S", "%Y-%m-%d %H:%M",
+        "%Y/%m/%d, %H:%M:%S", "%Y/%m/%d, %H:%M",
+        "%m/%d/%Y, %I:%M:%S %p", "%m/%d/%Y, %I:%M %p",
+        "%m/%d/%y, %I:%M:%S %p", "%m/%d/%y, %I:%M %p",
+        "%m/%d/%Y, %H:%M:%S", "%m/%d/%Y, %H:%M",
+        "%m/%d/%y, %H:%M:%S", "%m/%d/%y, %H:%M",
+    )
+    for fmt in fmts:
+        try:
+            return datetime.strptime(clean, fmt)
+        except ValueError:
+            pass
+
+    try:
+        from dateutil import parser as dt_parser
+        dt = dt_parser.parse(clean, dayfirst=True)
+        if dt.tzinfo is not None:
+            dt = dt.replace(tzinfo=None)
+        return dt
+    except Exception:
+        pass
+
+    return None
 
 
 class RecordNormalizer(BaseNormalizer):
@@ -194,6 +249,23 @@ class RecordNormalizer(BaseNormalizer):
             except ValueError:
                 return NormalizedTimestamp(status=TimestampTzStatus.ABSENT, raw_value=raw_ts)
 
+        elif source_name == "whatsapp_export":
+            raw_ts = raw.get("raw_timestamp")
+            if raw_ts is None or (isinstance(raw_ts, str) and not raw_ts.strip()):
+                return NormalizedTimestamp(status=TimestampTzStatus.ABSENT, raw_value=raw_ts)
+
+            ts_str = str(raw_ts).strip()
+            dt = _parse_whatsapp_timestamp(ts_str)
+            if dt is not None:
+                # Timezone sconosciuto / locale: NON inventare UTC o Europe/Rome
+                return NormalizedTimestamp(
+                    status=TimestampTzStatus.NAIVE_UNKNOWN,
+                    naive_datetime=dt,
+                    iso_string=dt.isoformat(),
+                    raw_value=raw_ts,
+                )
+            return NormalizedTimestamp(status=TimestampTzStatus.ABSENT, raw_value=raw_ts)
+
         # Sorgenti prive di timestamp per-record (es. wa_db rubrica)
         return NormalizedTimestamp(status=TimestampTzStatus.ABSENT, raw_value=None)
 
@@ -267,6 +339,15 @@ class RecordNormalizer(BaseNormalizer):
             actor_from = self._normalize_single_actor(raw_sender)
             return actor_from, None
 
+        elif source_name == "whatsapp_export":
+            if record_type != "message":
+                return None, None
+            if raw.get("is_system_message"):
+                return None, None
+            sender = raw.get("sender")
+            actor_from = self._normalize_single_actor(sender)
+            return actor_from, None
+
         return None, None
 
     def _extract_chat_id(
@@ -285,6 +366,9 @@ class RecordNormalizer(BaseNormalizer):
         elif source_name == "cellebrite_csv":
             val = raw.get("ChatId")
             return str(val).strip() if val is not None and str(val).strip() else None
+        elif source_name == "whatsapp_export":
+            val = raw.get("chat_id")
+            return str(val).strip() if val is not None and str(val).strip() else "chat_1"
         return None
 
     def _normalize_single_actor(self, val: Any) -> NormalizedActor | None:
@@ -366,6 +450,8 @@ class RecordNormalizer(BaseNormalizer):
                 if k == "Deleted" or k.endswith("}Deleted"):
                     raw_del = v
                     break
+        elif source_name == "whatsapp_export":
+            return None, None
 
         if raw_del is None:
             return None, None
@@ -446,6 +532,25 @@ class RecordNormalizer(BaseNormalizer):
             # Assenza di evidenza tipologica != TEXT certo -> UNKNOWN, raw_message_type=None.
             return CanonicalMessageType.UNKNOWN, None
 
+        elif source_name == "whatsapp_export":
+            if raw.get("is_system_message"):
+                return CanonicalMessageType.SYSTEM, "system"
+
+            att = raw.get("attachment_name") or raw.get("media_reference")
+            if att and isinstance(att, str):
+                ext = Path(att).suffix.lower()
+                if ext in (".jpg", ".jpeg", ".png", ".webp", ".gif"):
+                    return CanonicalMessageType.IMAGE, "attachment:image"
+                elif ext in (".opus", ".mp3", ".wav", ".ogg", ".m4a", ".aac"):
+                    return CanonicalMessageType.AUDIO, "attachment:audio"
+                elif ext in (".mp4", ".3gp", ".mov", ".mkv", ".avi", ".3gpp"):
+                    return CanonicalMessageType.VIDEO, "attachment:video"
+                elif ext in (".pdf", ".docx", ".doc", ".xlsx", ".xls", ".txt", ".vcf"):
+                    return CanonicalMessageType.OTHER, "attachment:document"
+                return CanonicalMessageType.OTHER, "attachment:other"
+
+            return CanonicalMessageType.TEXT, "text"
+
         return CanonicalMessageType.UNKNOWN, None
 
     # ------------------------------------------------------------------
@@ -479,6 +584,10 @@ class RecordNormalizer(BaseNormalizer):
 
         elif source_name == "wa_db":
             val = raw.get("status")
+            return str(val) if val is not None else None
+
+        elif source_name == "whatsapp_export":
+            val = raw.get("text")
             return str(val) if val is not None else None
 
         return None

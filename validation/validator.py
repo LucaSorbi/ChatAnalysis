@@ -52,6 +52,8 @@ class RecordValidator(BaseValidator):
             self._validate_whatsapp_msgstore(record, issues)
         elif record.source_name == "wa_db":
             self._validate_whatsapp_wa(record, issues)
+        elif record.source_name == "whatsapp_export":
+            self._validate_whatsapp_export(record, issues)
 
         return ValidationResult(record=record, issues=tuple(issues))
 
@@ -211,5 +213,29 @@ class RecordValidator(BaseValidator):
                     source_name=record.source_name,
                     source_record_id=record.source_record_id,
                     field_path="jid",
+                )
+            )
+
+    # ------------------------------------------------------------------
+    # Regole WhatsApp Export (TXT / ZIP)
+    # ------------------------------------------------------------------
+
+    def _validate_whatsapp_export(self, record: RawRecord, issues: list[ValidationIssue]) -> None:
+        """
+        Regole di validazione per esportazioni WhatsApp (TXT / ZIP).
+
+        Segnala warning non bloccanti se il timestamp è assente o vuoto.
+        """
+        raw = record.raw_fields
+        ts = raw.get("raw_timestamp")
+        if ts is None or (isinstance(ts, str) and not ts.strip()):
+            issues.append(
+                ValidationIssue(
+                    code="WHATSAPP_EXPORT_EMPTY_TIMESTAMP",
+                    severity=ValidationSeverity.WARNING,
+                    message="Il record WhatsApp export presenta un raw_timestamp vuoto o non specificato.",
+                    source_name=record.source_name,
+                    source_record_id=record.source_record_id,
+                    field_path="raw_timestamp",
                 )
             )

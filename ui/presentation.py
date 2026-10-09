@@ -18,10 +18,24 @@ from __future__ import annotations
 
 import streamlit as st
 
+from ai.backend import (
+    AiBackendProtocolError,
+    AiBackendRequestError,
+    AiBackendTimeoutError,
+    AiBackendUnavailableError,
+    AiInvalidEvidenceCitationError,
+    AiModelMismatchError,
+    AiModelNotSpecifiedError,
+    AiStructuredOutputError,
+    LmStudioUnavailableError,
+)
 from ai.models import TopicDecision
 from search.models import MatchMode
 from ui import state
 from ui.application import (
+    build_topic_query,
+    check_lm_studio_status,
+    execute_manual_topic_detection,
     execute_evidence_search,
     execute_real_ingestion,
     filter_evidence_sections,
@@ -208,9 +222,15 @@ def render_import() -> None:
     )
     source_format = SourceFormat(source_format_str)
 
+    if source_format == SourceFormat.WHATSAPP_EXPORT:
+        primary_types = ["txt", "zip"]
+        st.caption("Export chat creato direttamente da WhatsApp, con o senza media.")
+    else:
+        primary_types = ["db", "sqlite", "csv", "json", "xml"]
+
     uploaded_file = st.file_uploader(
         f"Seleziona file primario ({source_format.value})",
-        type=["db", "sqlite", "csv", "json", "xml"],
+        type=primary_types,
         help="Il file viene elaborato esclusivamente in spazio temporaneo locale isolato con cleanup deterministico.",
         key="primary_file_uploader",
     )
@@ -500,18 +520,172 @@ def render_topics() -> None:
             "L'analisi AI non è stata eseguita in questa fase.\n\n"
             "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
         )
+        if state.get_conversation_document() is None:
+            return
+
+    doc = state.get_conversation_document()
+    if doc is None:
+        st.info("Nessuna conversazione attiva per l'analisi.")
         return
 
     service = state.get_search_service()
     if service is None:
-        st.warning("SearchService non disponibile.")
-        return
+        service = SearchService(
+            document=doc,
+            detection_results=state.get_detection_results(),
+            discovery_results=state.get_discovery_results(),
+        )
 
     tab_det, tab_disc = st.tabs(["Topic Detection (Verifica Mirata)", "Topic Discovery (Argomenti Emersi)"])
 
     with tab_det:
-        st.subheader("Verifica Mirata dei Topic Predeterminati")
-        st.caption("Risultati dell'analisi locale sui topic investigativi predefiniti.")
+        # ==================================================
+        # AREA 1: Verifica un argomento
+        # ==================================================
+        st.subheader("🎯 Area 1: Verifica un argomento")
+        st.caption(
+            "Verifica la presenza di un argomento a scelta nella conversazione corrente "
+            "eseguendo un'analisi tramite il motore locale TopicDetectionAnalyzer (LM Studio)."
+        )
+
+        col_in1, col_in2 = st.columns([2, 1])
+        with col_in1:
+            topic_input = st.text_input(
+                "Argomento:",
+                value=state.get_custom_topic_label(),
+                placeholder="Es. Organizzazione di incontri riservati",
+                key="manual_topic_input",
+            )
+        with col_in2:
+            model_input = st.text_input(
+                "Modello LM Studio locale (opzionale):",
+                value=state.get_lm_studio_model() or "",
+                placeholder="Lascia vuoto per default",
+                key="manual_model_input",
+            )
+
+        desc_input = st.text_area(
+            "Descrizione opzionale:",
+            value=state.get_custom_topic_description(),
+            placeholder="Descrizione o dettagli specifici del topic da ricercare...",
+            height=70,
+            key="manual_desc_input",
+        )
+
+        run_detection_btn = st.button("🚀 Esegui Topic Detection", type="primary", key="btn_run_manual_detection")
+
+        if run_detection_btn:
+            if not topic_input.strip():
+                st.warning("Inserire un argomento prima di avviare la Topic Detection.")
+            else:
+                try:
+                    q = build_topic_query(
+                        label=topic_input,
+                        description=desc_input if desc_input.strip() else None,
+                    )
+                except ValueError as v_err:
+                    st.error(f"Parametri argomento non validi: {v_err}")
+                    q = None
+
+                if q is not None:
+                    client = state.get_lm_studio_client()
+                    target_model = model_input.strip() if model_input.strip() else state.get_lm_studio_model()
+                    with st.spinner("Esecuzione Topic Detection con motore locale..."):
+                        try:
+                            det_res = execute_manual_topic_detection(
+                                document=doc,
+                                topic=q,
+                                client=client,
+                                model_id=target_model,
+                            )
+                            state.add_detection_result(det_res)
+                            state.set_last_manual_detection(det_res)
+                            state.set_custom_topic_label(topic_input)
+                            state.set_custom_topic_description(desc_input)
+                            if target_model:
+                                state.set_lm_studio_model(target_model)
+                            st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
+                        except LmStudioUnavailableError:
+                            st.error(
+                                "LM Studio non raggiungibile su http://127.0.0.1:1234. "
+                                "Verificare che il server locale di LM Studio sia attivo."
+                            )
+                        except AiModelNotSpecifiedError:
+                            st.error(
+                                "Nessun modello caricato o specificato in LM Studio. "
+                                "Caricare un modello prima di avviare la detection."
+                            )
+                        except AiModelMismatchError as m_err:
+                            st.error(f"Disallineamento modello LM Studio: {m_err}")
+                        except AiInvalidEvidenceCitationError as c_err:
+                            st.error(f"Errore citazione evidenze: {c_err}")
+                        except AiStructuredOutputError as s_err:
+                            st.error(f"Errore schema strutturato: {s_err}")
+                        except AiBackendTimeoutError:
+                            st.error("Timeout durante l'inferenza locale con LM Studio.")
+                        except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+                            st.error(f"Errore di comunicazione con LM Studio: {b_err}")
+                        except Exception as exc:
+                            st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}: {exc}")
+
+        # Visualizzazione del risultato per la verifica
+        last_det = state.get_last_manual_detection()
+        if last_det is not None:
+            with st.container(border=True):
+                dec_val = last_det.decision.value
+                if dec_val == "PRESENT":
+                    badge = "🟢 PRESENTE"
+                elif dec_val == "ABSENT":
+                    badge = "⚪ ASSENTE"
+                else:
+                    badge = "🟡 INCERTO"
+
+                h_col, b_col = st.columns([3, 1])
+                with h_col:
+                    st.markdown(f"### Risultato Verifica: {last_det.topic.label}")
+                with b_col:
+                    st.markdown(f"**Esito:** {badge}")
+
+                if last_det.topic.description and last_det.topic.description != last_det.topic.label:
+                    st.markdown(f"**Descrizione Topic:** {last_det.topic.description}")
+
+                st.info(f"**Motivazione AI (Rationale):** {last_det.rationale}")
+
+                meta = last_det.metadata
+                mod_name = meta.get("model", "n/a")
+                lat = meta.get("latency_seconds")
+                lat_str = f"{lat:.2f}s" if isinstance(lat, (int, float)) else "n/a"
+                st.caption(f"Modello: `{mod_name}` | Latenza: `{lat_str}` | Provenance: `{last_det.provenance_document_id}`")
+
+                st.write(
+                    f"**Evidenze collegate:** {len(last_det.evidence_ids)} sezioni "
+                    f"(IDs: {', '.join(f'`{e}`' for e in last_det.evidence_ids) if last_det.evidence_ids else 'nessuna'})"
+                )
+
+                matching_sections = [
+                    s for s in doc.all_evidence_sections
+                    if s.evidence_id in last_det.evidence_ids
+                ]
+                if matching_sections:
+                    with st.expander(f"Visualizza le {len(matching_sections)} Evidenze Originali Associate", expanded=True):
+                        for s_idx, sec in enumerate(matching_sections, start=1):
+                            st.markdown(
+                                f"**[EVIDENZA ORIGINALE #{s_idx}]** `{sec.source_type.value}` | ID: `{sec.evidence_id}`"
+                            )
+                            st.text_area(
+                                "Testo Originale Forense",
+                                value=sec.text,
+                                height=60,
+                                key=f"area1_ev_{sec.evidence_id}_{s_idx}",
+                                disabled=True,
+                            )
+
+        # ==================================================
+        # AREA 2: Filtra risultati Detection già eseguiti
+        # ==================================================
+        st.divider()
+        st.subheader("📂 Area 2: Filtra risultati Detection già eseguiti")
+        st.caption("Filtro e consultazione delle detection già presenti in sessione tramite search_topic_detections().")
 
         c_filt, c_srch = st.columns([1, 2])
         with c_filt:
@@ -519,13 +693,19 @@ def render_topics() -> None:
                 "Filtro Decisione",
                 options=[d.value for d in TopicFilterDecision],
                 index=0,
+                key="filter_existing_decision",
             )
         with c_srch:
-            query_det = st.text_input("Cerca per label/descrizione topic", placeholder="Es. accordo, contrabbando")
+            query_det = st.text_input(
+                "Cerca per label/descrizione topic",
+                placeholder="Es. accordo, contrabbando",
+                key="filter_existing_query",
+            )
 
+        active_service = state.get_search_service() or service
         try:
             det_results = search_topic_detections(
-                search_service=service,
+                search_service=active_service,
                 query_text=query_det,
                 decision_filter=TopicFilterDecision(sel_dec),
             )
@@ -540,7 +720,6 @@ def render_topics() -> None:
 
         for idx, hit in enumerate(det_results.hits, start=1):
             with st.container(border=True):
-                # Badge decisione visibile e chiaro
                 dec_val = hit.decision.value if hasattr(hit.decision, "value") else str(hit.decision)
                 if dec_val == "PRESENT":
                     badge = "🟢 PRESENTE"
@@ -560,6 +739,13 @@ def render_topics() -> None:
                 rationale = hit.metadata.get("rationale")
                 if rationale:
                     st.info(f"**Motivazione AI (Rationale):** {rationale}")
+
+                meta = hit.metadata
+                mod_name = meta.get("model")
+                lat = meta.get("latency_seconds")
+                if mod_name or lat is not None:
+                    lat_str = f"{lat:.2f}s" if isinstance(lat, (int, float)) else "n/a"
+                    st.caption(f"Modello: `{mod_name or 'n/a'}` | Latenza: `{lat_str}`")
 
                 st.write(f"**Evidenze collegate:** {len(hit.evidence_ids)} sezioni")
 
@@ -581,11 +767,12 @@ def render_topics() -> None:
         st.subheader("Argomenti Emersi (Open Topic Discovery)")
         st.caption("Argomenti e cluster identificati autonomamente dal layer AI durante la scansione aperta.")
 
-        query_disc = st.text_input("Cerca negli argomenti scoperti", placeholder="Es. logistica, contratti")
+        query_disc = st.text_input("Cerca negli argomenti scoperti", placeholder="Es. logistica, contratti", key="disc_query_input")
 
+        active_service = state.get_search_service() or service
         try:
             disc_results = search_topic_discoveries(
-                search_service=service,
+                search_service=active_service,
                 query_text=query_disc,
             )
         except Exception as exc:
@@ -616,6 +803,65 @@ def render_topics() -> None:
                                 key=f"disc_sec_{hit.topic_id}_{sec.evidence_id}_{s_idx}",
                                 disabled=True,
                             )
+
+                # Pulsante: Verifica con Topic Detection
+                verify_col, _ = st.columns([2, 3])
+                with verify_col:
+                    verify_btn = st.button(
+                        "🔬 Verifica con Topic Detection",
+                        key=f"verify_disc_topic_{idx}_{hit.topic_id}",
+                    )
+
+                if verify_btn:
+                    if doc is None:
+                        st.error("Nessun documento di conversazione disponibile.")
+                    else:
+                        try:
+                            disc_query = build_topic_query(
+                                label=hit.label,
+                                description=hit.description,
+                            )
+                        except ValueError as v_err:
+                            st.error(f"Errore nella creazione della TopicQuery: {v_err}")
+                            disc_query = None
+
+                        if disc_query is not None:
+                            client = state.get_lm_studio_client()
+                            target_model = state.get_lm_studio_model()
+                            with st.spinner(f"Verifica mirata di '{hit.label}' con TopicDetectionAnalyzer..."):
+                                try:
+                                    det_res = execute_manual_topic_detection(
+                                        document=doc,
+                                        topic=disc_query,
+                                        client=client,
+                                        model_id=target_model,
+                                    )
+                                    state.add_detection_result(det_res)
+                                    state.set_last_manual_detection(det_res)
+                                    state.set_custom_topic_label(hit.label)
+                                    state.set_custom_topic_description(hit.description)
+                                    st.success(f"Topic '{hit.label}' verificato! Esito: {det_res.decision.value}")
+                                except LmStudioUnavailableError:
+                                    st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
+                                except AiModelNotSpecifiedError:
+                                    st.error("Nessun modello caricato o specificato in LM Studio.")
+                                except AiModelMismatchError as m_err:
+                                    st.error(f"Disallineamento modello LM Studio: {m_err}")
+                                except AiInvalidEvidenceCitationError as c_err:
+                                    st.error(f"Errore citazione evidenze: {c_err}")
+                                except AiStructuredOutputError as s_err:
+                                    st.error(f"Errore schema strutturato: {s_err}")
+                                except Exception as exc:
+                                    st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}: {exc}")
+
+                last_det = state.get_last_manual_detection()
+                if last_det is not None and last_det.topic.label == hit.label:
+                    with st.container(border=True):
+                        dec_val = last_det.decision.value
+                        badge_str = "🟢 PRESENTE" if dec_val == "PRESENT" else "⚪ ASSENTE" if dec_val == "ABSENT" else "🟡 INCERTO"
+                        st.markdown(f"**Esito Verifica Recente:** {badge_str}")
+                        st.info(f"**Rationale:** {last_det.rationale}")
+                        st.caption(f"Evidenze valide collegate: {len(last_det.evidence_ids)} | Modello: {last_det.metadata.get('model', 'n/a')}")
 
 
 def render_system_status() -> None:

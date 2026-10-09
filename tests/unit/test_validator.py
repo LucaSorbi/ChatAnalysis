@@ -385,3 +385,31 @@ class TestValidationSeveritySemantics:
         assert result.is_valid is False
         assert result.has_errors is True
 
+
+# ---------------------------------------------------------------------------
+# Test Regole WhatsApp Export (TXT / ZIP)
+# ---------------------------------------------------------------------------
+
+@pytest.mark.unit
+class TestWhatsAppExportValidation:
+
+    def test_whatsapp_export_valid_record_no_issues(self, validator):
+        record = make_record(
+            source_name="whatsapp_export",
+            raw_fields={"raw_timestamp": "12/09/2026, 14:35", "text": "Ciao", "sender": "Mario"},
+        )
+        result = validator.validate(record)
+        assert result.is_valid is True
+        assert len(result.issues) == 0
+
+    def test_whatsapp_export_empty_timestamp_warning(self, validator):
+        record = make_record(
+            source_name="whatsapp_export",
+            raw_fields={"raw_timestamp": "", "text": "Ciao", "sender": "Mario"},
+        )
+        result = validator.validate(record)
+        assert result.is_valid is True
+        assert result.has_warnings is True
+        assert any(i.code == "WHATSAPP_EXPORT_EMPTY_TIMESTAMP" for i in result.issues)
+
+

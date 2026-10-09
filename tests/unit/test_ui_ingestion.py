@@ -48,6 +48,7 @@ class TestUiIngestionUnit:
         assert get_importer_for_format(SourceFormat.CELLEBRITE_CSV).source_name == "cellebrite_csv"
         assert get_importer_for_format(SourceFormat.CELLEBRITE_JSON).source_name == "cellebrite_json"
         assert get_importer_for_format(SourceFormat.CELLEBRITE_XML).source_name == "cellebrite_xml"
+        assert get_importer_for_format(SourceFormat.WHATSAPP_EXPORT).source_name == "whatsapp_export"
 
         with pytest.raises(UnsupportedSourceFormatError):
             get_importer_for_format("UNSUPPORTED_FORMAT")

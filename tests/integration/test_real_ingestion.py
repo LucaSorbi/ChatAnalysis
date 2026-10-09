@@ -300,3 +300,102 @@ class TestRealIngestionIntegration:
 
         assert res.status == IngestionStatus.SUCCESS
         assert search_res.total_hits > 0
+
+    def test_whatsapp_export_txt_ingestion(self, tmp_path):
+        """
+        Test integrazione end-to-end per WhatsApp Export TXT:
+        TXT -> RawRecord -> Validation -> Normalization -> Entity Resolution
+            -> UnifiedMessage -> EvidenceBundle -> ConversationEvidenceDocument -> SearchService.
+        """
+        chat_content = (
+            "12/09/2026, 14:30 - I messaggi e le chiamate sono crittografati end-to-end.\n"
+            "12/09/2026, 14:35 - Mario Rossi: Ciao! Questo è il primo messaggio forense.\n"
+            "12/09/2026, 14:36 - Luca Bianchi: Ricevuto, procediamo con l'analisi.\n"
+            "seconda riga del messaggio multiline\n"
+        )
+        txt_bytes = chat_content.encode("utf-8")
+        req = IngestionRequest(
+            source_format=SourceFormat.WHATSAPP_EXPORT,
+            filename="chat_export.txt",
+            file_bytes=txt_bytes,
+        )
+
+        res = execute_real_ingestion(req)
+        assert res.status == IngestionStatus.SUCCESS
+        summary = res.summary
+
+        # Verifiche conteggi
+        assert summary.raw_record_count == 3
+        assert summary.unified_message_count == 3
+        assert summary.conversation_count == 1
+        assert summary.validation_issue_count == 0
+
+        # Verifiche documento
+        doc = next(iter(res.documents.values()))
+        assert isinstance(doc, ConversationEvidenceDocument)
+        assert doc.source_name == "whatsapp_export"
+        assert doc.document_id.startswith("doc::whatsapp_export::")
+
+        # Verifica evidence_id univoci
+        eids = [sec.evidence_id for sec in doc.all_evidence_sections]
+        assert len(eids) == len(set(eids))
+        assert len(eids) == 3
+
+        # Verifica SearchService
+        search_svc = build_search_service_for_conversation(doc)
+        search_res = execute_evidence_search(
+            search_service=search_svc,
+            query_text="forense",
+            match_mode=MatchMode.PHRASE,
+        )
+        assert search_res.total_hits == 1
+        assert "primo messaggio forense" in search_res.hits[0].original_text
+
+    def test_whatsapp_export_zip_ingestion(self, tmp_path):
+        """
+        Test integrazione end-to-end per WhatsApp Export ZIP con allegati:
+        ZIP -> RawRecord -> Validation -> Normalization -> Entity Resolution
+            -> UnifiedMessage -> EvidenceBundle -> ConversationEvidenceDocument -> SearchService.
+        """
+        import zipfile
+        zip_path = tmp_path / "chat_archive.zip"
+        chat_content = (
+            "[12/09/2026, 14:35:12] Mario Rossi: IMG-001.jpg (file allegato)\n"
+            "[12/09/2026, 14:36:00] Luca Bianchi: Ricevuta evidenza fotografica\n"
+        )
+        with zipfile.ZipFile(zip_path, "w") as zf:
+            zf.writestr("_chat.txt", chat_content.encode("utf-8"))
+            zf.writestr("IMG-001.jpg", b"\xff\xd8\xff\xe0dummy_jpeg")
+
+        zip_bytes = zip_path.read_bytes()
+        req = IngestionRequest(
+            source_format=SourceFormat.WHATSAPP_EXPORT,
+            filename="chat_archive.zip",
+            file_bytes=zip_bytes,
+        )
+
+        res = execute_real_ingestion(req)
+        assert res.status == IngestionStatus.SUCCESS
+        summary = res.summary
+
+        assert summary.raw_record_count == 2
+        assert summary.unified_message_count == 2
+        assert summary.conversation_count == 1
+
+        doc = next(iter(res.documents.values()))
+        assert doc.source_name == "whatsapp_export"
+
+        # Verifica media reference nel bundle
+        b0 = doc.bundles[0]
+        assert b0.message.media_reference == "IMG-001.jpg"
+
+        # Verifica ricerca sul testo del secondo messaggio
+        search_svc = build_search_service_for_conversation(doc)
+        search_res = execute_evidence_search(
+            search_service=search_svc,
+            query_text="fotografica",
+            match_mode=MatchMode.PHRASE,
+        )
+        assert search_res.total_hits == 1
+        assert "evidenza fotografica" in search_res.hits[0].original_text
+

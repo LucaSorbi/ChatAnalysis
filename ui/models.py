@@ -27,6 +27,7 @@ class SourceFormat(str, Enum):
     """Formati di sorgente previsti per l'ingestion forense."""
     WHATSAPP_MSGSTORE = "WhatsApp msgstore (SQLite)"
     WHATSAPP_WA = "WhatsApp wa.db (SQLite)"
+    WHATSAPP_EXPORT = "WhatsApp export chat (TXT / ZIP)"
     CELLEBRITE_CSV = "Cellebrite (CSV)"
     CELLEBRITE_JSON = "Cellebrite (JSON)"
     CELLEBRITE_XML = "Cellebrite (XML)"

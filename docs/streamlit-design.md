@@ -9,7 +9,7 @@ La **Streamlit UI Foundation** costituisce il layer di presentazione e interazio
 - **Disaccoppiamento Rigoroso**: La logica applicativa, l'aggregazione dei dati e i filtri risiedono in moduli puri e testabili (`ui.application`, `ui.demo`, `ui.models`), senza dipendenza dal framework Streamlit.
 - **Integrazione Trasparente con Search Layer**: L'interfaccia delega interamente l'indicizzazione e l'interrogazione delle evidenze e dei topic al facade deterministico `search.SearchService`.
 - **Modalità Dimostrativa Sintetica**: L'app opera immediatamente anche in assenza di file reali, mediante un generatore di conversazioni sintetiche multilingua (`ui.demo`) conforme a tutti i contratti e alle invarianti di provenance.
-- **Modalità Real File Ingestion (OPERATIVA)**: Supporto nativo ed end-to-end al caricamento sicuro di file reali WhatsApp (`msgstore.db` con eventuale companion `wa.db`, oppure `wa.db` standalone) e Cellebrite (CSV, JSON, XML), instradati attraverso la pipeline completa di validazione, normalizzazione, entity resolution ed evidence bundling, con selezione multi-conversazione e ricerca deterministica.
+- **Modalità Real File Ingestion (OPERATIVA)**: Supporto nativo ed end-to-end al caricamento sicuro di file reali WhatsApp (`msgstore.db` con eventuale companion `wa.db`, `wa.db` standalone, oppure esportazioni native in formato **TXT** o **ZIP** con allegati) e Cellebrite (CSV, JSON, XML), instradati attraverso la pipeline completa di validazione, normalizzazione, entity resolution ed evidence bundling, con selezione multi-conversazione e ricerca deterministica.
 - **Privacy Hardening e Pseudonimizzazione**: Nessuna informazione identificativa (JID, numeri telefonici, titoli chat grezzi) viene esposta nei selettori UI o nei campi principali di riepilogo. Gli identificatori tecnici sono isolati in sezioni espandibili di provenance interna.
 - **Rinvio Trasparente del Benchmark Reale LM Studio**: Dichiarazione esplicita del rinvio dell'inferenza con modelli GGUF/llama.cpp a causa dei limiti di set istruzioni della macchina host (AMD A8-7410 priva di AVX2), con conferma dello stato **REAL PILOT READY** per l'architettura AI.
 
@@ -52,6 +52,11 @@ Lo stato di sessione Streamlit è incapsulato da un adapter tipizzato che bandis
 | `available_documents` | `dict[str, ConversationEvidenceDocument]` | Documenti conversazione estratti |
 | `selected_document_id` | `str \| None` | Document ID correntemente visualizzato |
 | `error_message` | `str \| None` | Ultimo messaggio di errore applicativo controllato |
+| `custom_topic_label` | `str` | Argomento libero inserito nell'Area 1 di Topic Detection |
+| `custom_topic_description` | `str` | Descrizione opzionale dell'argomento per la verifica mirata |
+| `last_manual_detection` | `TopicDetectionResult \| None` | Ultimo verdetto di Topic Detection generato on-demand |
+| `lm_studio_client` | `BaseLlmClient \| None` | Istanza client LM Studio (o mock di test iniettato) |
+| `lm_studio_model` | `str \| None` | Modello LM Studio configurato per l'inferenza |
 
 ---
 
@@ -70,8 +75,8 @@ Lo stato di sessione Streamlit è incapsulato da un adapter tipizzato che bandis
 ### 2. Importazione (`render_import`):
 - Area Demo: caricamento e reset istantaneo del dataset sintetico multilingua.
 - Area File Reale:
-  - Selettore del formato sorgente (`WhatsApp msgstore`, `WhatsApp wa.db`, `Cellebrite CSV`, `Cellebrite JSON`, `Cellebrite XML`).
-  - Uploader primario per il file di archivio/database.
+  - Selettore del formato sorgente (`WhatsApp msgstore`, `WhatsApp wa.db`, `WhatsApp export chat (TXT / ZIP)`, `Cellebrite CSV`, `Cellebrite JSON`, `Cellebrite XML`).
+  - Uploader primario per il file di archivio/database/testo.
   - Uploader secondario opzionale per il companion `wa.db` (visibile solo se `WHATSAPP_MSGSTORE`).
   - Riepilogo post-ingestion: record raw, normalizzati, messaggi unificati, conversazioni estratte, validation issues, SHA-256 e avvisi non bloccanti.
   - **Gestione Companion wa.db Failure**: se il file companion è incompatibile o corrotto, non blocca msgstore; viene visualizzato un warning esplicito e non sensibile negli avvisi.
@@ -88,8 +93,13 @@ Lo stato di sessione Streamlit è incapsulato da un adapter tipizzato che bandis
 - Parametro `limit` con tracciamento trasparente di `total_hits` vs `returned_hits`.
 
 ### 5. Analisi topic (`render_topics`):
-- Tab "Topic Detection" e "Topic Discovery".
-- In modalità `FILE`, informa chiaramente l'operatore che l'inferenza AI con modelli locali è differita alla fase finale di benchmark.
+- **Tab Topic Detection (Verifica Mirata)** strutturata in due aree:
+  - **Area 1: Verifica un argomento**: input per argomento libero, textarea per descrizione opzionale, selettore modello LM Studio, pulsante "Esegui Topic Detection". Esegue una vera inferenza locale su LM Studio (`TopicDetectionAnalyzer.detect_topic()`), visualizzando esito (`PRESENT`, `ABSENT`, `UNCERTAIN`), rationale in italiano, modello, latenza ed evidenze originali espandibili. I risultati vengono registrati nello stato di sessione e indicizzati nel Search Service senza alterare il documento originale.
+  - **Area 2: Filtra risultati Detection già eseguiti**: filtri decisionali e ricerca testuale sui risultati preesistenti o generati nella sessione tramite `search_topic_detections()`.
+- **Tab Topic Discovery (Argomenti Emersi)**:
+  - Visualizzazione dei cluster e temi estratti autonomamente;
+  - Per ciascun argomento emerso, pulsante dedicato **"Verifica con Topic Detection"** che preleva label e descrizione e avvia una nuova inferenza mirata sul documento forense attivo.
+- In modalità `FILE`, informa chiaramente l'operatore che l'inferenza AI batch precalcolata non è stata eseguita durante l'ingestion, lasciando piena operatività alla verifica on-demand.
 
 ### 6. Sistema / Stato (`render_status`):
 - Scheda diagnostica delle componenti forensi e della versione di Streamlit.

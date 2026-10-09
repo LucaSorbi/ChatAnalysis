@@ -1,145 +1,359 @@
-# PRELIMINARY CLOUD E2E VALIDATION — FINAL CLOSEOUT
+# AGENT REPORT — STATO ATTUALE DEL PROGETTO CHATANALYSIS
 
-## 1. Executive Summary e Chiusura della Fase Cloud
-
-Il presente documento costituisce il report finale di **Closeout e Freeze** della fase **Preliminary Cloud E2E Validation** del progetto di tesi ChatAnalysis.
-
-In conformità con il gate del supervisore:
-- **La fase sperimentale su cloud è formalmente CHIUSA e CONGELATA.**
-- Nessuna ulteriore chiamata verso API cloud sarà eseguita.
-- Gli artefatti delle tre sessioni sperimentali svolte (**Protocol V1**, **Protocol V2**, **Protocol V3**) sono stati archiviati in modo immutabile e non modificabile nelle rispettive directory (`output/cloud_e2e/`, `output/cloud_e2e_v2/`, `output/cloud_e2e_v3/`).
-- Dataset e ground truth sintetici restano rigorosamente congelati con i rispettivi hash crittografici SHA-256.
-- Il percorso forense primario e il **benchmark sperimentale finale della tesi** restano interamente destinati all'ambiente locale su loopback: **LM Studio + modelli open-weight dedicati (Qwen, Llama, DeepSeek) su hardware locale compatibile**.
+> **Documento**: Report Tecnico Autoritativo di Avanzamento e Stato del Sistema  
+> **Repository**: `ChatAnalysis`  
+> **Data Aggiornamento**: Ottobre 2026  
+> **Stato Pipeline**: REAL PILOT READY & FULLY OPERATIONAL (100% Offline; Ingestion & Search Deterministici; Inferenza LLM Locale e Controllata On-Demand)
 
 ---
 
-## 2. Sintesi delle Tre Sessioni Sperimentali (V1, V2, V3)
+## 1. Executive Summary & Stato Corrente del Repository
 
-### 2.1 Protocol V1 — Incompatibilità del Parametro Seed
-- **Data e Timestamp:** `2026-10-03T11:02:20.892415+00:00`
-- **Configurazione:** Parametro `seed = 42` inviato formalmente nel payload JSON HTTP.
-- **Riscontro Provider:** L'endpoint Google Gemini Developer API (`/v1beta/openai`) ha rifiutato categoricamente le richieste con `HTTP 400 Bad Request` (`Invalid JSON payload received. Unknown name "seed": Cannot find field.`).
-- **Bilancio V1:** 7 richieste HTTP inviate, 0 inferenze completate, 0 output ricevuti.
-- **Valore Tecnico:** Dimostrazione documentata e preservata dell'incompatibilità del campo `seed` sul gateway OpenAI di Google. Zero retry eseguiti.
+Il presente report documenta lo stato tecnico, architetturale e operativo corrente del progetto di tesi **ChatAnalysis**.
 
-### 2.2 Protocol V2 — Omissione Seed e Rilevamento Limiti Provider
-- **Data e Timestamp:** `2026-10-03T15:19:05.338428+00:00`
-- **Modifica Metodologica:** Omissione preventiva del parametro `seed` dal payload HTTP (`seed = None`, metadato `UNSUPPORTED_OMITTED`).
-- **Esito:** Prima validazione reale parziale: 8 richieste inviate, 3 inferenze completate (Case 1 PRESENT corretto, Case 4 ABSENT corretto, Case 5 Translation Step eseguito con successo).
-- **Rilevamento Limiti:** È emerso che l'invio non cadenzato di 8 richieste consecutive ha superato la soglia di throughput del provider:
-  - `RPM LIMIT:` 5 requests/minuto
-  - `TPM LIMIT:` ~250.000 tokens/minuto
-  - `RPD LIMIT:` 20 requests/giorno
-  Questo ha determinato l'insorgenza di errori `HTTP 429 Too Many Requests` (compatibili con superamento quota/rate) e `HTTP 503 Service Unavailable` (dovuti a saturazione e carico temporaneo dei nodi del provider).
-- **Bilancio V2:** 2 su 6 casi di detection completati, 100% accuratezza decisionale sui completati, exact model match `gemini-3.8-flash`.
+Il sistema realizza una pipeline modulare, verificabile e interamente locale per l'acquisizione, normalizzazione, correlazione multimodale, ricerca deterministica e analisi semantica (Topic Detection e Topic Discovery) di conversazioni forensi.
 
-### 2.3 Protocol V3 — Pacing Preventivo a 15 Secondi (Rate-Limit-Aware Execution)
-- **Data e Timestamp:** `2026-10-04T07:19:59.138923+00:00`
-- **Modifica Metodologica:** Introduzione del vincolo temporale start-to-start preventivo:
-  $$\text{START}(\text{request } N+1) - \text{START}(\text{request } N) \ge 15.0\text{s}$$
-  mediante `time.monotonic()`, garantendo un throughput massimo teorico $\le 4\text{ RPM}$ (strettamente inferiore al limite di 5 RPM). Nessun retry o backoff: una richiesta equivale esattamente a un solo tentativo (1:1).
-- **Esito:**
-  - 8 richieste HTTP inviate.
-  - 5 inferenze LLM completate con successo (Case 1, Case 3, Case 4, Case 5 Translation Step, Case 6 Topic Discovery).
-  - 3 su 6 casi di Topic Detection completati (50.0% completion rate).
-  - 2 decisioni corrette su 3 casi completati (**66.7% Decision Accuracy sui completati**).
-  - **HTTP 429:** **0 errori** (azzerati rispetto a V2 grazie al pacing).
-  - **HTTP 503:** 3 errori (indisponibilità transitoria del provider "high demand" su Case 2, Case 5-Direct e Case 5-Translate Detection).
-  - Pacing minimo osservato: `15.000s` (media `15.001s`).
-  - Citazioni evidenze invalide: `0` | Errori structured output: `0` | Model mismatch: `0`.
+### Punti Chiave dello Stato Corrente:
+1. **Real File Ingestion Multiformato**: Supporto nativo ed end-to-end per database WhatsApp (`msgstore.db` e `wa.db`), export WhatsApp diretti (formati **TXT** e **ZIP** con allegati) e reportistica Cellebrite (**CSV**, **JSON**, **XML**).
+2. **Architettura AI a Due Livelli**:
+   - **Topic Discovery**: scansione open-ended / open exploration dei temi emergenti (`DiscoveredTopic`).
+   - **Topic Detection**: verifica mirata, controllata e on-demand a tre stati (`PRESENT`, `ABSENT`, `UNCERTAIN`) con citazioni vincolanti delle evidenze.
+3. **Workflow Operativo Discovery → Detection**: possibilità di selezionare qualsiasi argomento emerso in Topic Discovery e sottoporlo a una *nuova inferenza indipendente* di Topic Detection, oppure di inserire un argomento libero direttamente nella UI.
+4. **Isolamento LM Studio Locale (Loopback Only)**: l'inferenza opera esclusivamente su server locale LM Studio (`http://127.0.0.1:1234`). Nessun servizio cloud, nessuna telemetria e nessuna chiamata AI automatica durante l'ingestion o l'importazione dei file.
+5. **Integrità e Immutabilità Forense**: tutti i documenti forensi (`ConversationEvidenceDocument`) rimangono congelati e immutabili. I risultati di Topic Detection generati manualmente vengono archiviati nello stato di sessione e indicizzati in tempo reale nel Search Service senza alterare il dato originale.
+6. **Validazione Rigorosa**: la suite di test conta **1226 test superati con successo** (**0 failed, 0 errors**), coprendo l'intera catena da ingestion a UI, sicurezza sandbox, assenza di chiamate di rete e isolamento dei benchmark.
 
 ---
 
-## 3. Quadro Sinottico Comparativo V1 / V2 / V3
+## 2. Architettura della Pipeline Forense
 
-| Parametro / Metrica | Protocol V1 | Protocol V2 | Protocol V3 |
-|---|---|---|---|
-| **Data Esecuzione** | 2026-10-03 | 2026-10-03 | 2026-10-04 |
-| **Model Requested** | `gemini-3.8-flash` | `gemini-3.8-flash` | `gemini-3.8-flash` |
-| **Model Returned** | N/A (bloccato pre-inferenza) | `gemini-3.8-flash` (Exact) | `gemini-3.8-flash` (Exact) |
-| **Parametro Seed** | `42` (Requisito) | `null` (UNSUPPORTED_OMITTED) | `null` (UNSUPPORTED_OMITTED) |
-| **Request Start Pacing** | Nessuno (burst) | Nessuno (burst) | **15.0s preventivo** (Observed min: 15.000s) |
-| **Cloud API Requests Sent** | 7 | 8 | 8 |
-| **LLM Inferences Completed** | 0 | 3 | **5** |
-| **Model Outputs Received** | 0 | 3 | **5** |
-| **Detection Completion Rate** | 0.0% (0 / 6) | 33.3% (2 / 6) | **50.0% (3 / 6)** |
-| **Decision Accuracy (Completati)** | N/A (`null`) | 100.0% (2 / 2) | **66.7% (2 / 3)** |
-| **CASE 1 (Explicit Present)** | HTTP 400 | SUCCESS (`PRESENT`, corretto) | SUCCESS (`PRESENT`, corretto) |
-| **CASE 2 (Implicit Present)** | HTTP 400 | FAILED (HTTP 503) | FAILED (HTTP 503) |
-| **CASE 3 (Ambiguous Uncertain)**| HTTP 400 | FAILED (HTTP 503) | SUCCESS (`PRESENT`, **Model Decision Error**) |
-| **CASE 4 (Absent)** | HTTP 400 | SUCCESS (`ABSENT`, corretto) | SUCCESS (`ABSENT`, corretto) |
-| **CASE 5 Direct Multilingual** | HTTP 400 | FAILED (HTTP 503) | FAILED (HTTP 503) |
-| **CASE 5 Translate Step** | Non eseguito | SUCCESS (Traduzione fedele) | SUCCESS (Traduzione fedele) |
-| **CASE 5 Translate Detection** | Non eseguito | FAILED (HTTP 429) | FAILED (HTTP 503) |
-| **CASE 6 Topic Discovery** | Non eseguito | FAILED (HTTP 429) | SUCCESS (6 topic estratti, 100% validi) |
-| **HTTP 429 Errors** | 0 | 2 | **0 (azzerato)** |
-| **HTTP 503 Errors** | 0 | 3 | 3 |
-| **Citazioni Evidenze Invalide** | 0 | 0 | 0 |
-| **Errori Structured Output** | 0 | 0 | 0 |
-| **Retry Eseguiti** | 0 | 0 | 0 |
+Il sistema adotta una pipeline unidirezionale, disaccoppiata e a responsabilità singola, dove ogni fase consuma e produce modelli di dominio immutabili (`frozen dataclass`).
+
+### 2.1 Diagramma della Pipeline Completa
+
+```
++-------------------------------------------------------------------------------+
+|                     DATI ORIGINALI FORENSI (FILE REALI)                       |
+|   - WhatsApp msgstore.db (SQLite)       - WhatsApp export chat (.txt)         |
+|   - WhatsApp wa.db (SQLite contatti)    - WhatsApp export archivio (.zip)     |
+|   - Cellebrite messages.csv             - Cellebrite report.json / report.xml |
++-------------------------------------------------------------------------------+
+                                      |
+                                      v
++-------------------------------------------------------------------------------+
+|                           1. IMPORTER SPECIALIZZATI                           |
+|   - WhatsAppMsgstoreImporter            - WhatsAppExportImporter              |
+|   - WhatsAppWaDbImporter                - CellebriteCsv/Json/XmlImporter      |
+|   OUTPUT: Stream di RawRecord (provenance originale e campi grezzi;           |
+|           SHA-256 calcolato sul file sorgente nel riepilogo di importazione)  |
++-------------------------------------------------------------------------------+
+                                      |
+                                      v
++-------------------------------------------------------------------------------+
+|                           2. VALIDAZIONE FORENSE                              |
+|   - RecordValidator: validazione strutturale, schema, verifica integrità      |
+|   OUTPUT: ValidationResult (issues tracciati, nessuna alterazione dato)       |
++-------------------------------------------------------------------------------+
+                                      |
+                                      v
++-------------------------------------------------------------------------------+
+|                           3. NORMALIZZAZIONE CANONICA                         |
+|   - RecordNormalizer: parsing timestamp, canonizzazione tipo messaggio       |
+|   OUTPUT: NormalizedRecord (timestamp canonico, testo, media references)      |
++-------------------------------------------------------------------------------+
+                                      |
+                                      v
++-------------------------------------------------------------------------------+
+|                           4. ENTITY RESOLUTION                                |
+|   - DeterministicEntityResolver: risoluzione partecipanti, pseudonimizzazione  |
+|   - UnifiedModelBuilder: costruzione messaggi unificati                       |
+|   OUTPUT: UnifiedMessage (modello canonico trasversale a tutti i formati)     |
++-------------------------------------------------------------------------------+
+                                      |
+                                      v
++-------------------------------------------------------------------------------+
+|                           5. STRATO MULTIMODALE                               |
+|   - MessageEvidenceBundle: unione messaggio testuale e derivati multimodali   |
+|     (Audio Transcription STT, Image OCR Text, Image Vision Description)       |
+|   OUTPUT: ConversationEvidenceDocument (1 per conversazione, immutabile)       |
++-------------------------------------------------------------------------------+
+                                      |
+                 +--------------------+--------------------+
+                 |                                         |
+                 v (Offline & Deterministico)              v (Locale, Controllato & On-Demand)
++----------------------------------+     +--------------------------------------+
+|        6. SEARCH SERVICE         |     |        7. LOCAL AI LAYER             |
+|   - Indicizzazione evidenze      |     |   - LM Studio locale (127.0.0.1:1234)|
+|   - Ricerca deterministica       |     |   - TopicDetectionAnalyzer           |
+|   - Filtro decisioni Topic       |     |   - TopicDiscoveryAnalyzer           |
+|   - Matching esatto/frase/termini|     |   - Inferenza SOLO su click utente   |
++----------------------------------+     +--------------------------------------+
+                 |                                         |
+                 +--------------------+--------------------+
+                                      |
+                                      v
++-------------------------------------------------------------------------------+
+|                         8. STREAMLIT UI (INTERFACCIA)                         |
+|   - Panoramica: riepilogo metriche forensi e conteggi sezioni                 |
+|   - Importazione: ingestion TXT, ZIP, SQLite, CSV, JSON, XML                  |
+|   - Esplora Conversazione: scorrimento ordine naturale, filtri sorgente       |
+|   - Ricerca: scansione deterministica per parola chiave e modalità matching   |
+|   - Analisi Topic:                                                            |
+|       * Area 1: Verifica argomento libera (nuova inferenza LLM on-demand)    |
+|       * Area 2: Filtro risultati Detection già esistenti                     |
+|       * Discovery: card argomenti con pulsante "Verifica con Topic Detection" |
+|   - Sistema / Stato: diagnostica architetturale e vincoli hardware            |
++-------------------------------------------------------------------------------+
+```
+
+### 2.2 Distinzione Categorica: Ingestion e Ricerca vs Analisi Topic
+
+- **Ingestion File e SearchService (Offline & Deterministici)**:
+  L'importazione dei file reali e l'indicizzazione/ricerca nel `SearchService` sono al 100% offline, deterministiche e rigorose. L'ingestion non effettua chiamate a LM Studio né a modelli linguistici; elabora i dati grezzi in modo computazionale, ripetibile e privo di componenti generative fino alla generazione dei `ConversationEvidenceDocument` e al popolamento del `SearchService`.
+- **Analisi Topic (Inferenza LLM Locale, Controllata e On-Demand)**:
+  L'inferenza LLM è locale, controllata e attivata on-demand, operando all'interno di vincoli strutturali formali (JSON schema, citazioni obbligatorie delle evidenze), ma non deve essere qualificata come deterministica in senso rigoroso. L'attivazione del motore LLM avviene **esclusivamente su esplicita richiesta dell'operatore**, tramite click sui pulsanti dedicati nella UI ("Esegui Topic Detection" o "Verifica con Topic Detection").
 
 ---
 
-## 4. Chiarimento Concettuale: HTTP 429 vs HTTP 503
+## 3. Real File Ingestion: Formati e Funzionalità
 
-I risultati sperimentali di Protocol V3 forniscono una chiara conferma empirica della separazione concettuale tra le tipologie di fallimento di rete:
-- **`HTTP 429 Too Many Requests`:** Identifica una *Execution Failure* direttamente collegata ai vincoli di rate limit o quota (superamento della soglia di 5 RPM durante Protocol V2). L'introduzione del pacing preventivo a 15.0s ha eliminato completamente gli errori HTTP 429 (da 2 occorrenze in V2 a 0 in V3).
-- **`HTTP 503 Service Unavailable`:** Identifica una *Execution Failure* determinata esclusivamente da indisponibilità transitoria o congestione di carico dei server Google ("This model is currently experiencing high demand. Spikes in demand are usually temporary."). La frequenza delle richieste non causa direttamente l'HTTP 503, come dimostrato dalla sua persistenza anche con pacing a 15 secondi.
-- Entrambi i codici sono rubricati come **Execution Failures** e tenuti rigorosamente distinti dagli errori decisionali del modello.
+### 3.1 Formati Sorgente Supportati
 
----
+Il sistema riconosce ed elabora i seguenti formati tramite dispatch esplicito (`SourceFormat` enum):
 
-## 5. Analisi del Caso 3 (Model Decision Error)
+| SourceFormat Enum | Importer Concreto | Tipo Sorgente | Contenuto e Output |
+| :--- | :--- | :--- | :--- |
+| `WHATSAPP_MSGSTORE` | `WhatsAppMsgstoreImporter` | SQLite `msgstore.db` | Messaggi, chat, metadati multimediali |
+| `WHATSAPP_WA` | `WhatsAppWaDbImporter` | SQLite `wa.db` | Contatti e identità (companion o standalone) |
+| `WHATSAPP_EXPORT` | `WhatsAppExportImporter` | TXT o archivio ZIP | Conversazione chat esportata nativamente da WhatsApp |
+| `CELLEBRITE_CSV` | `CellebriteCsvImporter` | Tabellare CSV | Estrazione messaggistica UFED Cellebrite |
+| `CELLEBRITE_JSON` | `CellebriteJsonImporter` | JSON strutturato | Report estrazione Cellebrite |
+| `CELLEBRITE_XML` | `CellebriteXmlImporter` | XML strutturato | Report estrazione UFDR/Cellebrite |
 
-Nel Caso 3 (`CASE_3_AMBIGUOUS_UNCERTAIN`):
-- **Ground Truth Attesa:** `UNCERTAIN`. La conversazione sintetizzata presenta indicatori ambigui (oggetto ingombrante in borsa, richiesta di riservatezza, preferenza a discutere dettagli a voce), compatibili sia con un contesto lecito (sorpresa, prestito confidenziale) sia con una transazione opaca, mancando i marcatori univoci di illiceità presenti nel Caso 2.
-- **Decisione Restituita dal Modello:** `PRESENT`. Il modello `gemini-3.8-flash` ha interpretato gli elementi di furtività e riservatezza come prova positiva del topic illecito.
-- **Classificazione Scientifica:** Trattasi di un autentico **MODEL DECISION ERROR** su inferenza regolarmente completata con successo, **NON** di un errore tecnico o di formato. Esso rivela una propensione del modello verso la formulazione di conclusioni binarie certe anche a fronte di quadri probatori incompleti.
+### 3.2 Importer Dedicato WhatsApp Export (`WhatsAppExportImporter`)
 
----
+Il nuovo componente `importer/whatsapp_export.py` implementa il supporto completo per le esportazioni dirette di chat WhatsApp, sia come singolo file `.txt` sia come archivio compresso `.zip`:
 
-## 6. Risultati Topic Discovery e Translate-First
-
-- **Topic Discovery (Caso 6 — Valutazione Qualitativa):** Il modello ha estratto autonomamente 6 topic complessi (*Riunione condominiale, Partita di calcetto, Cena al ristorante giapponese, Acquisto di un romanzo, Visita veterinaria e passaggio in auto, Concerto jazz*), citando esclusivamente sezioni di evidenza reali (6 su 6 valide, zero allucinazioni). Il confronto post-hoc ha confermato una concordanza qualitativa del 100% rispetto ai temi previsti nella ground truth.
-- **Translate-First (Caso 5 — Validazione Parziale):** Lo Step 1 (traduzione forense con `EvidenceTranslator`) è stato validato con pieno successo in 5.593s e 2098 token, preservando integralmente le chiavi `evidence_id` originali nel testo tradotto. Lo Step 2 (detection finale sul testo tradotto) non è stato completato a causa di una risposta HTTP 503 del provider; pertanto la pipeline Translate-First è **parzialmente validata** e non completamente conclusa end-to-end.
-
----
-
-## 7. Nota di Erratum: Dataset Sintetico e Ground Truth Discovery
-
-Si segnala un erratum documentale circoscritto:
-- Nel `CASE_6_TOPIC_DISCOVERY`, il messaggio sintetico sorgente `ce2e_c6_005` in `messages.json` cita un "gatto" portato dal veterinario per il vaccino.
-- Nella ground truth congelata (`ground_truth.json`), una keyword del topic descrittivo cita accidentalmente "cane".
-- **Impatto:** La discrepanza è puramente lessicale e non altera in alcun modo il topic atteso ("Animali domestici / Cure veterinarie"), gli evidence ID, i document ID, né la valutazione qualitativa di Topic Discovery (in cui il modello ha correttamente estratto "Visita veterinaria e passaggio in auto" citando l'evidenza `ce2e_c6_005`).
-- In ossequio al principio di congelamento e integrità crittografica, `ground_truth.json` **NON viene modificato post-hoc**.
-
----
-
-## 8. Conclusioni Metodologiche e Delimitazioni Scientifiche
-
-La fase **Preliminary Cloud E2E Validation** ha dimostrato con successo che l'infrastruttura software di ChatAnalysis è in grado di:
-1. Dialogare con un LLM remoto reale tramite endpoint standard OpenAI-compatible;
-2. Ottenere output strutturato conforme a JSON Schema con validazione deterministica lato Python;
-3. Preservare l'integrità ontologica e la provenienza delle evidenze (`invalid_evidence_citations = 0`);
-4. Verificare l'identità del modello (`gemini-3.8-flash` exact match);
-5. Separare le *Execution Failures* (HTTP 429/503) dai *Model Decision Errors*;
-6. Eseguire Topic Detection e Topic Discovery reali su conversazioni sintetiche;
-7. Operare a garanzia assoluta di privacy senza trasmissione di dati forensi reali né esposizione di chiavi.
-
-**Delimitazioni Scientifiche:**
-- **Non tutti i casi sono stati completati:** A causa di risposte HTTP 503 di indisponibilità dei server Google, il completion rate è stato del **50.0% (3 / 6)**.
-- **Accuratezza Contestuale:** La Decision Accuracy del **66.7%** è calcolata esclusivamente sui 3 casi di Topic Detection validamente completati da `gemini-3.8-flash` e non costituisce una metrica generale o statisticamente esaustiva delle prestazioni del modello.
-- **Ragioni per il Percorso Finale Locale:** La volatilità della disponibilità (HTTP 503), l'impossibilità di garantire seed deterministico e le quote rigide confermano definitivamente la scelta progettuale della tesi: **il benchmark forense primario e finale viene condotto in locale (LM Studio su loopback) con modelli open-weight (Qwen, Llama, DeepSeek) su hardware compatibile**.
+1. **Parsing TXT Robusto e Multiformato**:
+   - Riconoscimento delle convenzioni di timestamp standard internazionali e italiane:
+     - Formato standard con trattino: `DD/MM/YYYY, HH:MM - Mittente: Testo` o `DD/MM/YY, HH:MM - Mittente: Testo`
+     - Formato con parentesi quadre: `[DD/MM/YYYY, HH:MM:SS] Mittente: Testo` o `[DD/MM/YY, HH:MM:SS] Mittente: Testo`
+     - Formati a 12 ore con indicatore AM/PM: `M/D/YY, H:MM AM - Mittente: Testo`
+   - Normalizzazione degli spazi non standard (spazi indivisibili Unicode `\u00a0`, narrow no-break space `\u202f`).
+2. **Messaggi Multilinea**:
+   - Le righe di testo prive di intestazione timestamp vengono identificate come prosecuzione del messaggio precedente e accumulate preservando ritorni a capo e punteggiatura.
+3. **Messaggi di Sistema**:
+   - Messaggi informativi generati da WhatsApp (es. *"I messaggi e le chiamate sono crittografati end-to-end"*, *"Tizio ha cambiato il suo numero"*, notifiche di gruppo) vengono rilevati e classificati con metadato `system_event = True`, preservando la cronologia senza generare mittenti fittizi.
+4. **Supporto Archivi ZIP con Media**:
+   - Capacità di elaborare file `.zip` generati dall'opzione "Esporta chat (Includi media)" di WhatsApp.
+   - Individuazione automatica del file di testo principale (`_chat.txt` o file `.txt` radice con contenuto conversazione).
+5. **Riferimenti Media (Media References)**:
+   - Identificazione delle occorrenze di allegati nel testo del messaggio (es. `<allegato: audio.opus>`, `<Media omesso>`, `IMG-20240510-WA0001.jpg (file allegato)`).
+   - Collegamento deterministico tra il record del messaggio e il file multimediale presente nell'archivio ZIP, popolando `media_reference`.
+6. **Sicurezza Sandbox ZIP e Protezione da Attacchi**:
+   - **Anti Zip-Slip**: verifica che ogni elemento estratto dall'archivio abbia un percorso strettamente relativo all'interno della cartella di destinazione. Tentativi di directory traversal (`../`, `..\\`) o percorsi assoluti provocano il rifiuto immediato del file.
+   - **Anti Zip-Bomb**: limiti restrittivi sulla dimensione massima decompressa consentita e sul numero di file contenuti nell'archivio.
+7. **Provenance Forense e Hashing SHA-256**:
+   - Calcolo incrementale in streaming dell'hash SHA-256 e della dimensione in byte del file sorgente di ingestion.
+   - L'impronta SHA-256 riguarda specificamente la sorgente/file di importazione ed è registrata nella provenance e nel riepilogo di importazione (`IngestionSummary`), non all'interno di ciascun singolo `RawRecord`.
+   - Mappatura completa da `RawRecord` a `UnifiedMessage` con conservazione della sorgente originale.
+8. **Sandbox Temporanea Volatile**:
+   - L'ingestion opera all'interno di un contesto isolato `tempfile.TemporaryDirectory(prefix="forensic_ingest_")`.
+   - La pulizia completa dei file temporanei è garantita dal blocco `finally`, assicurando l'assenza di file residui sul disco.
 
 ---
 
-## Dichiarazioni Obbligatorie di Chiusura
+## 4. Topic Discovery e Topic Detection: Motori e Workflow
 
-- **CLOUD E2E PHASE:** CLOSED
-- **ADDITIONAL LIVE RUNS:** NO
-- **V1/V2/V3 ARTIFACTS MODIFIED:** NO
-- **DATASET MODIFIED:** NO
-- **GROUND TRUTH MODIFIED:** NO
-- **REAL FORENSIC DATA SENT:** NO
-- **FINAL THESIS BENCHMARK:** NO
-- **NEXT EXPERIMENTAL PHASE:** LOCAL LM STUDIO QWEN/LLAMA/DEEPSEEK
+Nel sistema ChatAnalysis, l'analisi semantica delle conversazioni si fonda sulla netta separazione concettuale e algoritmica tra due paradigmi:
+
+```
++---------------------------------------------------------------------------------------+
+| TOPIC DISCOVERY                                                                       |
+| - Paradigma: Open-ended / Open Exploration                                            |
+| - Obiettivo: Identificare i temi emergenti trattati spontaneamente nella chat         |
+| - Motore: TopicDiscoveryAnalyzer.discover_topics()                                    |
+| - Output: DiscoveredTopic (label, short_description, evidence_ids correlati)          |
+| - Vincolo: Nessuna ipotesi a priori richiesta dall'operatore                          |
++---------------------------------------------------------------------------------------+
+
++---------------------------------------------------------------------------------------+
+| TOPIC DETECTION                                                                       |
+| - Paradigma: Targeted Verification (ipotesi investigativa specifica)                  |
+| - Obiettivo: Verificare in modo rigoroso e vincolante la presenza di un singolo topic |
+| - Motore: TopicDetectionAnalyzer.detect_topic()                                       |
+| - Output: TopicDetectionResult (PRESENT, ABSENT, UNCERTAIN)                           |
+| - Vincolo: Citazioni vincolanti (almeno 1 evidenza per PRESENT; lista vuota per ABSENT)|
+| - Spiegazione: Rationale oggettivo in lingua italiana                                 |
++---------------------------------------------------------------------------------------+
+```
+
+### 4.1 Il Nuovo Workflow Operativo: Discovery → Detection
+
+L'interfaccia consente all'investigatore di condurre un flusso investigativo continuo e formalmente rigoroso:
+
+1. **Scansione Iniziale**: L'utente consulta i temi emersi nella scheda **Topic Discovery**.
+2. **Selezione Argomento**: Per ogni card tematica (es. *"Accordi finanziari riservati"*), l'interfaccia presenta il pulsante:
+   ```
+   [ 🔬 Verifica con Topic Detection ]
+   ```
+3. **Costruzione Deterministica della Query**: Il sistema estrae `label` e `short_description` del `DiscoveredTopic` e invoca `ui.application.build_topic_query()` per creare un nuovo `TopicQuery` validato con ID univoco deterministico.
+4. **Nuova Inferenza Reale**: Viene avviata una vera esecuzione di `TopicDetectionAnalyzer.detect_topic()` sul `ConversationEvidenceDocument` attivo.
+   - **NON** viene effettuata una ricerca per stringa nei risultati preesistenti.
+   - **NON** avviene alcuna conversione di tipo artificiale da `DiscoveredTopic` a `TopicDetectionResult`.
+   - Viene interrogato il modello LLM locale configurato su LM Studio.
+5. **Verdetto Tri-Stato e Citazioni**:
+   - `PRESENT`: se il modello riscontra prove univoche nel testo, accompagnato da almeno un `evidence_id` valido appartenente al documento.
+   - `ABSENT`: se il tema non trova riscontro (`evidence_ids` rigorosamente vuoto).
+   - `UNCERTAIN`: in caso di prove frammentarie, ambigue o parziali.
+6. **Persistenza e Aggiornamento Sessione**:
+   - Il nuovo `TopicDetectionResult` viene aggiunto alla sessione (`add_detection_result`) senza alterare il documento forense originale.
+   - Il `SearchService` viene contestualmente sincronizzato per rendere immediatamente indicizzato e ricercabile il nuovo verdetto nell'Area 2.
+   - L'esito viene mostrato all'operatore con rationale, latenza, modello ed evidenze originali espandibili.
+
+### 4.2 Inserimento Libero di un Argomento (Area 1)
+
+L'operatore non è vincolato ai soli argomenti proposti dal discovery: può inserire qualsiasi ipotesi investigativa formulata liberamente:
+- **Argomento** (input testuale obbligatorio, es. *"Fuga di notizie riservate"*);
+- **Descrizione opzionale** (textarea contestuale per guidare la verifica);
+- **Pulsante "🚀 Esegui Topic Detection"**: attiva la pipeline di inferenza locale descritta al punto precedente.
+
+---
+
+## 5. LM Studio: Architettura Locale e Protocolli di Sicurezza
+
+L'inferenza locale si appoggia sull'adapter `ai/lmstudio.py` (`LmStudioClient`), progettato secondo stringenti criteri di sicurezza forense:
+
+1. **Loopback-Only Security (Gate G1)**:
+   - Il client accetta rigorosamente indirizzi di loopback locale (`127.0.0.1`, `localhost`, `::1`).
+   - Qualsiasi tentativo di puntamento a host remoti, LAN o cloud (es. `api.openai.com`, IP di rete locale) solleva un'eccezione `ValueError` bloccante.
+2. **Zero Dipendenze Esterne**:
+   - Implementato tramite libreria standard Python (`urllib.request`, `json`).
+3. **Nessun Download Automatico**:
+   - Il sistema ispeziona esclusivamente i modelli già scaricati e registrati nel server LM Studio locale (`/v1/models`).
+4. **Nessuna Inferenza Automatica durante l'Importazione**:
+   - Il caricamento di file reali WhatsApp o Cellebrite è puramente computazionale, deterministico e offline.
+   - La chiamata ad LM Studio si verifica **esclusivamente su azione manuale esplicita** dell'operatore.
+5. **Tassonomia e Gestione Errori Controllata**:
+   - Server offline o non avviato: intercettato come `LmStudioUnavailableError`, visualizzato all'utente con avviso chiaro ("LM Studio non raggiungibile su http://127.0.0.1:1234").
+   - Nessun modello caricato: intercettato come `AiModelNotSpecifiedError`, visualizzato con messaggio di istruzione all'utente senza crash dell'applicazione.
+   - Timeout di elaborazione: gestito tramite `AiBackendTimeoutError`.
+
+---
+
+## 6. Interfaccia Grafica Streamlit
+
+L'interfaccia grafica locale è strutturata in 6 sezioni coerenti:
+
+### 6.1 Schermata "2. Importazione"
+- Accetta file SQLite WhatsApp (`msgstore.db` con companion `wa.db` opzionale o `wa.db` standalone), Cellebrite (CSV, JSON, XML) e il nuovo formato **WhatsApp export chat (TXT / ZIP)**.
+- Valida il formato con preflight check in sandbox e produce un riepilogo metrico non sensibile (record raw, messaggi unificati, conversazioni estratte, validation issues, hash SHA-256 del file sorgente di importazione).
+
+### 6.2 Schermata "5. Analisi topic"
+La scheda è divisa in due tab operative:
+
+#### Tab "Topic Detection (Verifica Mirata)"
+Organizzata in due aree rigorosamente distinte:
+- **AREA 1: "Verifica un argomento (Nuova Inferenza)"**:
+  - Campo testuale "Argomento" e textarea "Descrizione opzionale";
+  - Campo per modello LM Studio opzionale (con fallback automatico sul modello caricato);
+  - Pulsante primario **"🚀 Esegui Topic Detection"**;
+  - Riquadro risultato in tempo reale: badge decisione (`🟢 PRESENTE`, `⚪ ASSENTE`, `🟡 INCERTO`), motivazione AI (*Rationale*), modello utilizzato, latenza in secondi, elenco degli evidence ID citati ed expander contenente il **testo originale forense delle evidenze associate**.
+- **AREA 2: "Filtra risultati Detection già eseguiti"**:
+  - Distinta esplicitamente come visualizzatore e filtro della cronologia di sessione;
+  - Selettore filtro decisione (*TUTTI, PRESENT, ABSENT, UNCERTAIN*);
+  - Campo di ricerca per label o descrizione;
+  - Interrogazione tramite `search_topic_detections()`.
+
+#### Tab "Topic Discovery (Argomenti Emersi)"
+- Visualizza gli argomenti estratti autonomamente dal motore AI o precalcolati nella demo;
+- Per ogni argomento: label, sintesi, evidenze di supporto espandibili;
+- Pulsante dedicato **"🔬 Verifica con Topic Detection"** per ogni card tematica, che lancia una nuova inferenza mirata sull'argomento selezionato e ne memorizza il risultato.
+
+---
+
+## 7. Verifica e Suite di Test: Dati Reali
+
+Tutte le funzionalità descritte sono coperte da test automatizzati riproducibili eseguiti con `pytest`.
+
+### 7.1 Bilancio Reale della Suite Completa
+
+```
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+
+========== 1226 passed, 1 skipped, 5 deselected in 91.41s (0:01:31) ===========
+```
+
+- **Totale Test Superati:** **1226 passed**
+- **Test Falliti / Errori:** **0 failed, 0 errors**
+- **Test Skippati:** 1 (smoke test live condizionale per LM Studio `RUN_LM_STUDIO_SMOKE=1`, attivabile solo in presenza di demone LM Studio attivo con modello caricato)
+- **Test Deselezionati:** 5 (benchmark opt-in guard)
+
+### 7.2 Ripartizione per Aree Chiave
+
+| Area di Test | Modulo Principale | Contenuto e Obiettivo |
+| :--- | :--- | :--- |
+| **Topic Detection Manuale & Workflow** | `tests/unit/test_ui_manual_topic_detection.py` | 12 test: topic libero → TopicQuery, inferenza con TopicDetectionAnalyzer, verdetto PRESENT/ABSENT/UNCERTAIN, Discovery → Detection, immutabilità forense, isolamento offline, AppTest interattivo. |
+| **WhatsApp Export TXT / ZIP** | `tests/unit/test_whatsapp_export_importer.py` | 22 test: parsing formati timestamp, messaggi multilinea, eventi di sistema, estrazione ZIP, media linking, sicurezza anti zip-slip, anti zip-bomb, streaming SHA-256. |
+| **WhatsApp Database Ingestion** | `tests/unit/test_whatsapp_msgstore_importer.py`, `test_whatsapp_wa_importer.py` | Schema SQLite, preservazione JID e timestamp grezzi, vincolo sola lettura, streaming record. |
+| **Cellebrite Importer** | `tests/unit/test_cellebrite_csv/json/xml_importer.py` | Ingestion e mapping per export Cellebrite UFED. |
+| **Validazione & Normalizzazione** | `tests/unit/test_validator.py`, `test_normalizer.py` | Validazione strutturale, mapping fusi orari, pulizia testo senza alterazione originale. |
+| **Search Engine & Servizi** | `tests/unit/test_search_service.py`, `test_search_engine.py` | Indicizzazione deterministica, match mode (PHRASE, ALL_TERMS, ANY_TERM, EXACT), sincronizzazione real-time dei topic. |
+| **Streamlit UI & Smoke Test** | `tests/unit/test_ui_smoke.py`, `test_ui_application.py`, `test_ui_state.py` | Navigazione headless AppTest, rendering pagine, gestione errori sicura, pseudonimizzazione identificatori. |
+| **Sicurezza & Privacy** | `tests/unit/test_ui_privacy_hardening.py`, `test_deep_immutability.py` | Rifiuto binding su LAN/interfacce pubbliche, congelamento profondo strutture dati, assenza logging sensibile. |
+| **Integrazione E2E Completa** | `tests/integration/test_full_pipeline_e2e.py`, `test_real_ingestion.py` | Catena completa da file grezzo a documento forense e ricerca. |
+
+---
+
+## 8. Protocollo Sperimentale di Benchmark e Chiusura Fase Cloud
+
+### 8.1 Separazione tra UI Operativa e Suite di Benchmark
+
+È fondamentale ribadire la separazione metodologica tra:
+1. **Interfaccia Utente Operativa**: frontend interattivo orientato all'investigatore, abilitato all'analisi on-demand via LM Studio sia su dataset sintetico che su acquisizioni reali.
+2. **Suite Sperimentale di Benchmark (`ai/experiment.py`)**: modulo batch rigorosamente congelato, destinato alla raccolta delle metriche formali per la tesi di laurea.
+
+### 8.2 Conservazione e Freeze del Benchmark
+- **Nessuna modifica a `ai/experiment.py`**: il modulo di benchmark non è stato alterato.
+- **Dataset e Ground Truth Immutabili**: il dataset sintetico (`test_data/ai_benchmark/`) e la ground truth associata conservano i rispettivi hash crittografici originari.
+- **Modelli Inclusi nel Benchmark Ufficiale**:
+  - `Qwen2.5-7B-Instruct`
+  - `Llama 3.1-8B-Instruct`
+  - `DeepSeek-R1-Distill-Qwen-7B`
+
+### 8.3 Distinzione Ambienti Hardware e Riproducibilità Benchmark
+
+Il progetto distingue formalmente l'ambiente utilizzato per lo sviluppo e l'ingegnerizzazione del software dalla workstation di calcolo dedicata alla sperimentazione empirica dei modelli:
+
+#### AMBIENTE DI SVILUPPO
+- **Processore**: AMD A8-7410, privo di AVX2
+- **Utilizzo**: Utilizzato per sviluppo e test software.
+
+#### AMBIENTE SPERIMENTALE BENCHMARK
+- **Sistema Operativo**: Ubuntu 22.04.5 LTS
+- **Processore**: Intel Core i5-9600K, 6 core / 6 thread, AVX2
+- **Memoria RAM**: circa 32 GB RAM
+- **Scheda Video**: NVIDIA GeForce GTX TITAN X, 12 GB VRAM
+- **Driver NVIDIA**: 550.107.02
+- **CUDA**: 12.4
+- **Python**: 3.12.4
+- **Protocollo di Esecuzione**: I benchmark finali dei tre modelli (`Qwen2.5-7B-Instruct`, `Llama 3.1-8B-Instruct`, `DeepSeek-R1-Distill-Qwen-7B`) verranno rieseguiti su questa stessa workstation utilizzando un unico commit finale.
+
+### 8.4 Chiusura della Validazione Cloud E2E Preliminare
+La validazione preliminare condotta in precedenza su endpoint cloud (Protocolli V1, V2, V3 archiviati in `output/cloud_e2e/`) rimane formalmente **chiusa e congelata**. Essa ha assolto il compito di validare i contratti JSON Schema e la pipeline prima del definitivo passaggio all'ambiente offline. Nessun dato reale ha transitato o transiterà su canali esterni.
+
+---
+
+## 9. Riepilogo di Conformità ai Vincoli di Progetto
+
+| Vincolo di Progetto | Stato | Riscontro Tecnico |
+| :--- | :--- | :--- |
+| **Privacy Forense & Offline** | CONFORME | Nessuna connessione remota. LmStudioClient vincolato a loopback (`127.0.0.1`). File reali elaborati in sandbox temporanea locale. |
+| **Tracciabilità delle Evidenze** | CONFORME | Ogni TopicDetectionResult cita rigorosamente solo `evidence_id` validi appartenenti al documento. Rationale in italiano con spiegazione oggettiva. |
+| **Determinismo Ingestion & Search** | CONFORME | Ingestion e SearchService sono deterministici e offline (zero inferenze automatiche). L'inferenza LLM è locale, controllata e on-demand (non qualificata come deterministica in senso rigoroso). |
+| **Workflow Discovery → Detection** | CONFORME | Avvio di nuova inferenza reale con TopicDetectionAnalyzer su click esplicito. Area 1 e Area 2 distinte nella UI. |
+| **Stato Test Suite** | CONFORME | **1226 passed, 1 skipped, 5 deselected** (0 failed, 0 errors) su `pytest`. Nessuna regressione introdotta. |
+| **Integrità Benchmark** | CONFORME | Modelli fissati (`Qwen2.5-7B-Instruct`, `Llama 3.1-8B-Instruct`, `DeepSeek-R1-Distill-Qwen-7B`), ground truth, prompt e metriche congelati. |
