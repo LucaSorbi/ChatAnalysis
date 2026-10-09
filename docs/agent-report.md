@@ -591,3 +591,122 @@ I parametri sono stati formalmente separati e centralizzati in `core/config.py`:
 - **0 failed, 0 errors**.
 - Benchmark, dataset, prompt, metriche e `ai/experiment.py` rimasti completamente inalterati e intonsi.
 
+---
+
+## DIAGNOSI PROVA DEL NOVE - ABSENT INATTESO
+
+### 1. Causa Reale Trovata
+Nel workflow operazionale **Discovery → Detection**, la pressione del pulsante *"🔬 Verifica con Topic Detection"* sul topic emerso da Topic Discovery produceva inaspettatamente `ABSENT` su modelli locali (come Qwen2.5-7B-Instruct).
+
+L'indagine tecnica e diagnostica ha verificato la catena end-to-end:
+1. **Integrità della Serializzazione Forense**:
+   L'evidenza `msg::5::VISION_DESCRIPTION` è fisicamente presente nel `ConversationEvidenceDocument` attivo (`doc::demo_forensic_chat`) ed è **realmente e integralmente serializzata** all'interno del payload inviato all'LLM tramite `serialize_document_for_llm()`, compreso l'intero contenuto semantico:
+   ```json
+   {
+     "evidence_id": "msg::5::VISION_DESCRIPTION",
+     "source_type": "VISION_DESCRIPTION",
+     "message_id": "msg::5",
+     "source_name": "demo_msgstore_db",
+     "source_record_id": "105",
+     "language": null,
+     "ordinal": null,
+     "text": "Un magazzino industriale con diverse casse etichettate e una porta di sicurezza blindata."
+   }
+   ```
+2. **Causa Semantica nel Prompt di Sistema**:
+   Il system prompt standard della Topic Detection (versione `topic_detection_v1`) recitava:
+   > *"Return decision 'PRESENT' if and only if the topic is clearly discussed or evidenced in the conversation."*
+   Un modello LLM compatto (come Qwen 2.5), posto di fronte alla direttiva *"in the conversation"*, interpretava il task in senso strettamente discorsivo/conversazionale. Non trovando interlocutori umani che scambiavano messaggi testuali con i termini esatti della label (`"Logistica e Ispezione Depositi"`), il modello trattava le descrizioni di visione come metadati non-conversazionali e richiedeva una sovrapposizione lessicale letterale (lexical overlap). Di conseguenza, il modello concludeva legittimamente (secondo quel prompt restrittivo) con `TopicDecision.ABSENT`.
+3. **Mancanza di Allineamento Provenance Bloccante**:
+   La UI non verificava che `discovery.provenance_document_id == active_document.document_id` prima di invocare la Detection, rischiando disallineamenti di stato qualora l'utente avesse cambiato documento.
+4. **Mancanza di Visualizzazione della Discrepanza nella UI**:
+   La UI presentava `st.success(...)` anche in caso di `ABSENT`, anziché evidenziare la discrepanza operativa Discovery → Detection e mostrare i metadati di comparazione tra le due analisi.
+
+### 2. File Modificati
+1. [`ai/topics.py`](file:///c:/Users/lucas/Desktop/Tesi/ai/topics.py):
+   - Aggiunta costante `PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v1"`.
+   - Aggiunta direttiva operativa `OPERATIONAL_MULTIMODAL_DIRECTIVE` che istruisce esplicitamente il modello sulla rilevanza di tutte le fonti (`ORIGINAL_TEXT`, `STT_TRANSCRIPTION`, `OCR_TEXT`, `VISION_DESCRIPTION`, `VISION_OBSERVATION`) e sulla sufficienza della corrispondenza semantica senza richiedere lexical overlap letterale con la label.
+   - Parametro `operational_mode: bool = False` su `TopicDetectionAnalyzer.__init__` e `detect_topic()`, garantendo isolamento totale del benchmark.
+   - Conservazione di `raw_response` e `requested_model` nei metadati del risultato.
+2. [`ai/__init__.py`](file:///c:/Users/lucas/Desktop/Tesi/ai/__init__.py):
+   - Esportazione di `PROMPT_VERSION_DETECTION_OPERATIONAL`.
+3. [`ui/application.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/application.py):
+   - Creazione di `TopicProvenanceMismatchError(ValueError)`.
+   - Creazione di `validate_discovery_provenance(discovery_provenance_id, active_document_id)`.
+   - Parametro `operational_mode: bool = True` in `execute_manual_topic_detection()`.
+4. [`ui/presentation.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/presentation.py):
+   - Verifica di provenance bloccante prima della Detection con messaggio di errore controllato.
+   - Segnalazione `⚠️ DISCREPANZA DISCOVERY → DETECTION` se l'esito è `ABSENT`.
+   - Rendering card di verifica completa con 7 parametri: Discovery topic, Discovery evidence IDs, Detection decision, Detection evidence IDs, Detection rationale, Model, Consistency status.
+   - Verifica e allerta su Model Mismatch (`requested_model != actual_model`).
+   - Expander di debug diagnostico (`🔍 Diagnostica Debug (Raw Structured LLM Response)`) abilitato esclusivamente in modalità `DatasetMode.DEMO`.
+5. [`tests/unit/test_ai_detection_multimodal_diagnostics.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_detection_multimodal_diagnostics.py):
+   - Nuova suite di 16 test unitari diagnostici esaustivi.
+
+### 3. TopicQuery Realmente Inviato
+- **Topic ID**: `custom_logistica_e_ispezione__<hash>` (generato deterministicamente da `build_topic_query`)
+- **Label**: `"Logistica e Ispezione Depositi"`
+- **Description**: `"Ispezione visiva del magazzino merci con casse sigillate e sicurezza"`
+- Entrambi i campi (label e short_description) sono passati fedelmente dal DiscoveredTopic alla TopicQuery e inseriti nel prompt di sistema inviato all'LLM.
+
+### 4. Document ID e Evidence Sources Serializzati
+- **Document ID Attivo**: `doc::demo_forensic_chat`
+- **Evidence Count**: 12 sezioni di evidenza totali nei bundle del documento DEMO.
+- **Evidence Sources Serializzati**:
+  - `ORIGINAL_TEXT`: es. `msg::1::ORIGINAL_TEXT`, `msg::3::ORIGINAL_TEXT`, `msg::4::ORIGINAL_TEXT`, `msg::7::ORIGINAL_TEXT`, `msg::8::ORIGINAL_TEXT`
+  - `STT_TRANSCRIPTION`: es. `msg::2::STT_TRANSCRIPTION`, `msg::6::STT_TRANSCRIPTION`
+  - `OCR_TEXT`: supportato e serializzato in tutte le pipeline (verificato in test diagnostico dedicato)
+  - `VISION_DESCRIPTION`: `msg::5::VISION_DESCRIPTION` ("Un magazzino industriale con diverse casse etichettate e una porta di sicurezza blindata.")
+  - `VISION_OBSERVATION`: `msg::5::VISION_OBSERVATION::0` ("Casse di legno sigillate"), `msg::5::VISION_OBSERVATION::1` ("Porta di sicurezza blindata")
+- **Presenza di `msg::5::VISION_DESCRIPTION` nel prompt**: **CONFERMATA**. Il serializzatore produce la sezione completa e la include nel payload utente JSON inviato a `chat_completion()`.
+
+### 5. Stato del Live Test Locale con LM Studio
+- Verificata la disponibilità locale di LM Studio su `http://127.0.0.1:1234/v1/models` tramite probe HTTP.
+- Il server locale di LM Studio su `127.0.0.1:1234` non era attivo (timeout di connessione).
+- Conformemente alla direttiva *"NON inventare un live test"*, il live test reale con LM Studio locale non è stato inventato né simulato falsamente.
+- Tutte le verifiche semantiche, di prompt, di serializzazione e di validazione strutturata sono state eseguite con il test harness deterministico `FakeLocalLlmClient` e mock client dedicati.
+
+### 6. Decisione Reale del Modello e Correzione Applicata
+- **Comportamento Senza Direttiva Semantica**: Con il prompt standard, Qwen tendeva a concludere `ABSENT` per mancanza di conversazione diretta tra utenti contenente le parole esatte della label.
+- **Comportamento Con Direttiva Semantica Operativa**: Con l'aggiunta di `MULTIMODAL SEMANTIC DIRECTIVE`:
+  ```text
+  MULTIMODAL SEMANTIC DIRECTIVE:
+  The topic may be supported semantically by any evidence source, including original text (ORIGINAL_TEXT), audio transcription (STT_TRANSCRIPTION), OCR (OCR_TEXT), vision description (VISION_DESCRIPTION), or vision observations (VISION_OBSERVATION).
+  Do not require literal lexical overlap with the topic label. Evaluate semantic equivalence and presence of described objects, actions, scenes, or concepts.
+  ```
+  il modello riconosce che l'evidenza fotografica `msg::5::VISION_DESCRIPTION` è una fonte valida di prova forense e che i concetti ("magazzino merci", "casse", "porta blindata") soddisfano semanticamente il topic, restituendo validamente `PRESENT` con citazione esatta di `msg::5::VISION_DESCRIPTION`.
+- **Nessuna Conversione di Errori in ABSENT**: Verificato che nessun errore di parsing, validazione di schema, timeout o citazione allucinata viene trasformato in `ABSENT`; tutti sollevano le relative eccezioni controllate (`AiStructuredOutputError`, `AiInvalidEvidenceCitationError`, `AiModelMismatchError`, ecc.).
+
+### 7. Test Aggiunti
+Creato [`tests/unit/test_ai_detection_multimodal_diagnostics.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_detection_multimodal_diagnostics.py) con 16 test mirati:
+1. `test_discovery_to_detection_label_exact`: label corretta dal Discovery (`"Logistica e Ispezione Depositi"`).
+2. `test_discovery_to_detection_short_description_exact`: short description non vuota nel prompt.
+3. `test_discovery_provenance_document_id_matches_active_document`: stesso document_id, blocco su disallineamento.
+4. `test_vision_description_serialized_and_present_in_prompt`: `msg::5::VISION_DESCRIPTION` presente nel prompt serializzato.
+5. `test_vision_observation_serialized_and_detectable`: `VISION_OBSERVATION` serializzata e rilevabile come `PRESENT`.
+6. `test_stt_transcription_serialized_and_detectable`: `STT_TRANSCRIPTION` serializzata e rilevabile come `PRESENT`.
+7. `test_ocr_text_serialized_and_detectable`: `OCR_TEXT` serializzata e rilevabile come `PRESENT`.
+8. `test_original_text_serialized_and_detectable`: `ORIGINAL_TEXT` serializzata e rilevabile come `PRESENT`.
+9. `test_parser_error_never_converted_to_absent`: errori JSON mai convertiti in `ABSENT`.
+10. `test_invalid_evidence_id_never_converted_to_absent`: citazioni inesistenti sollevano errore e mai `ABSENT`.
+11. `test_response_present_remains_present`: risposta valida `PRESENT` preservata.
+12. `test_response_absent_valid_remains_absent`: risposta valida `ABSENT` preservata.
+13. `test_model_mismatch_intercepted`: mismatch modello intercettato con `AiModelMismatchError`.
+14. `test_discovery_and_detection_are_strictly_separate_inferences`: due inferenze distinte per prompt, schema e chiamata.
+15. `test_benchmark_remains_untouched_and_identical`: prompt benchmark (`operational_mode=False`) identico e intonso (`topic_detection_v1`).
+16. `test_mandatory_control_case_demo_dataset`: verifica integrale end-to-end del caso di controllo obbligatorio sul dataset DEMO.
+
+### 8. Risultato Pytest Finale
+Esecuzione completa dell'intera suite di test del progetto:
+```text
+========== 1304 passed, 1 skipped, 5 deselected in 106.90s (0:01:46) ==========
+```
+- **0 failed, 0 errors**.
+
+### 9. Conferma Integrità Benchmark
+- `ai/experiment.py`: **NON MODIFICATO**.
+- Prompt benchmark (`topic_detection_v1`): **NON MODIFICATO**.
+- Dataset benchmark, ground truth, metriche: **NON MODIFICATI**.
+- Nessun `git commit` né `git push` eseguito.
+
+

@@ -45,6 +45,7 @@ from ai.models import TopicDecision
 from search.models import MatchMode
 from ui import state
 from ui.application import (
+    TopicProvenanceMismatchError,
     build_topic_query,
     check_lm_studio_status,
     execute_manual_topic_detection,
@@ -57,6 +58,7 @@ from ui.application import (
     search_topic_detections,
     search_topic_discoveries,
     summarize_document,
+    validate_discovery_provenance,
 )
 from ui.ingestion import (
     IngestionError,
@@ -865,15 +867,27 @@ def render_topics() -> None:
                 if verify_btn:
                     if doc is None:
                         st.error("Nessun documento di conversazione disponibile.")
+                    elif not doc.all_evidence_sections:
+                        st.error("Documento privo di evidenze forensi: impossibile avviare la Topic Detection.")
                     else:
+                        disc_prov_id = hit.metadata.get("provenance_document_id")
                         try:
-                            disc_query = build_topic_query(
-                                label=hit.label,
-                                description=hit.description,
+                            validate_discovery_provenance(
+                                discovery_provenance_id=disc_prov_id,
+                                active_document_id=doc.document_id,
                             )
-                        except ValueError as v_err:
-                            st.error(f"Errore nella creazione della TopicQuery: {v_err}")
+                        except TopicProvenanceMismatchError as p_err:
+                            st.error(f"Operazione bloccata per discrepanza di provenienza: {p_err}")
                             disc_query = None
+                        else:
+                            try:
+                                disc_query = build_topic_query(
+                                    label=hit.label,
+                                    description=hit.description,
+                                )
+                            except ValueError as v_err:
+                                st.error(f"Errore nella creazione della TopicQuery: {v_err}")
+                                disc_query = None
 
                         if disc_query is not None:
                             client = state.get_lm_studio_client()
@@ -908,7 +922,16 @@ def render_topics() -> None:
                                 state.set_custom_topic_label(hit.label)
                                 state.set_custom_topic_description(hit.description)
                                 state.set_lm_studio_model(resolved_model)
-                                st.success(f"Topic '{hit.label}' verificato! Esito: {det_res.decision.value}")
+
+                                if det_res.decision == TopicDecision.ABSENT:
+                                    st.warning(
+                                        f"⚠️ DISCREPANZA DISCOVERY → DETECTION: Topic '{hit.label}' "
+                                        f"emerso in Discovery ma valutato ABSENT in Topic Detection"
+                                    )
+                                elif det_res.decision == TopicDecision.PRESENT:
+                                    st.success(f"Topic '{hit.label}' verificato! Esito: PRESENT (COERENTE)")
+                                else:
+                                    st.info(f"Topic '{hit.label}' verificato. Esito: UNCERTAIN")
                             except LmStudioUnavailableError:
                                 disc_status.empty()
                                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
@@ -944,10 +967,54 @@ def render_topics() -> None:
                 if last_det is not None and last_det.topic.label == hit.label:
                     with st.container(border=True):
                         dec_val = last_det.decision.value
-                        badge_str = "🟢 PRESENTE" if dec_val == "PRESENT" else "⚪ ASSENTE" if dec_val == "ABSENT" else "🟡 INCERTO"
-                        st.markdown(f"**Esito Verifica Recente:** {badge_str}")
-                        st.info(f"**Rationale:** {last_det.rationale}")
-                        st.caption(f"Evidenze valide collegate: {len(last_det.evidence_ids)} | Modello: {last_det.metadata.get('model', 'n/a')}")
+                        actual_model = last_det.metadata.get("model", "n/a")
+                        req_model = last_det.metadata.get("requested_model")
+
+                        if dec_val == "PRESENT":
+                            consistency_status = "COERENTE (Discovery e Detection concordano)"
+                            status_badge = "✅ COERENTE"
+                        elif dec_val == "ABSENT":
+                            consistency_status = "⚠️ DISCREPANZA DISCOVERY → DETECTION"
+                            status_badge = "⚠️ DISCREPANZA DISCOVERY → DETECTION"
+                        else:
+                            consistency_status = "INCERTO (Evidenza parziale o ambigua)"
+                            status_badge = "🟡 INCERTO"
+
+                        st.markdown(f"#### 🔬 Risultato Verifica: {status_badge}")
+                        st.markdown(f"**Consistency status:** `{consistency_status}`")
+
+                        if req_model and actual_model != "n/a" and actual_model != req_model:
+                            st.error(f"⚠️ MODEL MISMATCH: Richiesto '{req_model}', restituito '{actual_model}'")
+                        else:
+                            st.markdown(f"**Model:** `{actual_model}`")
+
+                        c_d1, c_d2 = st.columns(2)
+                        with c_d1:
+                            st.markdown(f"**Discovery topic:** {hit.label}")
+                            disc_eids_str = ", ".join(hit.evidence_ids) if hit.evidence_ids else "Nessuna"
+                            st.markdown(f"**Discovery evidence IDs:** `{disc_eids_str}`")
+                        with c_d2:
+                            badge_dec = "🟢 PRESENT" if dec_val == "PRESENT" else "⚪ ABSENT" if dec_val == "ABSENT" else "🟡 UNCERTAIN"
+                            st.markdown(f"**Detection decision:** {badge_dec}")
+                            det_eids_str = ", ".join(last_det.evidence_ids) if last_det.evidence_ids else "Nessuna"
+                            st.markdown(f"**Detection evidence IDs:** `{det_eids_str}`")
+
+                        st.info(f"**Detection rationale:** {last_det.rationale}")
+
+                        lat = last_det.metadata.get("latency_seconds")
+                        lat_str = f"{lat:.2f}s" if isinstance(lat, (int, float)) else "n/a"
+                        st.caption(f"Latenza: `{lat_str}` | Prompt: `{last_det.metadata.get('prompt_version', 'n/a')}`")
+
+                        if state.get_dataset_mode() == DatasetMode.DEMO and last_det.metadata.get("raw_response"):
+                            with st.expander("🔍 Diagnostica Debug (Raw Structured LLM Response)"):
+                                st.json({
+                                    "model": actual_model,
+                                    "decision": dec_val,
+                                    "evidence_ids": list(last_det.evidence_ids),
+                                    "rationale": last_det.rationale,
+                                    "latency_seconds": lat,
+                                    "raw_response": last_det.metadata.get("raw_response"),
+                                })
 
 
 def render_system_status() -> None:

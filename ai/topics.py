@@ -46,7 +46,14 @@ from ai.structured import (
 )
 
 PROMPT_VERSION_DETECTION = "topic_detection_v1"
+PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v1"
 PROMPT_VERSION_DISCOVERY = "topic_discovery_v1"
+
+OPERATIONAL_MULTIMODAL_DIRECTIVE = """
+MULTIMODAL SEMANTIC DIRECTIVE:
+The topic may be supported semantically by any evidence source, including original text (ORIGINAL_TEXT), audio transcription (STT_TRANSCRIPTION), OCR (OCR_TEXT), vision description (VISION_DESCRIPTION), or vision observations (VISION_OBSERVATION).
+Do not require literal lexical overlap with the topic label. Evaluate semantic equivalence and presence of described objects, actions, scenes, or concepts.
+"""
 
 
 class TopicDetectionAnalyzer:
@@ -54,9 +61,15 @@ class TopicDetectionAnalyzer:
     Analizzatore per la verifica mirata di un singolo topic su un ConversationEvidenceDocument.
     """
 
-    def __init__(self, client: BaseLlmClient, default_model_id: str | None = None) -> None:
+    def __init__(
+        self,
+        client: BaseLlmClient,
+        default_model_id: str | None = None,
+        operational_mode: bool = False,
+    ) -> None:
         self.client = client
         self.default_model_id = default_model_id
+        self.operational_mode = operational_mode
 
     def detect_topic(
         self,
@@ -69,12 +82,19 @@ class TopicDetectionAnalyzer:
         seed: int | None = 42,
         timeout_seconds: float = 30.0,
         max_tokens: int | None = None,
+        operational_mode: bool | None = None,
     ) -> TopicDetectionResult:
         """
         Esegue la detection del topic specificato.
         """
         target_model = model_id or self.default_model_id
         valid_evidence_ids = {s.evidence_id for s in document.all_evidence_sections}
+        is_operational = self.operational_mode if operational_mode is None else operational_mode
+        prompt_version = (
+            PROMPT_VERSION_DETECTION_OPERATIONAL
+            if is_operational
+            else PROMPT_VERSION_DETECTION
+        )
 
         # Gestione documenti privi di evidenza testuale
         if not valid_evidence_ids:
@@ -86,15 +106,18 @@ class TopicDetectionAnalyzer:
                 provenance_document_id=document.document_id,
                 metadata={
                     "empty_document": True,
-                    "prompt_version": PROMPT_VERSION_DETECTION,
+                    "prompt_version": prompt_version,
                     "strategy": strategy.value,
                     "model": target_model or "none",
+                    "requested_model": target_model,
+                    "operational_mode": is_operational,
+                    "raw_response": None,
                 },
             )
 
         # Costruzione del system prompt con direttiva anti-injection e specifiche di task
         system_content = f"""{SYSTEM_SECURITY_DIRECTIVE}
-TASK: SPECIFIC TOPIC DETECTION (Version: {PROMPT_VERSION_DETECTION})
+TASK: SPECIFIC TOPIC DETECTION (Version: {prompt_version})
 You must determine if the following topic is discussed or present in the forensic evidence:
 TOPIC ID: {topic.topic_id}
 LABEL: {topic.label}
@@ -108,6 +131,9 @@ OUTPUT RULES:
 4. CITE ONLY EXACT evidence_ids that are present in the evidence block. DO NOT fabricate or invent IDs.
 5. Provide a short, objective rationale explaining the decision in Italian. DO NOT provide lengthy chain-of-thought.
 """
+
+        if is_operational:
+            system_content += f"{OPERATIONAL_MULTIMODAL_DIRECTIVE}\n"
 
         if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
             system_content += "\nMULTILINGUAL DIRECTIVE: The evidence may contain multiple languages. Understand the original language but respond with rationale in Italian.\n"
@@ -146,9 +172,10 @@ OUTPUT RULES:
         )
 
         metadata: dict[str, Any] = {
-            "prompt_version": PROMPT_VERSION_DETECTION,
+            "prompt_version": prompt_version,
             "strategy": strategy.value,
             "model": response.model,
+            "requested_model": target_model,
             "latency_seconds": response.latency_seconds,
             "prompt_tokens": response.prompt_tokens,
             "completion_tokens": response.completion_tokens,
@@ -156,6 +183,8 @@ OUTPUT RULES:
             "max_tokens": max_tokens,
             "temperature": temperature,
             "seed": seed,
+            "operational_mode": is_operational,
+            "raw_response": response.content,
         }
 
         return TopicDetectionResult(

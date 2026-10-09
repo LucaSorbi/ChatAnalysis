@@ -421,6 +421,28 @@ def prepare_operational_model(
     return target
 
 
+class TopicProvenanceMismatchError(ValueError):
+    """Sollevata quando il topic scoperto appartiene a un documento diverso da quello attivo."""
+    pass
+
+
+def validate_discovery_provenance(
+    discovery_provenance_id: str | None,
+    active_document_id: str,
+) -> None:
+    """
+    Verifica che il topic scoperto appartenga esattamente al documento attivo.
+    Solleva TopicProvenanceMismatchError in caso di discrepanza.
+    """
+    if not isinstance(active_document_id, str) or not active_document_id.strip():
+        raise ValueError("active_document_id deve essere una stringa non vuota.")
+    if discovery_provenance_id is not None and discovery_provenance_id != active_document_id:
+        raise TopicProvenanceMismatchError(
+            f"Discrepanza di provenienza: discovery document '{discovery_provenance_id}' "
+            f"!= active document '{active_document_id}'."
+        )
+
+
 def execute_manual_topic_detection(
     document: ConversationEvidenceDocument,
     topic: TopicQuery,
@@ -432,6 +454,7 @@ def execute_manual_topic_detection(
     seed: int | None = 42,
     timeout_seconds: float = DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
     max_tokens: int | None = DEFAULT_OPERATIONAL_MAX_TOKENS,
+    operational_mode: bool = True,
 ) -> TopicDetectionResult:
     """
     Esegue una vera inferenza di Topic Detection sulla conversazione corrente
@@ -452,7 +475,11 @@ def execute_manual_topic_detection(
     if hasattr(target_client, "model_id"):
         target_client.model_id = target_model
 
-    analyzer = TopicDetectionAnalyzer(client=target_client, default_model_id=target_model)
+    analyzer = TopicDetectionAnalyzer(
+        client=target_client,
+        default_model_id=target_model,
+        operational_mode=operational_mode,
+    )
     return analyzer.detect_topic(
         document=document,
         topic=topic,
@@ -462,6 +489,7 @@ def execute_manual_topic_detection(
         seed=seed,
         timeout_seconds=timeout_seconds,
         max_tokens=max_tokens,
+        operational_mode=operational_mode,
     )
 
 

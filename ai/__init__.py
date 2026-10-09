@@ -68,6 +68,7 @@ from ai.serializer import (
 )
 from ai.topics import (
     PROMPT_VERSION_DETECTION,
+    PROMPT_VERSION_DETECTION_OPERATIONAL,
     PROMPT_VERSION_DISCOVERY,
     TopicDetectionAnalyzer,
     TopicDiscoveryAnalyzer,
@@ -139,6 +140,7 @@ __all__ = [
     "TopicDetectionMetrics",
     # Versions
     "PROMPT_VERSION_DETECTION",
+    "PROMPT_VERSION_DETECTION_OPERATIONAL",
     "PROMPT_VERSION_DISCOVERY",
     "PROMPT_VERSION_TRANSLATION",
 ]
