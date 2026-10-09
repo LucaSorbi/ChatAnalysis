@@ -10,8 +10,7 @@ La **Streamlit UI Foundation** costituisce il layer di presentazione e interazio
 - **Integrazione Trasparente con Search Layer**: L'interfaccia delega interamente l'indicizzazione e l'interrogazione delle evidenze e dei topic al facade deterministico `search.SearchService`.
 - **Modalità Dimostrativa Sintetica**: L'app opera immediatamente anche in assenza di file reali, mediante un generatore di conversazioni sintetiche multilingua (`ui.demo`) conforme a tutti i contratti e alle invarianti di provenance.
 - **Modalità Real File Ingestion (OPERATIVA)**: Supporto nativo ed end-to-end al caricamento sicuro di file reali WhatsApp (`msgstore.db` con eventuale companion `wa.db`, `wa.db` standalone, oppure esportazioni native in formato **TXT** o **ZIP** con allegati) e Cellebrite (CSV, JSON, XML), instradati attraverso la pipeline completa di validazione, normalizzazione, entity resolution ed evidence bundling, con selezione multi-conversazione e ricerca deterministica.
-- **Privacy Hardening e Pseudonimizzazione**: Nessuna informazione identificativa (JID, numeri telefonici, titoli chat grezzi) viene esposta nei selettori UI o nei campi principali di riepilogo. Gli identificatori tecnici sono isolati in sezioni espandibili di provenance interna.
-- **Rinvio Trasparente del Benchmark Reale LM Studio**: Dichiarazione esplicita del rinvio dell'inferenza con modelli GGUF/llama.cpp a causa dei limiti di set istruzioni della macchina host (AMD A8-7410 priva di AVX2), con conferma dello stato **REAL PILOT READY** per l'architettura AI.
+- **Architettura AI Portabile e Indipendente dall'Hardware**: Local AI Layer operativo tramite LM Studio (`http://127.0.0.1:1234`) con gestione autonoma del ciclo di vita dei modelli per l'inferenza on-demand e benchmark formale eseguito separatamente tramite runner esterno.
 
 ---
 
@@ -103,7 +102,7 @@ Lo stato di sessione Streamlit è incapsulato da un adapter tipizzato che bandis
 
 ### 6. Sistema / Stato (`render_status`):
 - Scheda diagnostica delle componenti forensi e della versione di Streamlit.
-- Dichiarazione trasparente dell'incompatibilità hardware AVX2 della CPU AMD A8-7410 per il runtime LM Studio.
+- Sezione "LM Studio / Benchmark" neutra e portabile: Local AI su `http://127.0.0.1:1234`, inferenza on-demand e benchmark formale eseguito separatamente.
 
 ---
 
@@ -132,9 +131,9 @@ Configurazione formalizzata in `.streamlit/config.toml`:
 
 ---
 
-## 6. Rinvio Benchmark LM Studio Reale (Hardware Limitation)
+## 6. LM Studio e Benchmark Sperimentale Portabile
 
-- **Processore host**: AMD A8-7410 APU with AMD Radeon R5 Graphics.
-- **Causa tecnica**: Il runtime GGUF/llama.cpp integrato nelle versioni correnti di LM Studio richiede istruzioni AVX2 per la decodifica dei pesi quantizzati. La CPU in uso supporta esclusivamente AVX, provocando l'errore `Invalid CPU architecture`.
-- **Stato**: Il benchmark reale con pesi modello (Llama, Qwen, DeepSeek) è categoricamente **DEFERRED** alla fase finale del progetto su workstation/server idoneo.
-- **AI Layer Status**: L'architettura del Local AI Layer (`ai/`) è strutturalmente e funzionalmente **REAL PILOT READY**.
+- **Architettura Portabile**: L'applicazione è indipendente dall'hardware host. Nessun vincolo hardware o modello specifico di CPU è hardcoded nella UI.
+- **Inferenza Operativa On-Demand**: Disponibile tramite server locale LM Studio su loopback (`http://127.0.0.1:1234`) con pre-flight, caricamento autonomo del modello predefinito (`qwen2.5-7b-instruct`) e timeout operativo a 240 secondi.
+- **Benchmark Formale Separato**: Eseguito separatamente tramite la suite sperimentale (`ai/experiment.py` / `run_benchmark.sh`), con tracciamento rigoroso dell'ambiente hardware nei report dedicati.
+- **Stato Componenti**: Search Layer e Local AI Layer operativi; benchmark formale gestito tramite runner esterno.

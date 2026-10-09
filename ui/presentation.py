@@ -24,10 +24,19 @@ from ai.backend import (
     AiBackendTimeoutError,
     AiBackendUnavailableError,
     AiInvalidEvidenceCitationError,
+    AiModelLoadError,
     AiModelMismatchError,
+    AiModelNotInstalledError,
     AiModelNotSpecifiedError,
     AiStructuredOutputError,
     LmStudioUnavailableError,
+)
+from ai.lmstudio import (
+    DEFAULT_OPERATIONAL_MAX_TOKENS,
+    DEFAULT_OPERATIONAL_MODEL,
+    DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+    SUPPORTED_OPERATIONAL_MODELS,
+    get_model_display_name,
 )
 from ai.models import TopicDecision
 from search.models import MatchMode
@@ -41,6 +50,7 @@ from ui.application import (
     filter_evidence_sections,
     get_evidence_filter_options,
     get_system_status_info,
+    prepare_operational_model,
     search_topic_detections,
     search_topic_discoveries,
     summarize_document,
@@ -557,10 +567,12 @@ def render_topics() -> None:
                 key="manual_topic_input",
             )
         with col_in2:
+            current_model_val = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
             model_input = st.text_input(
-                "Modello LM Studio locale (opzionale):",
-                value=state.get_lm_studio_model() or "",
-                placeholder="Lascia vuoto per default",
+                "Modello LM Studio locale:",
+                value=current_model_val,
+                placeholder="qwen2.5-7b-instruct",
+                help="Modello predefinito: qwen2.5-7b-instruct. Supportati se installati: meta-llama-3.1-8b-instruct, deepseek-r1-distill-qwen-7b.",
                 key="manual_model_input",
             )
 
@@ -589,44 +601,53 @@ def render_topics() -> None:
 
                 if q is not None:
                     client = state.get_lm_studio_client()
-                    target_model = model_input.strip() if model_input.strip() else state.get_lm_studio_model()
-                    with st.spinner("Esecuzione Topic Detection con motore locale..."):
-                        try:
+                    raw_model_choice = model_input.strip() if model_input.strip() else (state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL)
+                    try:
+                        with st.spinner("Preparazione del modello AI locale..."):
+                            resolved_model = prepare_operational_model(
+                                client=client,
+                                requested_model=raw_model_choice,
+                                timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+                            )
+                        display_name = get_model_display_name(resolved_model)
+                        st.info(f"{display_name} pronto.")
+
+                        with st.spinner("Analisi locale in corso..."):
                             det_res = execute_manual_topic_detection(
                                 document=doc,
                                 topic=q,
                                 client=client,
-                                model_id=target_model,
+                                model_id=resolved_model,
+                                timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+                                max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
                             )
-                            state.add_detection_result(det_res)
-                            state.set_last_manual_detection(det_res)
-                            state.set_custom_topic_label(topic_input)
-                            state.set_custom_topic_description(desc_input)
-                            if target_model:
-                                state.set_lm_studio_model(target_model)
-                            st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
-                        except LmStudioUnavailableError:
-                            st.error(
-                                "LM Studio non raggiungibile su http://127.0.0.1:1234. "
-                                "Verificare che il server locale di LM Studio sia attivo."
-                            )
-                        except AiModelNotSpecifiedError:
-                            st.error(
-                                "Nessun modello caricato o specificato in LM Studio. "
-                                "Caricare un modello prima di avviare la detection."
-                            )
-                        except AiModelMismatchError as m_err:
-                            st.error(f"Disallineamento modello LM Studio: {m_err}")
-                        except AiInvalidEvidenceCitationError as c_err:
-                            st.error(f"Errore citazione evidenze: {c_err}")
-                        except AiStructuredOutputError as s_err:
-                            st.error(f"Errore schema strutturato: {s_err}")
-                        except AiBackendTimeoutError:
-                            st.error("Timeout durante l'inferenza locale con LM Studio.")
-                        except (AiBackendRequestError, AiBackendProtocolError) as b_err:
-                            st.error(f"Errore di comunicazione con LM Studio: {b_err}")
-                        except Exception as exc:
-                            st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}: {exc}")
+                        state.add_detection_result(det_res)
+                        state.set_last_manual_detection(det_res)
+                        state.set_custom_topic_label(topic_input)
+                        state.set_custom_topic_description(desc_input)
+                        state.set_lm_studio_model(resolved_model)
+                        st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
+                    except LmStudioUnavailableError:
+                        st.error(
+                            "LM Studio non raggiungibile su http://127.0.0.1:1234. "
+                            "Verificare che il server locale di LM Studio sia attivo."
+                        )
+                    except AiModelNotInstalledError as ni_err:
+                        st.error(str(ni_err))
+                    except AiModelLoadError as l_err:
+                        st.error(f"Errore durante il caricamento del modello locale: {l_err}")
+                    except AiBackendTimeoutError as t_err:
+                        st.error(f"Timeout durante l'operazione con LM Studio: {t_err}")
+                    except AiModelMismatchError as m_err:
+                        st.error(f"Disallineamento modello LM Studio: {m_err}")
+                    except AiInvalidEvidenceCitationError as c_err:
+                        st.error(f"Errore citazione evidenze: {c_err}")
+                    except AiStructuredOutputError as s_err:
+                        st.error(f"Errore schema strutturato: {s_err}")
+                    except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+                        st.error(f"Errore di comunicazione con LM Studio: {b_err}")
+                    except Exception as exc:
+                        st.error(f"Errore durante l'esecuzione della Topic Detection: {exc}")
 
         # Visualizzazione del risultato per la verifica
         last_det = state.get_last_manual_detection()
@@ -827,32 +848,50 @@ def render_topics() -> None:
 
                         if disc_query is not None:
                             client = state.get_lm_studio_client()
-                            target_model = state.get_lm_studio_model()
-                            with st.spinner(f"Verifica mirata di '{hit.label}' con TopicDetectionAnalyzer..."):
-                                try:
+                            raw_model = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
+                            try:
+                                with st.spinner("Preparazione del modello AI locale..."):
+                                    resolved_model = prepare_operational_model(
+                                        client=client,
+                                        requested_model=raw_model,
+                                        timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+                                    )
+                                display_name = get_model_display_name(resolved_model)
+                                st.info(f"{display_name} pronto.")
+
+                                with st.spinner("Analisi locale in corso..."):
                                     det_res = execute_manual_topic_detection(
                                         document=doc,
                                         topic=disc_query,
                                         client=client,
-                                        model_id=target_model,
+                                        model_id=resolved_model,
+                                        timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+                                        max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
                                     )
-                                    state.add_detection_result(det_res)
-                                    state.set_last_manual_detection(det_res)
-                                    state.set_custom_topic_label(hit.label)
-                                    state.set_custom_topic_description(hit.description)
-                                    st.success(f"Topic '{hit.label}' verificato! Esito: {det_res.decision.value}")
-                                except LmStudioUnavailableError:
-                                    st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
-                                except AiModelNotSpecifiedError:
-                                    st.error("Nessun modello caricato o specificato in LM Studio.")
-                                except AiModelMismatchError as m_err:
-                                    st.error(f"Disallineamento modello LM Studio: {m_err}")
-                                except AiInvalidEvidenceCitationError as c_err:
-                                    st.error(f"Errore citazione evidenze: {c_err}")
-                                except AiStructuredOutputError as s_err:
-                                    st.error(f"Errore schema strutturato: {s_err}")
-                                except Exception as exc:
-                                    st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}: {exc}")
+                                state.add_detection_result(det_res)
+                                state.set_last_manual_detection(det_res)
+                                state.set_custom_topic_label(hit.label)
+                                state.set_custom_topic_description(hit.description)
+                                state.set_lm_studio_model(resolved_model)
+                                st.success(f"Topic '{hit.label}' verificato! Esito: {det_res.decision.value}")
+                            except LmStudioUnavailableError:
+                                st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
+                            except AiModelNotInstalledError as ni_err:
+                                st.error(str(ni_err))
+                            except AiModelLoadError as l_err:
+                                st.error(f"Errore durante il caricamento del modello locale: {l_err}")
+                            except AiBackendTimeoutError as t_err:
+                                st.error(f"Timeout durante l'operazione con LM Studio: {t_err}")
+                            except AiModelMismatchError as m_err:
+                                st.error(f"Disallineamento modello LM Studio: {m_err}")
+                            except AiInvalidEvidenceCitationError as c_err:
+                                st.error(f"Errore citazione evidenze: {c_err}")
+                            except AiStructuredOutputError as s_err:
+                                st.error(f"Errore schema strutturato: {s_err}")
+                            except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+                                st.error(f"Errore di comunicazione con LM Studio: {b_err}")
+                            except Exception as exc:
+                                st.error(f"Errore durante la verifica con Topic Detection: {exc}")
 
                 last_det = state.get_last_manual_detection()
                 if last_det is not None and last_det.topic.label == hit.label:
@@ -887,10 +926,11 @@ def render_system_status() -> None:
 
     st.divider()
 
-    st.subheader("Nota Rinvio Benchmark LM Studio (Hardware Block)")
-    st.warning(
-        f"**Causa rinvio:** {status_info['hardware_rationale']}\n\n"
-        "La suite di benchmark su modelli GGUF/llama.cpp (Llama, Qwen, DeepSeek) "
-        "è formalmente differita alla fase finale della tesi con hardware dedicato provvisto di set istruzioni AVX2. "
-        "L'architettura software e le interfacce AI sono verificate e categoricamente **REAL PILOT READY**."
+    st.subheader("LM Studio / Benchmark")
+    st.info(
+        "- **Local AI**: disponibile tramite server locale LM Studio su `http://127.0.0.1:1234`.\n"
+        "- **Inferenza operativa**: eseguita on-demand per Topic Detection e Topic Discovery con gestione autonoma del modello.\n"
+        "- **Benchmark formale**: eseguito separatamente tramite la suite sperimentale (`ai/experiment.py` / `run_benchmark.sh`).\n"
+        "- **Ambiente e hardware**: dettagli hardware e sistema operativo vengono registrati automaticamente nei report del benchmark.\n"
+        "- **Portabilità**: nessun vincolo hardware specifico (es. CPU o architettura host) è hardcoded nella UI."
     )

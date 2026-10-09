@@ -141,7 +141,7 @@ L'applicazione grafica [app.py](file:///C:/Users/lucas/Desktop/Tesi/app.py) è s
 
 ## 12. Osservazioni Diagnostiche Prestazionali
 
-Le rilevazioni temporali registrate sull'ambiente di test (CPU AMD A8-7410) hanno scopo puramente diagnostico e non definiscono vincoli bloccanti di PASS/FAIL:
+Le rilevazioni temporali registrate sull'ambiente di test hanno scopo puramente diagnostico e non definiscono vincoli bloccanti di PASS/FAIL:
 - **Ingestion WhatsApp msgstore.db (622 record raw)**: ~`0.266 s`
 - **Esecuzione Query di Ricerca Lessicale (110 hit)**: ~`0.0015 s` (1.5 millisecondi)
 
@@ -149,8 +149,8 @@ Il comportamento osservato dimostra tempi di risposta sub-secondo per le operazi
 
 ---
 
-## 13. Limiti Hardware e Attività Rimandate alla Fase Finale
+## 13. Architettura Sperimentale e Attività della Fase Finale
 
-1. **Host Attuale**: AMD A8-7410 APU priva di istruzioni AVX2; runtime GGUF/llama.cpp corrente di LM Studio incompatibile (`Invalid CPU architecture`).
-2. **Benchmark LM Studio**: Categoricamente **DEFERRED** alla fase sperimentale finale su hardware idoneo con supporto AVX2.
+1. **Portabilità e Disaccoppiamento Host**: L'applicazione e la UI sono indipendenti dall'hardware host. La configurazione e i dettagli di sistema vengono rilevati e registrati nei report del benchmark sperimentale.
+2. **Benchmark LM Studio**: Eseguito separatamente tramite la suite sperimentale dedicata (`ai/experiment.py` / `run_benchmark.sh`) su workstation con supporto GPU/AVX2.
 3. **Multimodal Processing con File Binari Fisici**: Elaborazione con trascrizione STT e modelli Vision delegata alla fase sperimentale con acquisizioni complete comprensive di dump multimediali fisici.

@@ -345,3 +345,30 @@ class TestUiSmoke:
         assert not at.exception
         assert len(at.error) >= 1
         assert "IngestionError: Errore generico sanitizzato." in at.error[0].value
+
+    def test_system_status_page_portable_no_hardware_block(self):
+        """Verifica che la pagina Sistema / Stato sia portabile, priva di vecchi hardware block e mostri LM Studio / Benchmark."""
+        at = AppTest.from_file(APP_PATH, default_timeout=15)
+        at.run()
+        at.sidebar.radio[0].set_value("6. Sistema / Stato")
+        at.run()
+
+        assert not at.exception
+        subheaders = [sh.value for sh in at.subheader]
+        assert "LM Studio / Benchmark" in subheaders
+        assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+
+        warnings = [w.value for w in at.warning]
+        for w in warnings:
+            assert "AMD A8-7410" not in w
+
+        all_text = " ".join(
+            [sh.value for sh in at.subheader]
+            + [m.value for m in at.markdown]
+            + [i.value for i in at.info]
+            + [w.value for w in at.warning]
+        )
+        assert "AMD A8-7410" not in all_text
+        assert "DEFERRED" not in all_text
+        assert "127.0.0.1:1234" in all_text
+

@@ -81,6 +81,11 @@ class AiModelNotSpecifiedError(AiBackendError):
     pass
 
 
+class AiModelNotInstalledError(AiModelNotSpecifiedError):
+    """Sollevata quando il modello richiesto non è presente tra quelli installati/disponibili localmente."""
+    pass
+
+
 class AiModelMismatchError(AiBackendError):
     """Sollevata quando il modello restituito/utilizzato dal backend differisce da quello atteso."""
 
@@ -102,6 +107,11 @@ class AiBackendProtocolError(AiBackendError):
 
 class AiBackendRequestError(AiBackendError):
     """Sollevata per errori di richiesta HTTP (es. codici di stato 4xx o 5xx restituiti dal backend)."""
+    pass
+
+
+class AiModelLoadError(AiBackendRequestError):
+    """Sollevata quando si verifica un errore durante il caricamento di un modello in LM Studio."""
     pass
 
 
@@ -163,6 +173,24 @@ class BaseLocalLlmClient(BaseLlmClient):
         """Restituisce la lista degli identificativi modello disponibili nel backend locale."""
         raise NotImplementedError
 
+    def is_model_loaded(self, model_id: str) -> bool:
+        """Verifica se il modello specificato è attualmente caricato in memoria."""
+        return False
+
+    def load_model(
+        self,
+        model_id: str,
+        context_length: int = 8192,
+        gpu_offload: str = "max",
+        timeout_seconds: float = 240.0,
+    ) -> dict[str, Any]:
+        """Carica il modello nel runtime locale."""
+        return {"model": model_id, "status": "loaded"}
+
+    def unload_model(self, model_id: str | None = None, timeout_seconds: float = 30.0) -> bool:
+        """Scarica il modello dal runtime locale."""
+        return True
+
     @abstractmethod
     def chat_completion(
         self,
@@ -189,15 +217,20 @@ class FakeLocalLlmClient(BaseLocalLlmClient):
         self,
         available: bool = True,
         models: tuple[str, ...] = ("qwen-2.5-1.5b", "llama-3.2-3b", "deepseek-r1-1.5b"),
+        loaded_models: tuple[str, ...] | None = None,
         canned_responses: dict[Any, str] | None = None,
         default_response: str = "",
         simulate_error: Exception | None = None,
+        simulate_load_error: Exception | None = None,
         model_name: str = "fake-local-model",
         simulate_model_mismatch: str | None = None,
         require_explicit_model: bool = False,
     ) -> None:
         self._available = available
         self._models = tuple(models)
+        self._loaded_models = set(loaded_models) if loaded_models is not None else set()
+        self.load_history: list[dict[str, Any]] = []
+        self._simulate_load_error = simulate_load_error
         self._canned_responses = canned_responses or {}
         self._default_response = default_response
         self._simulate_error = simulate_error
@@ -213,6 +246,44 @@ class FakeLocalLlmClient(BaseLocalLlmClient):
         if not self._available:
             raise LmStudioUnavailableError("Fake client simulato come non disponibile.")
         return self._models
+
+    def is_model_loaded(self, model_id: str) -> bool:
+        if not self._available:
+            raise LmStudioUnavailableError("Fake client simulato come non disponibile.")
+        return model_id in self._loaded_models or any(
+            model_id.lower() in m.lower() for m in self._loaded_models
+        )
+
+    def load_model(
+        self,
+        model_id: str,
+        context_length: int = 8192,
+        gpu_offload: str = "max",
+        timeout_seconds: float = 240.0,
+    ) -> dict[str, Any]:
+        if not self._available:
+            raise LmStudioUnavailableError("Fake client simulato come non disponibile.")
+        if self._simulate_load_error is not None:
+            raise self._simulate_load_error
+        # Verifica che il modello sia tra quelli installati
+        found = any(model_id.lower() in m.lower() or m.lower() in model_id.lower() for m in self._models)
+        if not found and model_id not in self._models:
+            raise AiModelNotInstalledError(f"Il modello {model_id} non è installato in LM Studio.")
+        self.load_history.append({
+            "model_id": model_id,
+            "context_length": context_length,
+            "gpu_offload": gpu_offload,
+            "timeout_seconds": timeout_seconds,
+        })
+        self._loaded_models.add(model_id)
+        return {"model": model_id, "status": "loaded"}
+
+    def unload_model(self, model_id: str | None = None, timeout_seconds: float = 30.0) -> bool:
+        if model_id:
+            self._loaded_models.discard(model_id)
+        else:
+            self._loaded_models.clear()
+        return True
 
     def chat_completion(
         self,

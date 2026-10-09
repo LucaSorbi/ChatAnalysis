@@ -19,11 +19,22 @@ from typing import Iterable, Mapping, Optional, Sequence
 
 from ai.backend import (
     AiBackendProtocolError,
+    AiModelNotInstalledError,
     AiModelNotSpecifiedError,
     BaseLlmClient,
     LmStudioUnavailableError,
 )
-from ai.lmstudio import LmStudioClient
+from ai.lmstudio import (
+    DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
+    DEFAULT_OPERATIONAL_GPU_OFFLOAD,
+    DEFAULT_OPERATIONAL_MAX_TOKENS,
+    DEFAULT_OPERATIONAL_MODEL,
+    DEFAULT_OPERATIONAL_TEMPERATURE,
+    DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+    LmStudioClient,
+    get_model_display_name,
+    resolve_installed_model_id,
+)
 from ai.models import (
     AnalysisLanguageStrategy,
     ConversationEvidenceDocument,
@@ -306,14 +317,14 @@ def get_system_status_info(streamlit_version: str) -> dict[str, str]:
     """
     return {
         "search_layer": "READY",
-        "local_ai_architecture": "REAL PILOT READY",
-        "real_lm_studio_benchmark": "DEFERRED",
-        "hardware_rationale": "AMD A8-7410 APU privo di istruzioni AVX2, incompatibile con il runtime GGUF/llama.cpp corrente di LM Studio (Invalid CPU architecture).",
+        "local_ai_architecture": "READY - LOCAL LM STUDIO",
+        "real_lm_studio_benchmark": "READY / EXTERNAL BENCHMARK RUNNER",
+        "hardware_rationale": "PORTABLE / HOST-INDEPENDENT (nessun vincolo hardware hardcoded; configurazione registrata nei report benchmark)",
         "streamlit_version": streamlit_version,
-        "network_status": "NOT REQUIRED (100% offline e locale)",
+        "network_status": "LOCAL ONLY / LOOPBACK FOR LM STUDIO",
         "semantic_search": "NOT IMPLEMENTED (ricerca deterministica senza vettori)",
         "embeddings": "NOT IMPLEMENTED (nessun embedding o vector database)",
-        "real_file_ingestion": "INTEGRATED (WhatsApp msgstore, wa.db, Cellebrite CSV, JSON, XML)",
+        "real_file_ingestion": "INTEGRATED (WhatsApp msgstore, wa.db, TXT/ZIP export, Cellebrite CSV, JSON, XML)",
     }
 
 
@@ -367,6 +378,52 @@ def check_lm_studio_status(
         return False, (), f"Errore durante l'interrogazione di LM Studio: {exc}"
 
 
+def prepare_operational_model(
+    client: BaseLlmClient | None = None,
+    base_url: str = "http://127.0.0.1:1234",
+    requested_model: str | None = None,
+    timeout_seconds: float = DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+) -> str:
+    """
+    Pre-flight e auto-load del modello locale per Topic Detection operativa.
+    Garantisce che il modello sia installato e caricato senza richiedere comandi manuali CLI 'lms load'.
+    """
+    target = (requested_model or "").strip() or DEFAULT_OPERATIONAL_MODEL
+    target_client = client or LmStudioClient(base_url=base_url)
+
+    if hasattr(target_client, "is_available") and not target_client.is_available():
+        raise LmStudioUnavailableError(
+            f"LM Studio non raggiungibile su {base_url}. Verificare che il server locale sia attivo."
+        )
+
+    if hasattr(target_client, "ensure_model_loaded"):
+        return target_client.ensure_model_loaded(
+            model_id=target,
+            context_length=DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
+            gpu_offload=DEFAULT_OPERATIONAL_GPU_OFFLOAD,
+            timeout_seconds=timeout_seconds,
+        )
+
+    # Fallback per client generici / mock privi di ensure_model_loaded
+    if hasattr(target_client, "list_models"):
+        models = target_client.list_models()
+        resolved = resolve_installed_model_id(target, models)
+        if not resolved:
+            display = get_model_display_name(target)
+            raise AiModelNotInstalledError(f"Il modello {display} non è installato in LM Studio.")
+        if hasattr(target_client, "is_model_loaded") and hasattr(target_client, "load_model"):
+            if not target_client.is_model_loaded(resolved):
+                target_client.load_model(
+                    resolved,
+                    context_length=DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
+                    gpu_offload=DEFAULT_OPERATIONAL_GPU_OFFLOAD,
+                    timeout_seconds=timeout_seconds,
+                )
+        return resolved
+
+    return target
+
+
 def execute_manual_topic_detection(
     document: ConversationEvidenceDocument,
     topic: TopicQuery,
@@ -374,31 +431,29 @@ def execute_manual_topic_detection(
     model_id: str | None = None,
     base_url: str = "http://127.0.0.1:1234",
     strategy: AnalysisLanguageStrategy = AnalysisLanguageStrategy.DIRECT_MULTILINGUAL,
-    temperature: float = 0.0,
+    temperature: float = DEFAULT_OPERATIONAL_TEMPERATURE,
     seed: int | None = 42,
-    timeout_seconds: float = 30.0,
+    timeout_seconds: float = DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+    max_tokens: int | None = DEFAULT_OPERATIONAL_MAX_TOKENS,
 ) -> TopicDetectionResult:
     """
     Esegue una vera inferenza di Topic Detection sulla conversazione corrente
-    utilizzando il motore esistente TopicDetectionAnalyzer e il client LM Studio locale.
+    utilizzando il motore TopicDetectionAnalyzer e il client LM Studio locale.
+    Gestisce autonomamente pre-flight e auto-load del modello operativo senza
+    richiedere comandi manuali CLI 'lms load'.
     """
     target_client = client or LmStudioClient(base_url=base_url, model_id=model_id)
 
-    # Risoluzione del modello target
-    target_model = model_id
-    if not target_model:
-        if hasattr(target_client, "model_id") and target_client.model_id:
-            target_model = target_client.model_id
-        elif hasattr(target_client, "list_models"):
-            models = target_client.list_models()
-            if models:
-                target_model = models[0]
-                if hasattr(target_client, "model_id"):
-                    target_client.model_id = target_model
-            else:
-                raise AiModelNotSpecifiedError("Nessun modello caricato o disponibile in LM Studio.")
-        else:
-            raise AiModelNotSpecifiedError("Nessun model_id specificato per l'inferenza.")
+    # Pre-flight e auto-load del modello (default: qwen2.5-7b-instruct, timeout: 240s)
+    target_model = prepare_operational_model(
+        client=target_client,
+        base_url=base_url,
+        requested_model=model_id,
+        timeout_seconds=timeout_seconds,
+    )
+
+    if hasattr(target_client, "model_id"):
+        target_client.model_id = target_model
 
     analyzer = TopicDetectionAnalyzer(client=target_client, default_model_id=target_model)
     return analyzer.detect_topic(
@@ -409,6 +464,7 @@ def execute_manual_topic_detection(
         temperature=temperature,
         seed=seed,
         timeout_seconds=timeout_seconds,
+        max_tokens=max_tokens,
     )
 
 

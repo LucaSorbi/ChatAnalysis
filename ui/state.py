@@ -90,7 +90,7 @@ def init_session_state(state: MutableMapping[str, Any] | None = None) -> None:
     if KEY_LM_STUDIO_CLIENT not in target:
         target[KEY_LM_STUDIO_CLIENT] = None
     if KEY_LM_STUDIO_MODEL not in target:
-        target[KEY_LM_STUDIO_MODEL] = None
+        target[KEY_LM_STUDIO_MODEL] = "qwen2.5-7b-instruct"
 
 
 def is_dataset_loaded(state: MutableMapping[str, Any] | None = None) -> bool:
@@ -392,9 +392,9 @@ def set_lm_studio_client(
 def get_lm_studio_model(
     state: MutableMapping[str, Any] | None = None,
 ) -> Optional[str]:
-    """Restituisce il model_id LM Studio configurato per la sessione."""
+    """Restituisce il model_id LM Studio configurato per la sessione (default: qwen2.5-7b-instruct)."""
     target = _get_target_state(state)
-    return target.get(KEY_LM_STUDIO_MODEL, None)
+    return target.get(KEY_LM_STUDIO_MODEL) or "qwen2.5-7b-instruct"
 
 
 def set_lm_studio_model(

@@ -179,15 +179,18 @@ class TestUiApplicationLayer:
     def test_get_system_status_info(self):
         info = get_system_status_info(streamlit_version="1.63.0")
         assert info["search_layer"] == "READY"
-        assert info["local_ai_architecture"] == "REAL PILOT READY"
-        assert info["real_lm_studio_benchmark"] == "DEFERRED"
-        assert "AMD A8-7410" in info["hardware_rationale"]
-        assert "AVX2" in info["hardware_rationale"]
+        assert info["local_ai_architecture"] == "READY - LOCAL LM STUDIO"
+        assert info["real_lm_studio_benchmark"] == "READY / EXTERNAL BENCHMARK RUNNER"
+        assert "AMD A8-7410" not in str(info)
+        assert "DEFERRED" not in str(info)
+        assert "PORTABLE" in info["hardware_rationale"]
         assert info["streamlit_version"] == "1.63.0"
-        assert "NOT REQUIRED" in info["network_status"]
+        assert info["network_status"] == "LOCAL ONLY / LOOPBACK FOR LM STUDIO"
         assert "NOT IMPLEMENTED" in info["semantic_search"]
         assert "NOT IMPLEMENTED" in info["embeddings"]
         assert "INTEGRATED" in info["real_file_ingestion"]
+        assert "WhatsApp" in info["real_file_ingestion"]
+        assert "TXT/ZIP" in info["real_file_ingestion"]
 
     def test_build_search_service_for_conversation(self):
         from ai.models import ConversationEvidenceDocument

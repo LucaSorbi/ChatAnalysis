@@ -18,6 +18,8 @@ import pytest
 from ai.backend import (
     AiBackendProtocolError,
     AiBackendRequestError,
+    AiBackendTimeoutError,
+    AiModelNotInstalledError,
     AiModelNotSpecifiedError,
     LmStudioUnavailableError,
 )
@@ -401,4 +403,126 @@ class TestLmStudioClient:
         client = LmStudioClient(model_id="m1")
         with pytest.raises(AiBackendTimeoutError, match="Timeout"):
             client.chat_completion(messages=[{"role": "user", "content": "hi"}])
+
+    # =========================================================================
+    # Test SEZIONE E: MODEL MANAGEMENT, AUTO-LOAD E JIT
+    # =========================================================================
+    def test_load_model_post_endpoint_success(self, monkeypatch):
+        calls = []
+
+        class LoadResp:
+            def __init__(self):
+                self.status = 200
+            def read(self):
+                return json.dumps({"model": "qwen2.5-7b-instruct", "status": "loaded"}).encode("utf-8")
+            def __enter__(self):
+                return self
+            def __exit__(self, *args):
+                pass
+
+        def mock_urlopen(req, timeout):
+            calls.append(req.full_url)
+            assert "/api/v1/models/load" in req.full_url
+            assert req.get_method() == "POST"
+            body = json.loads(req.data.decode("utf-8"))
+            assert body["model"] == "qwen2.5-7b-instruct"
+            assert body["context_length"] == 8192
+            assert body["gpu_offload"] == "max"
+            return LoadResp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+        client = LmStudioClient()
+        res = client.load_model("qwen2.5-7b-instruct", context_length=8192, gpu_offload="max")
+        assert res["status"] == "loaded"
+        assert client.is_model_loaded("qwen2.5-7b-instruct") is True
+
+    def test_load_model_fallback_on_404_jit(self, monkeypatch):
+        def mock_urlopen(req, timeout):
+            url = req.full_url
+            if "/api/v1/models/load" in url:
+                fp = io.BytesIO(b"Not Found")
+                raise urllib.error.HTTPError(url, 404, "Not Found", {}, fp)
+            if "/v1/models" in url:
+                class ModelsResp:
+                    def __init__(self):
+                        self.status = 200
+                    def read(self):
+                        return json.dumps({"data": [{"id": "qwen2.5-7b-instruct"}]}).encode("utf-8")
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        pass
+                return ModelsResp()
+            raise ValueError(f"URL imprevisto: {url}")
+
+        monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+        client = LmStudioClient()
+        res = client.load_model("qwen2.5-7b-instruct")
+        assert res["status"] == "jit_ready"
+
+    def test_load_model_timeout_mapped_to_ai_backend_timeout_error(self, monkeypatch):
+        import socket
+        def timeout_urlopen(*args, **kwargs):
+            raise urllib.error.URLError(socket.timeout("The read operation timed out"))
+
+        monkeypatch.setattr(urllib.request, "urlopen", timeout_urlopen)
+        client = LmStudioClient()
+        with pytest.raises(AiBackendTimeoutError, match="Timeout"):
+            client.load_model("qwen2.5-7b-instruct")
+
+    def test_ensure_model_loaded_skips_when_already_loaded(self, monkeypatch):
+        calls = []
+
+        def mock_urlopen(req, timeout):
+            calls.append(req.full_url)
+            if "/api/v1/models" in req.full_url:
+                class DetailedResp:
+                    def __init__(self):
+                        self.status = 200
+                    def read(self):
+                        return json.dumps({
+                            "models": [{"id": "qwen2.5-7b-instruct", "state": "loaded"}]
+                        }).encode("utf-8")
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        pass
+                return DetailedResp()
+            if "/v1/models" in req.full_url:
+                class V1Resp:
+                    def __init__(self):
+                        self.status = 200
+                    def read(self):
+                        return json.dumps({"data": [{"id": "qwen2.5-7b-instruct"}]}).encode("utf-8")
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        pass
+                return V1Resp()
+            raise ValueError(f"URL non consentito: {req.full_url}")
+
+        monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+        client = LmStudioClient()
+        resolved = client.ensure_model_loaded("qwen2.5-7b-instruct")
+        assert resolved == "qwen2.5-7b-instruct"
+        # Non deve invocare /api/v1/models/load
+        assert not any("/load" in c for c in calls)
+
+    def test_ensure_model_loaded_raises_when_not_installed(self, monkeypatch):
+        def mock_urlopen(req, timeout):
+            class V1Resp:
+                def __init__(self):
+                    self.status = 200
+                def read(self):
+                    return json.dumps({"data": [{"id": "other-model"}]}).encode("utf-8")
+                def __enter__(self):
+                    return self
+                def __exit__(self, *args):
+                    pass
+            return V1Resp()
+
+        monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+        client = LmStudioClient()
+        with pytest.raises(AiModelNotInstalledError, match="Il modello Qwen2.5-7B-Instruct non è installato"):
+            client.ensure_model_loaded("qwen2.5-7b-instruct")
 

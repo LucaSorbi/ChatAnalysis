@@ -60,11 +60,16 @@ class MockLlmClient(BaseLlmClient):
         model_id: str = "qwen2.5-7b-instruct",
         available: bool = True,
         models: tuple[str, ...] = ("qwen2.5-7b-instruct",),
+        loaded_models: tuple[str, ...] | None = None,
+        simulate_load_error: Exception | None = None,
     ) -> None:
         self.responses = list(responses) if responses is not None else []
         self.model_id = model_id
         self._available = available
         self._models = models
+        self.loaded_models = set(loaded_models) if loaded_models is not None else set(models)
+        self.load_calls: list[dict[str, Any]] = []
+        self.simulate_load_error = simulate_load_error
         self.call_count = 0
         self.last_messages: list[dict[str, str]] | None = None
 
@@ -75,6 +80,36 @@ class MockLlmClient(BaseLlmClient):
         if not self._available:
             raise LmStudioUnavailableError("Server LM Studio non raggiungibile.")
         return self._models
+
+    def is_model_loaded(self, model_id: str) -> bool:
+        return model_id in self.loaded_models or any(model_id.lower() in m.lower() for m in self.loaded_models)
+
+    def load_model(
+        self,
+        model_id: str,
+        context_length: int = 8192,
+        gpu_offload: str = "max",
+        timeout_seconds: float = 240.0,
+    ) -> dict[str, Any]:
+        if not self._available:
+            raise LmStudioUnavailableError("Server LM Studio non raggiungibile.")
+        if self.simulate_load_error is not None:
+            raise self.simulate_load_error
+        self.load_calls.append({
+            "model_id": model_id,
+            "context_length": context_length,
+            "gpu_offload": gpu_offload,
+            "timeout_seconds": timeout_seconds,
+        })
+        self.loaded_models.add(model_id)
+        return {"model": model_id, "status": "loaded"}
+
+    def unload_model(self, model_id: str | None = None, timeout_seconds: float = 30.0) -> bool:
+        if model_id:
+            self.loaded_models.discard(model_id)
+        else:
+            self.loaded_models.clear()
+        return True
 
     def chat_completion(
         self,
