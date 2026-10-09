@@ -511,3 +511,83 @@ Si conferma che:
 ### 14. GIT
 Nessun commit effettuato. Nessun push effettuato.
 
+---
+
+## SUPPORTO LARGE FILE UPLOAD
+
+### 1. Precedente Limite vs Nuovo Limite
+- **Precedente limite Streamlit**: 200 MB (default implicito di `server.maxUploadSize` in Streamlit). Insufficiente per acquisizioni forensi reali quali export WhatsApp completi con allegati multimediali (foto/video/audio), database WhatsApp `msgstore.db` di grandi dimensioni e report completi Cellebrite.
+- **Nuovo limite operativo reale**: **2048 MB (2 GB)** configurato e vincolante a livello sia di server che di widget applicativi.
+
+### 2. File Modificati e Creati
+1. [`.streamlit/config.toml`](file:///c:/Users/lucas/Desktop/Tesi/.streamlit/config.toml): configurazione esplicita di `server.maxUploadSize = 2048` e `server.maxMessageSize = 2048`, preservando integrità di loopback `127.0.0.1`, `gatherUsageStats = false`, CORS/XSRF e mascheramento errori.
+2. [`core/config.py`](file:///c:/Users/lucas/Desktop/Tesi/core/config.py): nuovo modulo di configurazione centralizzata forense per eliminare numeri magici sparsi (`MAX_UPLOAD_SIZE_MB = 2048`, `MAX_UPLOAD_SIZE_BYTES`, `DEFAULT_STREAM_CHUNK_SIZE = 1MB`, `MAX_ARCHIVE_UNCOMPRESSED_SIZE_MB = 4096`, `MAX_ARCHIVE_MEMBERS = 50000`, `MAX_COMPRESSION_RATIO = 100.0`, `MAX_SINGLE_FILE_SIZE_MB = 2048`).
+3. [`core/__init__.py`](file:///c:/Users/lucas/Desktop/Tesi/core/__init__.py): esportazione delle nuove costanti di configurazione.
+4. [`importer/whatsapp_export.py`](file:///c:/Users/lucas/Desktop/Tesi/importer/whatsapp_export.py): integrazione delle costanti centralizzate di sicurezza ZIP con alias retrocompatibili per i test preesistenti; aggiornamento limiti anti-zip-bomb per consentire archivi WhatsApp legittimi con video e media fino a 4 GB decompressi e file singoli fino a 2 GB.
+5. [`ui/ingestion.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/ingestion.py): riscrittura di `_compute_sha256_and_write` per elaborazione a chunk da 1 MB, verifica anticipata e durante lo streaming del limite a 2 GB, uso di `memoryview` per prevenire duplicazioni in RAM di byte bufferizzati, gestione controllata e sicura di memoria/disco insufficienti e stream interrotti senza leak di percorsi temporanei o traceback.
+6. [`ui/presentation.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/presentation.py): rimozione delle chiamate duplicate `.getvalue()` su `uploaded_file` e `companion_file`; passaggio diretto del file-like stream a `IngestionRequest`; passaggio esplicito del parametro `max_upload_size=2048` su entrambi gli uploader forensi (`primary_file_uploader` e `companion_wa_uploader`); aggiunta della nota discreta `"Dimensione massima file: 2 GB"` e per WhatsApp Export `"Gli archivi molto grandi possono richiedere più tempo per la verifica di integrità e l'importazione."`.
+7. [`tests/unit/test_ui_privacy_hardening.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_privacy_hardening.py): estensione dei test con verifica esplicita di `server.maxUploadSize == 2048` e `server.maxMessageSize == 2048` sia su file TOML che su opzioni runtime Streamlit.
+8. [`tests/unit/test_operational_model_management.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py): aggiunta asserzione su `uploader.proto.max_upload_size_mb == 2048`.
+9. [`tests/unit/test_large_file_upload.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_large_file_upload.py): nuova suite completa di 19 test unitari sintetici per la validazione di upload > 200 MB, streaming, chunking, limiti TOML, widget protobuf, zip security, cleanup e assenza AI.
+
+### 3. Contenuto Reale di `.streamlit/config.toml`
+```toml
+# .streamlit/config.toml
+# Configurazione di hardening locale, sicurezza e privacy forense per Streamlit.
+
+[browser]
+# Disabilita rigorosamente la raccolta di telemetria e statistiche d'uso
+gatherUsageStats = false
+serverAddress = "127.0.0.1"
+
+[server]
+# Binding esclusivamente su interfaccia di loopback locale (nessuna esposizione LAN o 0.0.0.0)
+address = "127.0.0.1"
+# Preservazione delle protezioni di sicurezza contro attacchi cross-origin
+enableCORS = true
+enableXsrfProtection = true
+# Supporto per upload e messaggi per grandi acquisizioni forensi (fino a 2 GB)
+maxUploadSize = 2048
+maxMessageSize = 2048
+
+[client]
+# Mascheramento dei dettagli e traceback di errore per prevenire data leakage nella UI
+showErrorDetails = "none"
+```
+
+### 4. Widget Uploader e Compatibilità Streamlit
+- Verificata la firma `inspect.signature(st.file_uploader)` nella versione Streamlit installata (1.63.0): il parametro keyword-only `max_upload_size: int | None` è nativamente presente e supportato.
+- Sia `primary_file_uploader` che `companion_wa_uploader` ricevono esplicitamente `max_upload_size = 2048`.
+- In caso di esecuzione su runtime alternativi privi del parametro, il caricamento avviene con fallback trasparente al valore server di `config.toml` tramite controllo dinamico `inspect.signature`.
+
+### 5. Strategia di Memoria e Streaming Chunked
+- **Eliminazione duplicazioni RAM**: `ui/presentation.py` non esegue più `uploaded_file.getvalue()`, eliminando l'allocazione immediata di un buffer continuo da 2 GB.
+- **Passaggio Stream**: `IngestionRequest` accetta e propaga direttamente lo stream `BinaryIO` / `UploadedFile`.
+- **Scrittura e Hashing Incrementale**: `_compute_sha256_and_write` legge a chunk da 1 MB (`DEFAULT_STREAM_CHUNK_SIZE`), aggiornando incrementalmente `hashlib.sha256` e riversando contestualmente i chunk nel file temporaneo isolato su disco (`tempfile.TemporaryDirectory`).
+- **Memoryview per bytes**: Se il payload è fornito come `bytes` (es. in chiamate di test), viene impiegato un `memoryview` a finestra scorrevole per evitare qualsiasi slicing copy in memoria heap.
+- **Early Size Check**: Per stream che espongono `.size` o che supportano `seek(0, SEEK_END)`, il limite a 2048 MB viene verificato istantaneamente a tempo zero; per stream generici la verifica avviene cumulativamente a ogni chunk letto, interrompendo immediatamente l'operazione in caso di superamento.
+
+### 6. Limiti ZIP WhatsApp Compressi e Decompressi
+I parametri sono stati formalmente separati e centralizzati in `core/config.py`:
+- **A. Dimensione massima file compresso caricato**: `MAX_UPLOAD_SIZE_MB = 2048` (2 GB).
+- **B. Dimensione massima totale decompressa ammessa**: `MAX_ARCHIVE_UNCOMPRESSED_SIZE_MB = 4096` (4 GB). Consente esportazioni WhatsApp ricche di file multimediali legittimi (spesso tra 500 MB e 2 GB) senza incorrere in falsi allarmi, prevenendo al contempo espansioni anomale e pericolose.
+- **C. Numero massimo membri archivio**: `MAX_ARCHIVE_MEMBERS = 50_000` (adeguato per conversazioni pluriennali con decine di migliaia di file multimediali e note vocali).
+- **D. Rapporto di compressione massimo**: `MAX_COMPRESSION_RATIO = 100.0` (su file > 1 MB; media standard WhatsApp sono pre-compressi con ratio ~1.0–2.0; i file con ratio > 100 vengono intercettati e rifiutati come possibili zip-bomb).
+- **E. Dimensione massima singolo file membro**: `MAX_SINGLE_FILE_SIZE_MB = 2048` (2 GB; permette video lunghi legittimi).
+
+### 7. Protezioni Anti-Zip-Bomb e Sicurezza Preservate
+- Rigorosa protezione contro path traversal (`..` o parti speciali normalizzate).
+- Rifiuto assoluto di percorsi assoluti (`/`, `\`, drive letters).
+- Rifiuto e blocco immediato di symlink POSIX (`0o120000`).
+- Nessuna estrazione arbitraria o indiscriminata dell'intero archivio su disco: il file di transcript viene letto direttamente in streaming dall'archivio ZIP aperto in sola lettura.
+- Pulizia garantita (`tempfile.TemporaryDirectory`) in blocco `try/finally` sia su successo che in presenza di qualsiasi eccezione.
+
+### 8. Suite di Test e Risultato Pytest Reale
+- Aggiunto `tests/unit/test_large_file_upload.py` (19 test unitari sintetici, privi di allocazione reale di 2 GB su disco).
+- Esecuzione completa `python -m pytest`:
+```text
+========== 1288 passed, 1 skipped, 5 deselected in 111.53s (0:01:51) ==========
+```
+- **0 failed, 0 errors**.
+- Benchmark, dataset, prompt, metriche e `ai/experiment.py` rimasti completamente inalterati e intonsi.
+

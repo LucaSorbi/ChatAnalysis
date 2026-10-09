@@ -44,6 +44,8 @@ class TestStreamlitPrivacyHardening:
         assert data["server"].get("address") == "127.0.0.1"
         assert data["server"].get("enableCORS") is True
         assert data["server"].get("enableXsrfProtection") is True
+        assert data["server"].get("maxUploadSize") == 2048
+        assert data["server"].get("maxMessageSize") == 2048
 
         # [client]
         assert "client" in data
@@ -61,6 +63,10 @@ class TestStreamlitPrivacyHardening:
         # Sicurezza CORS e XSRF attiva
         assert cfg.get_option("server.enableCORS") is True
         assert cfg.get_option("server.enableXsrfProtection") is True
+
+        # Limiti dimensionali upload e messaggi forensi (2048 MB)
+        assert cfg.get_option("server.maxUploadSize") == 2048
+        assert cfg.get_option("server.maxMessageSize") == 2048
 
         # Mascheramento dettagli di errore
         assert cfg.get_option("client.showErrorDetails") == "none"

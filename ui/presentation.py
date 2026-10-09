@@ -16,8 +16,10 @@ Principi:
 """
 from __future__ import annotations
 
+import inspect
 import streamlit as st
 
+from core.config import MAX_UPLOAD_SIZE_MB
 from ai.backend import (
     AiBackendProtocolError,
     AiBackendRequestError,
@@ -236,14 +238,22 @@ def render_import() -> None:
     if source_format == SourceFormat.WHATSAPP_EXPORT:
         primary_types = ["txt", "zip"]
         st.caption("Export nativo WhatsApp ottenuto tramite Esporta chat, con o senza media.")
+        st.caption("Dimensione massima file: 2 GB")
+        st.caption("Gli archivi molto grandi possono richiedere più tempo per la verifica di integrità e l'importazione.")
     else:
         primary_types = ["db", "sqlite", "csv", "json", "xml"]
+        st.caption("Dimensione massima file: 2 GB")
+
+    uploader_kwargs = {}
+    if "max_upload_size" in inspect.signature(st.file_uploader).parameters:
+        uploader_kwargs["max_upload_size"] = MAX_UPLOAD_SIZE_MB
 
     uploaded_file = st.file_uploader(
         f"Seleziona file primario ({source_format.value})",
         type=primary_types,
         help="Il file viene elaborato esclusivamente in spazio temporaneo locale isolato con cleanup deterministico.",
         key="primary_file_uploader",
+        **uploader_kwargs,
     )
 
     companion_file = None
@@ -253,6 +263,7 @@ def render_import() -> None:
             type=["db", "sqlite"],
             help="Opzionale database contatti/identità WhatsApp per l'arricchimento dei sender.",
             key="companion_wa_uploader",
+            **uploader_kwargs,
         )
 
     import_btn = st.button("📥 Importa e analizza struttura", type="primary")
@@ -261,16 +272,15 @@ def render_import() -> None:
         if uploaded_file is None:
             st.warning("Selezionare un file primario prima di procedere con l'importazione.")
         else:
-            primary_bytes = uploaded_file.getvalue()
-            companion_bytes = companion_file.getvalue() if companion_file is not None else None
             companion_name = companion_file.name if companion_file is not None else None
 
+            # Streaming a blocchi: si passa direttamente l'UploadedFile evitando duplicazioni in RAM
             req = IngestionRequest(
                 source_format=source_format,
                 filename=uploaded_file.name,
-                file_bytes=primary_bytes,
+                file_bytes=uploaded_file,
                 companion_filename=companion_name,
-                companion_bytes=companion_bytes,
+                companion_bytes=companion_file,
             )
 
             try:

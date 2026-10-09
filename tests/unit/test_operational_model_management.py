@@ -343,6 +343,7 @@ def test_18_streamlit_apptest_uploader_accepts_txt_and_zip():
     accepted = [t.lstrip(".") for t in uploader.proto.type]
     assert "txt" in accepted
     assert "zip" in accepted
+    assert uploader.proto.max_upload_size_mb == 2048
 
 
 def test_19_zero_ai_during_ingestion(monkeypatch: pytest.MonkeyPatch):

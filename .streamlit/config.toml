@@ -12,6 +12,9 @@ address = "127.0.0.1"
 # Preservazione delle protezioni di sicurezza contro attacchi cross-origin
 enableCORS = true
 enableXsrfProtection = true
+# Supporto per upload e messaggi per grandi acquisizioni forensi (fino a 2 GB)
+maxUploadSize = 2048
+maxMessageSize = 2048
 
 [client]
 # Mascheramento dei dettagli e traceback di errore per prevenire data leakage nella UI

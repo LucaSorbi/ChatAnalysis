@@ -33,6 +33,11 @@ import tempfile
 from typing import Any, BinaryIO, Iterable, Mapping, Optional, Sequence
 
 from ai.models import ConversationEvidenceDocument
+from core.config import (
+    DEFAULT_STREAM_CHUNK_SIZE,
+    MAX_UPLOAD_SIZE_BYTES,
+    MAX_UPLOAD_SIZE_MB,
+)
 from entity_resolution.resolver import DeterministicEntityResolver
 from importer.base import BaseImporter
 from importer.cellebrite_csv import CellebriteCsvImporter
@@ -109,22 +114,93 @@ def get_importer_for_format(source_format: SourceFormat | str) -> BaseImporter:
 def _compute_sha256_and_write(
     source_bytes_or_io: bytes | BinaryIO,
     dest_path: Path,
+    chunk_size: int = DEFAULT_STREAM_CHUNK_SIZE,
 ) -> tuple[str, int]:
-    """Scrive i byte nella destinazione sicura calcolando incrementale SHA-256 e dimensione."""
+    """
+    Scrive i byte nella destinazione sicura calcolando incrementale SHA-256 e dimensione.
+    Opera in streaming a blocchi per prevenire duplicazioni in RAM di grandi file (> 200 MB fino a 2 GB).
+    """
     hasher = hashlib.sha256()
     total_bytes = 0
 
-    with open(dest_path, "wb") as f_out:
-        if isinstance(source_bytes_or_io, (bytes, bytearray)):
-            f_out.write(source_bytes_or_io)
-            hasher.update(source_bytes_or_io)
-            total_bytes = len(source_bytes_or_io)
-        else:
-            source_bytes_or_io.seek(0)
-            while chunk := source_bytes_or_io.read(65536):
-                f_out.write(chunk)
-                hasher.update(chunk)
-                total_bytes += len(chunk)
+    try:
+        with open(dest_path, "wb") as f_out:
+            if isinstance(source_bytes_or_io, (bytes, bytearray)):
+                total_len = len(source_bytes_or_io)
+                if total_len > MAX_UPLOAD_SIZE_BYTES:
+                    raise InvalidUploadedFileError(
+                        f"La dimensione del file ({total_len / (1024 * 1024):.1f} MB) "
+                        f"supera il limite massimo consentito di {MAX_UPLOAD_SIZE_MB} MB (2 GB)."
+                    )
+                mv = memoryview(source_bytes_or_io)
+                for offset in range(0, total_len, chunk_size):
+                    chunk = mv[offset : offset + chunk_size]
+                    f_out.write(chunk)
+                    hasher.update(chunk)
+                    total_bytes += len(chunk)
+            else:
+                # Early check if stream exposes .size or is seekable to end
+                stream_size = getattr(source_bytes_or_io, "size", None)
+                if stream_size is not None and stream_size > MAX_UPLOAD_SIZE_BYTES:
+                    raise InvalidUploadedFileError(
+                        f"La dimensione del file ({stream_size / (1024 * 1024):.1f} MB) "
+                        f"supera il limite massimo consentito di {MAX_UPLOAD_SIZE_MB} MB (2 GB)."
+                    )
+
+                if hasattr(source_bytes_or_io, "seek") and hasattr(source_bytes_or_io, "tell"):
+                    try:
+                        cur_pos = source_bytes_or_io.tell()
+                        source_bytes_or_io.seek(0, os.SEEK_END)
+                        end_pos = source_bytes_or_io.tell()
+                        source_bytes_or_io.seek(cur_pos)
+                        if end_pos > MAX_UPLOAD_SIZE_BYTES:
+                            raise InvalidUploadedFileError(
+                                f"La dimensione del file ({end_pos / (1024 * 1024):.1f} MB) "
+                                f"supera il limite massimo consentito di {MAX_UPLOAD_SIZE_MB} MB (2 GB)."
+                            )
+                    except InvalidUploadedFileError:
+                        raise
+                    except Exception:
+                        pass
+
+                if hasattr(source_bytes_or_io, "seek"):
+                    try:
+                        source_bytes_or_io.seek(0)
+                    except Exception:
+                        pass
+                while True:
+                    chunk = source_bytes_or_io.read(chunk_size)
+                    if not chunk:
+                        break
+                    total_bytes += len(chunk)
+                    if total_bytes > MAX_UPLOAD_SIZE_BYTES:
+                        raise InvalidUploadedFileError(
+                            f"La dimensione del file supera il limite massimo consentito di {MAX_UPLOAD_SIZE_MB} MB (2 GB)."
+                        )
+                    f_out.write(chunk)
+                    hasher.update(chunk)
+    except InvalidUploadedFileError:
+        raise
+    except (MemoryError, SystemError) as mem_err:
+        raise IngestionError(
+            "Memoria di sistema insufficiente per elaborare il file caricato.",
+            stage="write_temp",
+        ) from mem_err
+    except OSError as os_err:
+        import errno
+        if getattr(os_err, "errno", None) == errno.ENOSPC or "No space left on device" in str(os_err):
+            raise IngestionError(
+                "Spazio su disco temporaneo insufficiente per salvare il file caricato.",
+                stage="write_temp",
+            ) from os_err
+        raise IngestionError(
+            "Errore I/O durante la scrittura temporanea del file caricato.",
+            stage="write_temp",
+        ) from os_err
+    except (IOError, ValueError) as stream_err:
+        raise InvalidUploadedFileError(
+            "Upload del file interrotto o errore durante la lettura dello stream."
+        ) from stream_err
 
     return hasher.hexdigest(), total_bytes
 
@@ -224,7 +300,7 @@ def ingest_file_payload(
         file_sha256, file_size = _compute_sha256_and_write(actual_bytes, safe_primary_path)
 
         if file_size == 0:
-            raise InvalidUploadedFileError("Il file caricato è vuoto (0 byte).")
+            raise InvalidUploadedFileError("Il file caricato è vuoto (0 byte) o l'upload è stato interrotto.")
 
         # Verifica preliminare signature per database SQLite o export WhatsApp
         if enum_format in (SourceFormat.WHATSAPP_MSGSTORE, SourceFormat.WHATSAPP_WA):

@@ -27,6 +27,12 @@ import re
 from typing import Any, Iterator
 import zipfile
 
+from core.config import (
+    MAX_ARCHIVE_MEMBERS,
+    MAX_ARCHIVE_UNCOMPRESSED_SIZE_BYTES,
+    MAX_COMPRESSION_RATIO,
+    MAX_SINGLE_FILE_SIZE_BYTES,
+)
 from importer.base import BaseImporter
 from importer.models import RawRecord
 
@@ -35,11 +41,11 @@ logger = logging.getLogger(__name__)
 _SOURCE_NAME = "whatsapp_export"
 _IMPORTER_VERSION = "0.1.0"
 
-# Limiti di sicurezza per archivi ZIP
-_MAX_ZIP_ENTRIES = 10_000
-_MAX_UNCOMPRESSED_SIZE = 500 * 1024 * 1024  # 500 MB
-_MAX_COMPRESSION_RATIO = 100.0
-_MAX_SINGLE_FILE_SIZE = 100 * 1024 * 1024  # 100 MB
+# Limiti di sicurezza per archivi ZIP (centralizzati e documentati in core.config)
+_MAX_ZIP_ENTRIES = MAX_ARCHIVE_MEMBERS
+_MAX_UNCOMPRESSED_SIZE = MAX_ARCHIVE_UNCOMPRESSED_SIZE_BYTES
+_MAX_COMPRESSION_RATIO = MAX_COMPRESSION_RATIO
+_MAX_SINGLE_FILE_SIZE = MAX_SINGLE_FILE_SIZE_BYTES
 
 # Caratteri invisibili e direzionali Unicode inseriti da WhatsApp
 _DIR_CHARS = r"[\u200e\u200f\u202a-\u202e\u2066-\u2069\ufeff]"
