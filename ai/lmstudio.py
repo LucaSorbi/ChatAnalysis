@@ -20,6 +20,7 @@ Caratteristiche di sicurezza e architetturali:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 import json
 import os
 import socket
@@ -27,12 +28,13 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from typing import Any, Mapping
+from typing import Any, Mapping, Sequence
 
 from ai.backend import (
     AiBackendProtocolError,
     AiBackendRequestError,
     AiBackendTimeoutError,
+    AiModelAmbiguousError,
     AiModelLoadError,
     AiModelNotInstalledError,
     AiModelNotSpecifiedError,
@@ -54,6 +56,8 @@ DEFAULT_OPERATIONAL_MODEL: str = "qwen2.5-7b-instruct"
 DEFAULT_OPERATIONAL_CONTEXT_LENGTH: int = 8192
 DEFAULT_OPERATIONAL_GPU_OFFLOAD: str = "max"
 DEFAULT_OPERATIONAL_TIMEOUT_SECONDS: float = 240.0
+DEFAULT_OPERATIONAL_LOAD_TIMEOUT_SECONDS: float = 240.0
+DEFAULT_OPERATIONAL_INFERENCE_TIMEOUT_SECONDS: float = 240.0
 DEFAULT_OPERATIONAL_TEMPERATURE: float = 0.0
 DEFAULT_OPERATIONAL_MAX_TOKENS: int = 512
 
@@ -62,6 +66,17 @@ MODEL_DISPLAY_NAMES: dict[str, str] = {
     "meta-llama-3.1-8b-instruct": "Llama 3.1-8B-Instruct",
     "deepseek-r1-distill-qwen-7b": "DeepSeek-R1-Distill-Qwen-7B",
 }
+
+
+@dataclass(frozen=True)
+class LocalModelMetadata:
+    """Metadati di un modello installato localmente in LM Studio."""
+    key: str
+    display_name: str
+    quantization: str | None = None
+    loaded_instances: tuple[dict[str, Any], ...] = ()
+    max_context_length: int | None = None
+
 
 
 def get_model_display_name(model_id: str) -> str:
@@ -128,6 +143,133 @@ def resolve_installed_model_id(
             return m
 
     return None
+
+
+def _normalize_model_item(item: LocalModelMetadata | dict[str, Any] | str) -> LocalModelMetadata:
+    if isinstance(item, LocalModelMetadata):
+        return item
+    if isinstance(item, str):
+        return LocalModelMetadata(key=item, display_name=item)
+    key = str(item.get("key") or item.get("id") or item.get("name") or "").strip()
+    disp = str(item.get("display_name") or item.get("name") or key)
+    quant = str(item.get("quantization") or "") or None
+    raw_loaded = item.get("loaded_instances") or []
+    state_val = str(item.get("state") or item.get("status") or "").lower()
+    is_loaded_state = state_val in ("loaded", "active", "ready") or item.get("loaded") is True or item.get("is_loaded") is True
+    if is_loaded_state and not raw_loaded:
+        raw_loaded = [{"id": key}]
+    loaded = tuple(raw_loaded) if isinstance(raw_loaded, (list, tuple)) else ()
+    max_ctx = item.get("max_context_length")
+    return LocalModelMetadata(
+        key=key,
+        display_name=disp,
+        quantization=quant,
+        loaded_instances=loaded,
+        max_context_length=int(max_ctx) if isinstance(max_ctx, int) else None,
+    )
+
+
+def resolve_qwen_operational_model(
+    models: Sequence[LocalModelMetadata | dict[str, Any] | str],
+    target_spec: str = "qwen2.5-7b-instruct",
+) -> tuple[str, bool, str | None]:
+    """
+    Risolve deterministicamente il modello Qwen2.5-7B-Instruct tra quelli installati:
+    1. Se esiste già una loaded_instance esplicitamente identificabile come qwen2.5-7b-instruct, usa quella;
+    2. Altrimenti cerca tra i modelli locali un Qwen2.5 7B Instruct compatibile;
+    3. Preferisce Q4_K_M se sono presenti più varianti e questa informazione è disponibile;
+    4. Se esiste UNA SOLA corrispondenza compatibile, restituisce il suo 'key' per il caricamento;
+    5. Se esistono più corrispondenze non distinguibili in sicurezza, solleva AiModelAmbiguousError;
+    6. Se non esiste alcun Qwen compatibile, solleva AiModelNotInstalledError:
+       'Qwen2.5-7B-Instruct non è installato localmente in LM Studio.'
+    """
+    norm_models = [_normalize_model_item(m) for m in models]
+
+    def is_qwen_7b(m: LocalModelMetadata) -> bool:
+        txt = f"{m.key} {m.display_name}".lower().replace("_", "-").replace(".", "")
+        has_qwen = "qwen" in txt
+        has_7b = "7b" in txt
+        has_inst = "instruct" in txt
+        not_other_size = not any(s in txt for s in ("14b", "32b", "72b", "05b", "15b", "3b"))
+        return has_qwen and has_7b and has_inst and not_other_size
+
+    candidates = [m for m in norm_models if is_qwen_7b(m)]
+
+    # 1. Verifica se un'istanza è già caricata
+    for c in candidates:
+        if c.loaded_instances:
+            inst = c.loaded_instances[0]
+            inst_id = str(inst.get("id") or c.key)
+            return c.key, True, inst_id
+
+    # 2. Nessuna istanza attiva
+    if not candidates:
+        raise AiModelNotInstalledError("Qwen2.5-7B-Instruct non è installato localmente in LM Studio.")
+
+    if len(candidates) == 1:
+        return candidates[0].key, False, None
+
+    # 3. Preferisci Q4_K_M se disponibile
+    q4_candidates = [
+        c for c in candidates
+        if (c.quantization and "q4_k_m" in c.quantization.lower())
+        or "q4_k_m" in c.key.lower()
+        or "q4-k-m" in c.key.lower()
+    ]
+    if len(q4_candidates) == 1:
+        return q4_candidates[0].key, False, None
+
+    if len(q4_candidates) > 1:
+        raise AiModelAmbiguousError(
+            f"Rilevateplici versioni compatibili di Qwen2.5-7B-Instruct con quantizzazione Q4_K_M "
+            f"({', '.join(c.key for c in q4_candidates)}). Selezionare esplicitamente il modello da utilizzare."
+        )
+
+    raise AiModelAmbiguousError(
+        f"Rilevateplici versioni compatibili di Qwen2.5-7B-Instruct "
+        f"({', '.join(c.key for c in candidates)}). Selezionare esplicitamente il modello da utilizzare."
+    )
+
+
+def resolve_operational_model_from_metadata(
+    models: Sequence[LocalModelMetadata | dict[str, Any] | str],
+    requested_model: str = "qwen2.5-7b-instruct",
+) -> tuple[str, bool, str | None]:
+    """
+    Risolve il modello operativo richiesto. Se richiesto Qwen (default),
+    applica l'algoritmo di risoluzione rigoroso per Qwen2.5-7B-Instruct.
+    Per altri modelli, verifica corrispondenza esatta/canonica e stato di caricamento.
+    """
+    req_clean = (requested_model or "").strip().lower()
+    if not req_clean or "qwen" in req_clean:
+        return resolve_qwen_operational_model(models, requested_model)
+
+    norm_models = [_normalize_model_item(m) for m in models]
+    candidates: list[LocalModelMetadata] = []
+    for m in norm_models:
+        txt = f"{m.key} {m.display_name}".lower().replace("_", "-")
+        req_norm = req_clean.replace("_", "-")
+        if req_norm in txt or txt in req_norm:
+            candidates.append(m)
+
+    for c in candidates:
+        if c.loaded_instances:
+            inst = c.loaded_instances[0]
+            inst_id = str(inst.get("id") or c.key)
+            return c.key, True, inst_id
+
+    if not candidates:
+        display = get_model_display_name(requested_model)
+        raise AiModelNotInstalledError(f"Il modello {display} non è installato localmente in LM Studio.")
+
+    if len(candidates) == 1:
+        return candidates[0].key, False, None
+
+    display = get_model_display_name(requested_model)
+    raise AiModelAmbiguousError(
+        f"Rilevateplici versioni compatibili del modello {display} "
+        f"({', '.join(c.key for c in candidates)}). Selezionare esplicitamente il modello da utilizzare."
+    )
 
 
 def _is_timeout_error(exc: BaseException) -> bool:
@@ -272,67 +414,103 @@ class LmStudioClient(BaseLocalLlmClient):
                     return data["data"]
             raise AiBackendProtocolError(f"Risposta da {url_api} non conforme al protocollo atteso ('models' o 'data' mancante o non lista).")
 
-        # 2. Ricaduta su standard /v1/models (solo se /api/v1/models ha restituito 404/405/501)
+        # Fallback su /v1/models per compatibilità OpenAI
         url_v1 = f"{self.base_url}/v1/models"
         req_v1 = urllib.request.Request(url_v1, headers=self._get_headers(), method="GET")
         try:
-            with urllib.request.urlopen(req_v1, timeout=self.default_timeout_seconds) as resp:
-                raw_bytes_v1 = resp.read()
+            with urllib.request.urlopen(req_v1, timeout=self.default_timeout_seconds) as resp_v1:
+                raw_bytes_v1 = resp_v1.read()
         except urllib.error.HTTPError as e:
             raise AiBackendRequestError(f"Errore HTTP {e.code} interrogando {url_v1}: {e.reason}") from e
         except _NETWORK_ERRORS as e:
             if _is_timeout_error(e):
                 raise AiBackendTimeoutError(f"Timeout durante richiesta a {url_v1}: {e}") from e
-            raise LmStudioUnavailableError(
-                f"Impossibile recuperare metadati modelli da LM Studio ({self.base_url}): {e}"
-            ) from e
+            raise LmStudioUnavailableError(f"Impossibile contattare {url_v1}: {e}") from e
 
         try:
-            data = json.loads(raw_bytes_v1.decode("utf-8"))
+            data_v1 = json.loads(raw_bytes_v1.decode("utf-8"))
         except json.JSONDecodeError as e:
-            raise AiBackendProtocolError(f"JSON non valido restituito da {url_v1}: {e}") from e
+            raise AiBackendProtocolError(f"JSON malformato ricevuto da {url_v1}: {e}") from e
 
-        if isinstance(data, dict) and "data" in data and isinstance(data["data"], list):
-            return data["data"]
-        raise AiBackendProtocolError("Risposta da /v1/models priva di lista 'data' valida.")
+        if isinstance(data_v1, dict) and "data" in data_v1 and isinstance(data_v1["data"], list):
+            return data_v1["data"]
+        raise AiBackendProtocolError(f"Risposta da {url_v1} non conforme al protocollo atteso ('data' mancante o non lista).")
+
+    def get_native_models(self) -> list[LocalModelMetadata]:
+        """
+        Recupera i modelli locali tramite l'API REST nativa di LM Studio GET /api/v1/models.
+        Se l'endpoint non è esposto (404/405/501), esegue fallback su GET /v1/models.
+        """
+        _validate_loopback_url(self.base_url)
+        url_native = f"{self.base_url}/api/v1/models"
+        req = urllib.request.Request(url_native, headers=self._get_headers(), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=10.0) as resp:
+                raw_bytes = resp.read()
+            data = json.loads(raw_bytes.decode("utf-8"))
+            raw_list = data.get("data") or data.get("models") or (data if isinstance(data, list) else [])
+            models: list[LocalModelMetadata] = []
+            for item in raw_list:
+                if isinstance(item, str):
+                    models.append(LocalModelMetadata(key=item, display_name=item))
+                elif isinstance(item, dict):
+                    models.append(_normalize_model_item(item))
+            return models
+        except urllib.error.HTTPError as e:
+            if e.code in (404, 405, 501):
+                return self._fallback_openai_models()
+            raise AiBackendRequestError(f"Errore HTTP {e.code} da {url_native}: {e.reason}") from e
+        except _NETWORK_ERRORS as e:
+            if _is_timeout_error(e):
+                raise AiBackendTimeoutError(f"Timeout durante richiesta a {url_native}: {e}") from e
+            raise LmStudioUnavailableError(f"LM Studio non raggiungibile su {self.base_url}: {e}") from e
+
+    def _fallback_openai_models(self) -> list[LocalModelMetadata]:
+        """Recupera la lista modelli tramite GET /v1/models come fallback."""
+        url_v1 = f"{self.base_url}/v1/models"
+        req = urllib.request.Request(url_v1, headers=self._get_headers(), method="GET")
+        try:
+            with urllib.request.urlopen(req, timeout=self.default_timeout_seconds) as resp:
+                raw_bytes = resp.read()
+            data = json.loads(raw_bytes.decode("utf-8"))
+            raw_list = data.get("data") if isinstance(data, dict) else (data if isinstance(data, list) else [])
+            models: list[LocalModelMetadata] = []
+            for item in raw_list:
+                if isinstance(item, dict):
+                    mid = str(item.get("id") or item.get("name") or "")
+                    if mid:
+                        models.append(_normalize_model_item(item))
+            return models
+        except urllib.error.HTTPError as e:
+            raise AiBackendRequestError(f"Errore HTTP {e.code} da {url_v1}: {e.reason}") from e
+        except _NETWORK_ERRORS as e:
+            if _is_timeout_error(e):
+                raise AiBackendTimeoutError(f"Timeout durante richiesta a {url_v1}: {e}") from e
+            raise LmStudioUnavailableError(f"LM Studio non raggiungibile su {self.base_url}: {e}") from e
 
     def is_model_loaded(self, model_id: str) -> bool:
         """
         Verifica se il modello specificato è attualmente caricato in memoria in LM Studio.
-        Interroga get_models_detailed() e controlla gli indicatori di stato del runtime.
         """
         try:
-            detailed = self.get_models_detailed()
+            native = self.get_native_models()
         except Exception:
-            detailed = []
+            native = []
 
-        for item in detailed:
-            if not isinstance(item, dict):
-                continue
-            item_id = str(item.get("id") or item.get("name") or "")
-            if not item_id:
-                continue
-
-            # Verifica corrispondenza ID
+        m_lower = model_id.lower()
+        for nm in native:
             is_match = (
-                item_id == model_id
-                or item_id.lower() == model_id.lower()
-                or model_id.lower() in item_id.lower()
-                or item_id.lower() in model_id.lower()
+                nm.key.lower() == m_lower
+                or nm.display_name.lower() == m_lower
+                or m_lower in nm.key.lower()
+                or nm.key.lower() in m_lower
             )
-            if is_match:
-                state_val = str(item.get("state") or item.get("status") or "").lower()
-                loaded_bool = item.get("loaded") or item.get("is_loaded")
-                if state_val in ("loaded", "active", "ready") or loaded_bool is True:
-                    return True
-                if state_val in ("not_loaded", "unloaded", "inactive") or loaded_bool is False:
-                    return False
+            if is_match and len(nm.loaded_instances) > 0:
+                return True
 
-        # Se la risposta da detailed non contiene campi di stato espliciti,
-        # controlla se è stato caricato dal client durante la sessione
         if getattr(self, "_last_loaded_model", None) is not None:
             last = self._last_loaded_model.lower()
-            if model_id.lower() in last or last in model_id.lower():
+            if m_lower in last or last in m_lower:
                 return True
 
         return False
@@ -341,22 +519,25 @@ class LmStudioClient(BaseLocalLlmClient):
         self,
         model_id: str,
         context_length: int = 8192,
-        gpu_offload: str = "max",
         timeout_seconds: float = 240.0,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """
         Carica un modello in memoria tramite l'API REST nativa di LM Studio (POST /api/v1/models/load).
-        Se l'endpoint non è esposto (404/405/501), valida la presenza del modello e attiva il supporto JIT controllato.
+        Invia ESCLUSIVAMENTE il payload minimo supportato dallo schema REST di LM Studio:
+        {
+            "model": "<MODEL_KEY>",
+            "context_length": 8192,
+            "echo_load_config": true
+        }
+        NON invia: identifier, contextLength, gpu_offload, gpuOffload (che causano HTTP 400).
         """
         _validate_loopback_url(self.base_url)
         url = f"{self.base_url}/api/v1/models/load"
         payload = {
             "model": model_id,
-            "identifier": model_id,
             "context_length": context_length,
-            "contextLength": context_length,
-            "gpu_offload": gpu_offload,
-            "gpuOffload": gpu_offload,
+            "echo_load_config": True,
         }
         req_data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=req_data, headers=self._get_headers(), method="POST")
@@ -364,32 +545,39 @@ class LmStudioClient(BaseLocalLlmClient):
         try:
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                 raw_bytes = resp.read()
-                self._last_loaded_model = model_id
                 try:
-                    return json.loads(raw_bytes.decode("utf-8"))
+                    res = json.loads(raw_bytes.decode("utf-8"))
                 except json.JSONDecodeError:
-                    return {"model": model_id, "status": "loaded"}
-        except urllib.error.HTTPError as e:
-            if e.code in (404, 405, 501):
-                # Fallback controllato su JIT di LM Studio:
-                # Verifica che il modello sia effettivamente tra quelli disponibili localmente
-                available = self.list_models()
-                resolved = resolve_installed_model_id(model_id, available)
-                if not resolved:
-                    display = get_model_display_name(model_id)
-                    raise AiModelNotInstalledError(
-                        f"Il modello {display} non è installato in LM Studio."
-                    ) from e
-                self._last_loaded_model = resolved
-                return {"model": resolved, "status": "jit_ready", "endpoint": "jit"}
+                    res = {"model": model_id, "status": "loaded"}
 
+                instance_id = res.get("instance_id") or res.get("id") or model_id
+                self._last_loaded_model = instance_id
+                self._last_loaded_model_key = model_id
+                return res
+        except urllib.error.HTTPError as e:
             err_body = ""
             try:
                 err_body = e.read().decode("utf-8")
             except Exception:
                 pass
+
+            if e.code == 400:
+                raise AiModelLoadError(
+                    f"Errore HTTP 400 da LM Studio durante il caricamento di '{model_id}': {err_body or e.reason}",
+                    status_code=400,
+                    technical_details=err_body,
+                ) from e
+
+            if e.code in (404, 405, 501):
+                # Fallback controllato JIT se l'endpoint non è esposto
+                self._last_loaded_model = model_id
+                self._last_loaded_model_key = model_id
+                return {"model": model_id, "status": "jit_ready", "endpoint": "jit"}
+
             raise AiModelLoadError(
-                f"Errore HTTP {e.code} da LM Studio durante il caricamento di '{model_id}': {e.reason}. {err_body}".strip()
+                f"Errore HTTP {e.code} da LM Studio durante il caricamento di '{model_id}': {e.reason}. {err_body}".strip(),
+                status_code=e.code,
+                technical_details=err_body,
             ) from e
         except _NETWORK_ERRORS as e:
             if _is_timeout_error(e):
@@ -409,7 +597,6 @@ class LmStudioClient(BaseLocalLlmClient):
         payload: dict[str, Any] = {}
         if model_id:
             payload["model"] = model_id
-            payload["identifier"] = model_id
         req_data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=req_data, headers=self._get_headers(), method="POST")
         try:
@@ -424,16 +611,17 @@ class LmStudioClient(BaseLocalLlmClient):
         self,
         model_id: str = "qwen2.5-7b-instruct",
         context_length: int = 8192,
-        gpu_offload: str = "max",
         timeout_seconds: float = 240.0,
+        **kwargs: Any,
     ) -> str:
         """
         Esegue il pre-flight completo e garantisce la disponibilità operativa del modello locale.
         1. Verifica che LM Studio sia attivo su loopback.
-        2. Verifica che il modello richiesto sia installato localmente (nessun download da Internet).
-        3. Se il modello è già caricato, lo riutilizza immediatamente.
-        4. Se il modello non è caricato, lo carica tramite API REST nativa.
-        Restituisce il model_id risolto per l'inferenza.
+        2. Recupera i modelli tramite GET /api/v1/models (o fallback GET /v1/models).
+        3. Risolve deterministicamente il model_key e lo stato di caricamento.
+        4. Se già caricato, restituisce l'identificatore attivo.
+        5. Se installato ma non caricato, invia POST /api/v1/models/load con schema conforme.
+        6. Restituisce il model_id reale da passare all'inferenza.
         """
         if not self.is_available():
             raise LmStudioUnavailableError(
@@ -441,26 +629,25 @@ class LmStudioClient(BaseLocalLlmClient):
                 "Verificare che il server locale sia attivo."
             )
 
-        available = self.list_models()
-        resolved_id = resolve_installed_model_id(model_id, available)
-        if not resolved_id:
-            display_name = get_model_display_name(model_id)
-            raise AiModelNotInstalledError(
-                f"Il modello {display_name} non è installato in LM Studio."
-            )
+        native_models = self.get_native_models()
+        model_key, is_loaded, instance_id = resolve_operational_model_from_metadata(
+            native_models, model_id
+        )
 
-        if self.is_model_loaded(resolved_id):
-            self.model_id = resolved_id
-            return resolved_id
+        if is_loaded:
+            active_id = instance_id or model_key
+            self.model_id = active_id
+            return active_id
 
-        self.load_model(
-            model_id=resolved_id,
+        load_result = self.load_model(
+            model_id=model_key,
             context_length=context_length,
-            gpu_offload=gpu_offload,
             timeout_seconds=timeout_seconds,
         )
-        self.model_id = resolved_id
-        return resolved_id
+
+        instance_id = load_result.get("instance_id") or load_result.get("id") or model_key
+        self.model_id = instance_id
+        return instance_id
 
     def chat_completion(
         self,

@@ -26,7 +26,6 @@ from ai.backend import (
 )
 from ai.lmstudio import (
     DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
-    DEFAULT_OPERATIONAL_GPU_OFFLOAD,
     DEFAULT_OPERATIONAL_MAX_TOKENS,
     DEFAULT_OPERATIONAL_MODEL,
     DEFAULT_OPERATIONAL_TEMPERATURE,
@@ -400,7 +399,6 @@ def prepare_operational_model(
         return target_client.ensure_model_loaded(
             model_id=target,
             context_length=DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
-            gpu_offload=DEFAULT_OPERATIONAL_GPU_OFFLOAD,
             timeout_seconds=timeout_seconds,
         )
 
@@ -416,7 +414,6 @@ def prepare_operational_model(
                 target_client.load_model(
                     resolved,
                     context_length=DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
-                    gpu_offload=DEFAULT_OPERATIONAL_GPU_OFFLOAD,
                     timeout_seconds=timeout_seconds,
                 )
         return resolved

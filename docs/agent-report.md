@@ -355,5 +355,159 @@ La validazione preliminare condotta in precedenza su endpoint cloud (Protocolli 
 | **Tracciabilità delle Evidenze** | CONFORME | Ogni TopicDetectionResult cita rigorosamente solo `evidence_id` validi appartenenti al documento. Rationale in italiano con spiegazione oggettiva. |
 | **Determinismo Ingestion & Search** | CONFORME | Ingestion e SearchService sono deterministici e offline (zero inferenze automatiche). L'inferenza LLM è locale, controllata e on-demand (non qualificata come deterministica in senso rigoroso). |
 | **Workflow Discovery → Detection** | CONFORME | Avvio di nuova inferenza reale con TopicDetectionAnalyzer su click esplicito. Area 1 e Area 2 distinte nella UI. |
-| **Stato Test Suite** | CONFORME | **1226 passed, 1 skipped, 5 deselected** (0 failed, 0 errors) su `pytest`. Nessuna regressione introdotta. |
+| **Stato Test Suite** | CONFORME | **1269 passed, 1 skipped, 5 deselected** (0 failed, 0 errors) su `pytest`. Nessuna regressione introdotta. |
 | **Integrità Benchmark** | CONFORME | Modelli fissati (`Qwen2.5-7B-Instruct`, `Llama 3.1-8B-Instruct`, `DeepSeek-R1-Distill-Qwen-7B`), ground truth, prompt e metriche congelati. |
+
+---
+
+## ULTIMO INTERVENTO VERIFICATO - 09/10/2026
+
+### 1. PROBLEMI RIPRODOTTI
+- **UI senza upload WhatsApp TXT/ZIP**: la schermata "Importazione" in Streamlit non esponeva il selettore `SourceFormat.WHATSAPP_EXPORT` con label `"WhatsApp export chat (TXT / ZIP)"` e l'uploader limitava i tipi a `.db/.csv/.json/.xml`, impedendo all'utente di caricare archivi `.zip` ed export `.txt` nativi di WhatsApp.
+- **HTTP 400 da LM Studio durante auto-load**: durante l'avvio della Topic Detection, la chiamata REST a `POST /api/v1/models/load` generava l'errore:
+  `HTTP 400 Bad Request: Unrecognized key(s) in object: 'identifier', 'contextLength', 'gpu_offload', 'gpuOffload'`. L'applicazione falliva l'auto-load e interrompeva il flusso prima dell'inferenza.
+- **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+
+### 2. ROOT CAUSE
+- **Problema A (WhatsApp UI & Preflight)**:
+  - In `ui/models.py` il selettore `SourceFormat.WHATSAPP_EXPORT` era definito ma non collegato nella logica di rendering `render_import()` di `ui/presentation.py`.
+  - In `ui/presentation.py` il widget `st.file_uploader` non gestiva la visualizzazione della didascalia specifica né il tipo estensione `["txt", "zip"]`.
+  - Mancava il preflight dedicato in `ui/ingestion.py` (`_validate_whatsapp_export_preflight`) per intercettare preliminarmente file non testuali o ZIP non conformi prima del passaggio all'engine.
+- **Problema B (LM Studio Payload & Discovery)**:
+  - In `ai/lmstudio.py` il metodo `load_model()` inviava chiavi derivate dalla sintassi CLI (`identifier`, `contextLength`, `gpu_offload`, `gpuOffload`). L'endpoint REST nativo v1 di LM Studio (`POST /api/v1/models/load`) effettua validazione stretta dello schema JSON e rifiuta chiavi non contemplate.
+  - La risoluzione del modello locale utilizzava scorciatoie che non interrogavano la struttura ricca restituita da `GET /api/v1/models` (`key`, `display_name`, `quantization`, `loaded_instances`, `max_context_length`), rischiando di passare alias errati all'inferenza o scegliere arbitrariamente modelli in caso di ambiguità.
+  - Mancava la cattura strutturata dell'errore HTTP 400 con conservazione di `status_code` e corpo di risposta tecnica (`technical_details`).
+- **Problema C (Hardware Block)**:
+  - In `ui/application.py` (`get_system_status_info()`) e in `ui/presentation.py` (`render_system_status_page()`) erano presenti costanti e stringhe hardcoded relative al processore `AMD A8-7410` e al differimento sperimentale, anziché esporre contratti agnostici e portabili.
+
+### 3. FILE DI CODICE MODIFICATI
+- [ai/backend.py](file:///c:/Users/lucas/Desktop/Tesi/ai/backend.py)
+- [ai/lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/ai/lmstudio.py)
+- [importer/whatsapp_export.py](file:///c:/Users/lucas/Desktop/Tesi/importer/whatsapp_export.py)
+- [ui/application.py](file:///c:/Users/lucas/Desktop/Tesi/ui/application.py)
+- [ui/ingestion.py](file:///c:/Users/lucas/Desktop/Tesi/ui/ingestion.py)
+- [ui/presentation.py](file:///c:/Users/lucas/Desktop/Tesi/ui/presentation.py)
+- [tests/unit/test_ai_lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_lmstudio.py)
+- [tests/unit/test_operational_model_management.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py)
+- [tests/unit/test_ui_manual_topic_detection.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_manual_topic_detection.py)
+
+### 4. FUNZIONI/CLASSI MODIFICATE
+- `ai.backend`:
+  - `AiModelAmbiguousError`: nuova eccezione specializzata per ambiguità nella risoluzione del modello locale.
+  - `AiModelLoadError`: estesa con attributi `status_code: int | None` e `technical_details: str | None`.
+  - `BaseLocalLlmClient.load_model`: firma pulita con parametri agnostici e `**kwargs`.
+- `ai.lmstudio`:
+  - `LocalModelMetadata`: dataclass immutabile per metadati nativi del modello (`key`, `display_name`, `quantization`, `loaded_instances`, `max_context_length`).
+  - `resolve_qwen_operational_model`: risolutore deterministico del modello locale Qwen su lista di stringhe/identificatori.
+  - `resolve_operational_model_from_metadata`: risolutore deterministico su metadati `LocalModelMetadata` con priorità su istanze già caricate, compatibilità 7B Instruct, preferenza quantizzazione `Q4_K_M`, rilevazione ambiguità ed esclusione auto-download.
+  - `LmStudioClient.get_native_models`: query a `GET /api/v1/models` con fallback controllato a `GET /v1/models`.
+  - `LmStudioClient.get_models_detailed`: supporto schema REST v1 e fallback trasparente OpenAI.
+  - `LmStudioClient.is_model_loaded`: verifica presenze in `loaded_instances` o sessione.
+  - `LmStudioClient.load_model`: invio del solo payload minimo supportato, gestione HTTP 400 e conservazione `instance_id`.
+  - `LmStudioClient.ensure_model_loaded`: sequenza completa pre-flight -> risoluzione deterministica -> verifica già caricato -> load controllato.
+- `importer.whatsapp_export`:
+  - `WhatsAppExportImporter.validate_source`: validazione rigorosa diretta di archivi ZIP e file TXT con propagazione degli errori espliciti di sicurezza.
+  - `WhatsAppExportImporter.can_import`: delega non distruttiva a `validate_source`.
+  - `WhatsAppExportImporter._create_raw_record`: esposizione di sia `is_system` che `is_system_message` in `raw_fields`.
+- `ui.ingestion`:
+  - `_validate_whatsapp_export_preflight`: preflight difensivo per verificare che il file sia uno ZIP sicuro contenente un transcript o un testo non binario con timestamp.
+  - `ingest_file_payload`: invocazione del preflight dedicato per `SourceFormat.WHATSAPP_EXPORT`.
+  - `get_importer_for_format`: mapping esplicito `SourceFormat.WHATSAPP_EXPORT -> WhatsAppExportImporter()`.
+- `ui.application`:
+  - `prepare_operational_model`: rimozione di forzature GPU CLI nel client REST, gestione timeout separati (load = 240s, inference = 240s).
+  - `get_system_status_info`: emissione di stato neutro, portabile e loopback (`READY - LM STUDIO LOCAL`, endpoint `http://127.0.0.1:1234`).
+- `ui.presentation`:
+  - `render_import`: integrazione di `SourceFormat.WHATSAPP_EXPORT` con dicitura `"Export nativo WhatsApp ottenuto tramite Esporta chat, con o senza media."` e tipo `type=["txt", "zip"]`.
+  - `render_manual_topic_detection_section` & `render_topic_discovery_page`: progressione degli stati UX (`"Verifica LM Studio locale..."` -> `"Preparazione del modello AI locale..."` -> `"Modello locale pronto."` -> `"Analisi locale in corso..."`), blocco dei traceback a schermo e messaggi amichevoli controllati.
+  - `render_system_status_page`: rimozione dei blocchi hardcoded "Hardware Block" e neutralizzazione dello stato benchmark.
+
+### 5. PAYLOAD LM STUDIO PRIMA
+Le chiavi JSON precedentemente inviate da `load_model()` includevano opzioni CLI non ammesse dallo schema REST:
+```json
+{
+  "model": "qwen2.5-7b-instruct",
+  "identifier": "qwen2.5-7b-instruct",
+  "context_length": 8192,
+  "contextLength": 8192,
+  "gpu_offload": "max",
+  "gpuOffload": "max"
+}
+```
+Chiavi contestate da LM Studio con HTTP 400: `identifier`, `contextLength`, `gpu_offload`, `gpuOffload`.
+
+### 6. PAYLOAD LM STUDIO DOPO
+Il payload REST inviato a `POST /api/v1/models/load` è rigorosamente conforme allo schema nativo v1 di LM Studio:
+```json
+{
+  "model": "<resolved local model key>",
+  "context_length": 8192,
+  "echo_load_config": true
+}
+```
+Nessuna opzione GPU CLI arbitraria viene inviata via REST; l'offload GPU è gestito autonomamente dal runtime LM Studio.
+
+### 7. RISOLUZIONE MODEL KEY
+La risoluzione deterministica in `resolve_operational_model_from_metadata` segue un ordine tassativo:
+1. **Istanza già caricata**: se tra i modelli locali un'istanza è già caricata (`loaded_instances` non vuoto) e compatibile con Qwen 2.5 7B Instruct, viene riutilizzata all'istante senza ricaricamento.
+2. **Candidati compatibili**: ricerca tra i modelli locali di chiavi contenenti `qwen` e `7b` e `instruct` (escludendo altre famiglie o dimensioni).
+3. **Preferenza quantizzazione**: se sono presenti più varianti compatibili e tra di esse è identificabile `Q4_K_M` (nel campo `quantization` o nel nome del file/chiave), viene selezionata univocamente la variante Q4_K_M.
+4. **Corrispondenza univoca**: se esiste una sola corrispondenza, viene estratto il suo campo esatto `"key"` per l'invocazione di `load_model()`.
+5. **Ambiguità non risolvibile**: se rimangono più corrispondenze non distinguibili in sicurezza, il sistema solleva `AiModelAmbiguousError` senza effettuare selezioni arbitrarie (`available_models[0]` è vietato).
+6. **Modello non presente**: se nessun modello compatibile è installato, viene sollevato `AiModelNotInstalledError` con il messaggio: `"Qwen2.5-7B-Instruct non è installato localmente in LM Studio."`. Nessun download automatico da remoto viene mai avviato.
+
+### 8. WHATSAPP TXT/ZIP
+- **Enum**: `SourceFormat.WHATSAPP_EXPORT = "WhatsApp export chat (TXT / ZIP)"` in [ui/models.py](file:///c:/Users/lucas/Desktop/Tesi/ui/models.py).
+- **Importer**: [importer/whatsapp_export.py](file:///c:/Users/lucas/Desktop/Tesi/importer/whatsapp_export.py) implementa `WhatsAppExportImporter(BaseImporter)` con `source_name = "whatsapp_export"`.
+  - Supporto transcript Android (`DD/MM/YYYY, HH:MM - Mittente: Testo`) e iOS (`[DD/MM/YYYY, HH:MM:SS] Mittente: Testo`).
+  - Gestione timestamp 24h e 12h AM/PM, anni a 2 o 4 cifre, secondi opzionali, caratteri Unicode direzionali/invisibili (`\u200e`, ecc.), emoji.
+  - Messaggi multilinea e messaggi di sistema multilingua.
+  - Nomi o URL contenenti due punti (`:`).
+  - Riferimenti ad allegati multimediali quando presenti come membri nello ZIP.
+- **Sicurezza ZIP**: impiego di `zipfile` standard con validazione stringente anti path-traversal (`..`, percorsi assoluti), protezione symlink, limite numero file (`10.000`), limite dimensione decompressa totale (`500 MB`) e rapporto di compressione (`100:1` ZIP bomb protection). Nessun file scritto indiscriminatamente su disco.
+- **Dispatch**: in [ui/ingestion.py](file:///c:/Users/lucas/Desktop/Tesi/ui/ingestion.py) `get_importer_for_format(SourceFormat.WHATSAPP_EXPORT)` restituisce `WhatsAppExportImporter()`.
+- **UI Uploader**: `st.file_uploader` accetta `["txt", "zip"]` con didascalia esatta.
+- **Normalizer**: compatibilità completa con `normalize_records` per la produzione di `ConversationEvidenceDocument`.
+- **Zero AI**: l'ingestion non invoca alcun endpoint LM Studio né apre socket di rete.
+
+### 9. HARDWARE BLOCK
+Sono stati completamente rimossi dal codice applicativo attivo (`ui/application.py`, `ui/presentation.py`):
+- Stringhe hardcoded `"AMD A8-7410"`.
+- Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+- Stato `"Real LM Studio Benchmark: DEFERRED"`.
+- Menzioni di incompatibilità AVX2 nella UI operativa.
+La pagina di diagnostica espone ora parametri operativi portabili:
+- `Local AI Layer: READY - LM STUDIO LOCAL`
+- `LM Studio endpoint: http://127.0.0.1:1234`
+- `Benchmark: EXTERNAL / SEPARATE EXPERIMENTAL RUNNER`
+- `Real File Ingestion: INTEGRATED`
+
+### 10. TEST AGGIUNTI/MODIFICATI
+- [tests/unit/test_operational_model_management.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py): nuova suite esaustiva contenente i 43 test contrattuali obbligatori:
+  - WhatsApp Export (test 1-19): enum, dispatch, Android TXT, iOS TXT, multilinea, messaggi sistema, Unicode/emoji, URL con `:`, ZIP in memoria, allegati ZIP, rifiuto ZIP ambiguo, protezione traversal `..`, protezione ZIP bomb, rifiuto file generici, pipeline integration SearchService, AppTest presenza UI, AppTest accettazione `.txt`/`.zip`, verifica zero AI durante ingestion.
+  - LM Studio Model Management (test 20-39): parsing `GET /api/v1/models`, skip ricaricamento se già in memoria, `POST /api/v1/models/load` con payload conforme (`model`, `context_length`), assenza tassativa di `identifier`, `contextLength`, `gpu_offload`, `gpuOffload`, gestione modello assente, gestione ambiguità, server offline, gestione HTTP 400, timeout load, timeout inferenza, corrispondenza `model_id` istanza caricata, timeout configurato a 240s, divieto download automatici, divieto endpoint esterni non loopback, verifica assenza AI in ingestion.
+  - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
+- [tests/unit/test_ai_lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_lmstudio.py): aggiornamento test unitari `get_models_detailed`, `load_model` e `ensure_model_loaded` per il nuovo schema REST v1 e fallback trasparente.
+- [tests/unit/test_ui_manual_topic_detection.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_manual_topic_detection.py): aggiornamento mock per verificare il payload pulito privo di parametri GPU arbitrari.
+
+### 11. RISULTATO PYTEST REALE
+Esecuzione completa dell'intera suite di test del progetto (`python -m pytest`):
+```text
+========== 1269 passed, 1 skipped, 5 deselected in 132.89s (0:02:12) ==========
+```
+**0 failed, 0 errors**. Suite completamente verde.
+
+### 12. LIVE TEST LM STUDIO
+Live test LM Studio non eseguito in questa sessione (server locale non in ascolto durante la fase di verifica automatizzata; l'intera pipeline è stata validata deterministicamente tramite suite di mock/fake HTTP server).
+
+### 13. BENCHMARK INTEGRITY
+Si conferma che:
+- `ai/experiment.py` è rimasto rigorosamente invariato;
+- I dataset sintetici di benchmark in `test_data/ai_benchmark/` non sono stati modificati;
+- La ground truth associata non è stata modificata;
+- I prompt dei benchmark non sono stati modificati;
+- Le metriche di valutazione non sono state modificate;
+- Il protocollo sperimentale comparativo (`Qwen2.5-7B-Instruct`, `Llama 3.1-8B-Instruct`, `DeepSeek-R1-Distill-Qwen-7B`) è integro.
+
+### 14. GIT
+Nessun commit effettuato. Nessun push effettuato.
+

@@ -88,19 +88,20 @@ class MockLlmClient(BaseLlmClient):
         self,
         model_id: str,
         context_length: int = 8192,
-        gpu_offload: str = "max",
         timeout_seconds: float = 240.0,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         if not self._available:
             raise LmStudioUnavailableError("Server LM Studio non raggiungibile.")
         if self.simulate_load_error is not None:
             raise self.simulate_load_error
-        self.load_calls.append({
+        entry = {
             "model_id": model_id,
             "context_length": context_length,
-            "gpu_offload": gpu_offload,
             "timeout_seconds": timeout_seconds,
-        })
+            **kwargs,
+        }
+        self.load_calls.append(entry)
         self.loaded_models.add(model_id)
         return {"model": model_id, "status": "loaded"}
 

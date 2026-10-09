@@ -137,6 +137,38 @@ def _validate_sqlite_signature(path: Path) -> None:
             raise InvalidUploadedFileError("Il file fornito non possiede una firma valida di database SQLite 3.")
 
 
+def _validate_whatsapp_export_preflight(path: Path) -> None:
+    """Verifica preliminare che il file sia un archivio ZIP o un file testuale valido."""
+    import zipfile
+    if zipfile.is_zipfile(path):
+        try:
+            with zipfile.ZipFile(path, "r") as zf:
+                from importer.whatsapp_export import _validate_zip_archive
+                _validate_zip_archive(zf)
+                txt_members = [
+                    m for m in zf.infolist()
+                    if m.filename.lower().endswith(".txt") and not m.is_dir()
+                ]
+                if not txt_members:
+                    raise InvalidUploadedFileError("L'archivio ZIP non contiene alcun file transcript '.txt'.")
+        except ValueError as v_err:
+            raise InvalidUploadedFileError(f"Archivio ZIP non conforme ai requisiti di sicurezza: {v_err}") from v_err
+        except zipfile.BadZipFile as bz_err:
+            raise InvalidUploadedFileError("Archivio ZIP corrotto o non leggibile.") from bz_err
+    else:
+        try:
+            with open(path, "rb") as f:
+                sample = f.read(4096)
+            if not sample:
+                raise InvalidUploadedFileError("Il file di transcript è vuoto (0 byte).")
+            if b"\x00" in sample:
+                raise InvalidUploadedFileError(
+                    "Il file selezionato è un formato binario non riconosciuto per l'export WhatsApp (atteso TXT o ZIP)."
+                )
+        except OSError as e:
+            raise InvalidUploadedFileError(f"Impossibile leggere il file caricato: {e}") from e
+
+
 def derive_deterministic_document_id(
     source_name: str,
     file_sha256: str,
@@ -194,9 +226,11 @@ def ingest_file_payload(
         if file_size == 0:
             raise InvalidUploadedFileError("Il file caricato è vuoto (0 byte).")
 
-        # Verifica preliminare signature per database SQLite
+        # Verifica preliminare signature per database SQLite o export WhatsApp
         if enum_format in (SourceFormat.WHATSAPP_MSGSTORE, SourceFormat.WHATSAPP_WA):
             _validate_sqlite_signature(safe_primary_path)
+        elif enum_format == SourceFormat.WHATSAPP_EXPORT:
+            _validate_whatsapp_export_preflight(safe_primary_path)
 
         # 2. Gestione eventuale file companion wa.db
         companion_sha256: str | None = None

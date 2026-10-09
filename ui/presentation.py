@@ -24,6 +24,7 @@ from ai.backend import (
     AiBackendTimeoutError,
     AiBackendUnavailableError,
     AiInvalidEvidenceCitationError,
+    AiModelAmbiguousError,
     AiModelLoadError,
     AiModelMismatchError,
     AiModelNotInstalledError,
@@ -234,7 +235,7 @@ def render_import() -> None:
 
     if source_format == SourceFormat.WHATSAPP_EXPORT:
         primary_types = ["txt", "zip"]
-        st.caption("Export chat creato direttamente da WhatsApp, con o senza media.")
+        st.caption("Export nativo WhatsApp ottenuto tramite Esporta chat, con o senza media.")
     else:
         primary_types = ["db", "sqlite", "csv", "json", "xml"]
 
@@ -602,15 +603,20 @@ def render_topics() -> None:
                 if q is not None:
                     client = state.get_lm_studio_client()
                     raw_model_choice = model_input.strip() if model_input.strip() else (state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL)
+                    status_placeholder = st.empty()
                     try:
-                        with st.spinner("Preparazione del modello AI locale..."):
-                            resolved_model = prepare_operational_model(
-                                client=client,
-                                requested_model=raw_model_choice,
-                                timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
-                            )
+                        status_placeholder.info("Verifica LM Studio locale...")
+                        is_loaded = hasattr(client, "is_model_loaded") and client.is_model_loaded(raw_model_choice)
+                        if not is_loaded:
+                            status_placeholder.info("Preparazione del modello AI locale...")
+
+                        resolved_model = prepare_operational_model(
+                            client=client,
+                            requested_model=raw_model_choice,
+                            timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+                        )
                         display_name = get_model_display_name(resolved_model)
-                        st.info(f"{display_name} pronto.")
+                        status_placeholder.info(f"{display_name} pronto.")
 
                         with st.spinner("Analisi locale in corso..."):
                             det_res = execute_manual_topic_detection(
@@ -621,6 +627,7 @@ def render_topics() -> None:
                                 timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
                                 max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
                             )
+                        status_placeholder.empty()
                         state.add_detection_result(det_res)
                         state.set_last_manual_detection(det_res)
                         state.set_custom_topic_label(topic_input)
@@ -628,26 +635,38 @@ def render_topics() -> None:
                         state.set_lm_studio_model(resolved_model)
                         st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
                     except LmStudioUnavailableError:
+                        status_placeholder.empty()
                         st.error(
                             "LM Studio non raggiungibile su http://127.0.0.1:1234. "
                             "Verificare che il server locale di LM Studio sia attivo."
                         )
                     except AiModelNotInstalledError as ni_err:
+                        status_placeholder.empty()
                         st.error(str(ni_err))
+                    except AiModelAmbiguousError as amb_err:
+                        status_placeholder.empty()
+                        st.error(str(amb_err))
                     except AiModelLoadError as l_err:
-                        st.error(f"Errore durante il caricamento del modello locale: {l_err}")
+                        status_placeholder.empty()
+                        st.error(f"Errore durante il caricamento del modello in LM Studio: {l_err}")
                     except AiBackendTimeoutError as t_err:
+                        status_placeholder.empty()
                         st.error(f"Timeout durante l'operazione con LM Studio: {t_err}")
                     except AiModelMismatchError as m_err:
+                        status_placeholder.empty()
                         st.error(f"Disallineamento modello LM Studio: {m_err}")
                     except AiInvalidEvidenceCitationError as c_err:
+                        status_placeholder.empty()
                         st.error(f"Errore citazione evidenze: {c_err}")
                     except AiStructuredOutputError as s_err:
+                        status_placeholder.empty()
                         st.error(f"Errore schema strutturato: {s_err}")
                     except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+                        status_placeholder.empty()
                         st.error(f"Errore di comunicazione con LM Studio: {b_err}")
                     except Exception as exc:
-                        st.error(f"Errore durante l'esecuzione della Topic Detection: {exc}")
+                        status_placeholder.empty()
+                        st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}")
 
         # Visualizzazione del risultato per la verifica
         last_det = state.get_last_manual_detection()
@@ -849,15 +868,20 @@ def render_topics() -> None:
                         if disc_query is not None:
                             client = state.get_lm_studio_client()
                             raw_model = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
+                            disc_status = st.empty()
                             try:
-                                with st.spinner("Preparazione del modello AI locale..."):
-                                    resolved_model = prepare_operational_model(
-                                        client=client,
-                                        requested_model=raw_model,
-                                        timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
-                                    )
+                                disc_status.info("Verifica LM Studio locale...")
+                                is_loaded = hasattr(client, "is_model_loaded") and client.is_model_loaded(raw_model)
+                                if not is_loaded:
+                                    disc_status.info("Preparazione del modello AI locale...")
+
+                                resolved_model = prepare_operational_model(
+                                    client=client,
+                                    requested_model=raw_model,
+                                    timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+                                )
                                 display_name = get_model_display_name(resolved_model)
-                                st.info(f"{display_name} pronto.")
+                                disc_status.info(f"{display_name} pronto.")
 
                                 with st.spinner("Analisi locale in corso..."):
                                     det_res = execute_manual_topic_detection(
@@ -868,6 +892,7 @@ def render_topics() -> None:
                                         timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
                                         max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
                                     )
+                                disc_status.empty()
                                 state.add_detection_result(det_res)
                                 state.set_last_manual_detection(det_res)
                                 state.set_custom_topic_label(hit.label)
@@ -875,23 +900,35 @@ def render_topics() -> None:
                                 state.set_lm_studio_model(resolved_model)
                                 st.success(f"Topic '{hit.label}' verificato! Esito: {det_res.decision.value}")
                             except LmStudioUnavailableError:
+                                disc_status.empty()
                                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
                             except AiModelNotInstalledError as ni_err:
+                                disc_status.empty()
                                 st.error(str(ni_err))
+                            except AiModelAmbiguousError as amb_err:
+                                disc_status.empty()
+                                st.error(str(amb_err))
                             except AiModelLoadError as l_err:
-                                st.error(f"Errore durante il caricamento del modello locale: {l_err}")
+                                disc_status.empty()
+                                st.error(f"Errore durante il caricamento del modello in LM Studio: {l_err}")
                             except AiBackendTimeoutError as t_err:
+                                disc_status.empty()
                                 st.error(f"Timeout durante l'operazione con LM Studio: {t_err}")
                             except AiModelMismatchError as m_err:
+                                disc_status.empty()
                                 st.error(f"Disallineamento modello LM Studio: {m_err}")
                             except AiInvalidEvidenceCitationError as c_err:
+                                disc_status.empty()
                                 st.error(f"Errore citazione evidenze: {c_err}")
                             except AiStructuredOutputError as s_err:
+                                disc_status.empty()
                                 st.error(f"Errore schema strutturato: {s_err}")
                             except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+                                disc_status.empty()
                                 st.error(f"Errore di comunicazione con LM Studio: {b_err}")
                             except Exception as exc:
-                                st.error(f"Errore durante la verifica con Topic Detection: {exc}")
+                                disc_status.empty()
+                                st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}")
 
                 last_det = state.get_last_manual_detection()
                 if last_det is not None and last_det.topic.label == hit.label:

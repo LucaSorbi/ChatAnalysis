@@ -107,12 +107,22 @@ class AiBackendProtocolError(AiBackendError):
 
 class AiBackendRequestError(AiBackendError):
     """Sollevata per errori di richiesta HTTP (es. codici di stato 4xx o 5xx restituiti dal backend)."""
+class AiModelAmbiguousError(AiModelNotSpecifiedError):
+    """Sollevata quando più varianti compatibili del modello sono installate senza selezione univoca."""
     pass
 
 
 class AiModelLoadError(AiBackendRequestError):
     """Sollevata quando si verifica un errore durante il caricamento di un modello in LM Studio."""
-    pass
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        technical_details: str = "",
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.technical_details = technical_details
 
 
 @dataclass(frozen=True)
@@ -181,8 +191,8 @@ class BaseLocalLlmClient(BaseLlmClient):
         self,
         model_id: str,
         context_length: int = 8192,
-        gpu_offload: str = "max",
         timeout_seconds: float = 240.0,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         """Carica il modello nel runtime locale."""
         return {"model": model_id, "status": "loaded"}
@@ -258,8 +268,8 @@ class FakeLocalLlmClient(BaseLocalLlmClient):
         self,
         model_id: str,
         context_length: int = 8192,
-        gpu_offload: str = "max",
         timeout_seconds: float = 240.0,
+        **kwargs: Any,
     ) -> dict[str, Any]:
         if not self._available:
             raise LmStudioUnavailableError("Fake client simulato come non disponibile.")
@@ -269,14 +279,16 @@ class FakeLocalLlmClient(BaseLocalLlmClient):
         found = any(model_id.lower() in m.lower() or m.lower() in model_id.lower() for m in self._models)
         if not found and model_id not in self._models:
             raise AiModelNotInstalledError(f"Il modello {model_id} non è installato in LM Studio.")
-        self.load_history.append({
+        entry: dict[str, Any] = {
             "model_id": model_id,
+            "model": model_id,
             "context_length": context_length,
-            "gpu_offload": gpu_offload,
             "timeout_seconds": timeout_seconds,
-        })
+            **kwargs,
+        }
+        self.load_history.append(entry)
         self._loaded_models.add(model_id)
-        return {"model": model_id, "status": "loaded"}
+        return {"model": model_id, "status": "loaded", "instance_id": model_id}
 
     def unload_model(self, model_id: str | None = None, timeout_seconds: float = 30.0) -> bool:
         if model_id:

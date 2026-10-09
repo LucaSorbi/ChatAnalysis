@@ -302,32 +302,42 @@ class WhatsAppExportImporter(BaseImporter):
     def source_name(self) -> str:
         return _SOURCE_NAME
 
-    def can_import(self, source_path: Path) -> bool:
+    def validate_source(self, source_path: Path) -> None:
         """
-        Verifica non distruttiva se il file è un export WhatsApp TXT o ZIP valido.
+        Valida in modo rigoroso la sorgente (TXT o ZIP).
+        Solleva ValueError con messaggio esplicito in caso di violazione di sicurezza o formato.
         """
         if not source_path.exists() or not source_path.is_file():
-            return False
+            raise FileNotFoundError(f"File non trovato: {source_path}")
 
         # 1. Caso archivio ZIP
         if zipfile.is_zipfile(source_path):
-            try:
-                with zipfile.ZipFile(source_path, "r") as zf:
-                    _validate_zip_archive(zf)
-                    # Verifica che esista un transcript univoco compatibile
-                    _find_unique_transcript(zf)
-                    return True
-            except Exception:
-                return False
+            with zipfile.ZipFile(source_path, "r") as zf:
+                _validate_zip_archive(zf)
+                _find_unique_transcript(zf)
+            return
 
         # 2. Caso file TXT
         try:
             with open(source_path, "rb") as f:
                 header_bytes = f.read(65536)
             if not header_bytes:
-                return False
+                raise ValueError("File TXT vuoto.")
             sample_str, _ = _detect_and_decode_text(header_bytes)
-            return _is_transcript_content(sample_str)
+            if not _is_transcript_content(sample_str):
+                raise ValueError("Il file TXT non presenta la struttura di un export WhatsApp.")
+        except Exception as e:
+            if isinstance(e, ValueError):
+                raise
+            raise ValueError(f"File non valido per WhatsAppExportImporter: {e}") from e
+
+    def can_import(self, source_path: Path) -> bool:
+        """
+        Verifica non distruttiva se il file è un export WhatsApp TXT o ZIP valido.
+        """
+        try:
+            self.validate_source(source_path)
+            return True
         except Exception:
             return False
 
@@ -512,6 +522,7 @@ class WhatsAppExportImporter(BaseImporter):
             "line_start": line_start,
             "line_end": line_end,
             "is_system_message": is_system,
+            "is_system": is_system,
             "attachment_name": attachment_name,
             "chat_id": "chat_1",
         }

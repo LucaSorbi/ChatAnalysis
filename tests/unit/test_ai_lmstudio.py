@@ -427,12 +427,16 @@ class TestLmStudioClient:
             body = json.loads(req.data.decode("utf-8"))
             assert body["model"] == "qwen2.5-7b-instruct"
             assert body["context_length"] == 8192
-            assert body["gpu_offload"] == "max"
+            assert body["echo_load_config"] is True
+            assert "identifier" not in body
+            assert "contextLength" not in body
+            assert "gpu_offload" not in body
+            assert "gpuOffload" not in body
             return LoadResp()
 
         monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
         client = LmStudioClient()
-        res = client.load_model("qwen2.5-7b-instruct", context_length=8192, gpu_offload="max")
+        res = client.load_model("qwen2.5-7b-instruct", context_length=8192)
         assert res["status"] == "loaded"
         assert client.is_model_loaded("qwen2.5-7b-instruct") is True
 
@@ -523,6 +527,6 @@ class TestLmStudioClient:
 
         monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
         client = LmStudioClient()
-        with pytest.raises(AiModelNotInstalledError, match="Il modello Qwen2.5-7B-Instruct non è installato"):
+        with pytest.raises(AiModelNotInstalledError, match="Qwen2.5-7B-Instruct non è installato"):
             client.ensure_model_loaded("qwen2.5-7b-instruct")
 
