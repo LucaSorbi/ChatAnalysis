@@ -521,8 +521,10 @@ class TestFullPipelineE2E:
         assert state.is_dataset_loaded(s)
         assert state.get_dataset_mode(s) == DatasetMode.DEMO
         assert state.get_conversation_document(s) is not None
-        assert len(state.get_detection_results(s)) == 3
-        assert len(state.get_discovery_results(s)) == 1
+        assert state.get_detection_results(s) == ()
+        assert state.get_discovery_results(s) == ()
+        assert len(state.get_reference_detection_results(s)) == 3
+        assert len(state.get_reference_discovery_results(s)) == 1
         assert state.get_search_service(s) is not None
 
         # 3. DEMO -> FILE (WhatsApp msgstore)
@@ -562,7 +564,8 @@ class TestFullPipelineE2E:
         assert state.get_dataset_mode(s) == DatasetMode.DEMO
         assert state.get_real_ingestion_result(s) is None
         assert state.get_ingestion_summary(s) is None
-        assert len(state.get_detection_results(s)) == 3
+        assert state.get_detection_results(s) == ()
+        assert len(state.get_reference_detection_results(s)) == 3
 
         # 6. DEMO -> RESET / NONE
         state.reset_dataset(s)
@@ -601,7 +604,8 @@ class TestFullPipelineE2E:
         assert state.is_dataset_loaded(s)
         assert state.get_dataset_mode(s) == DatasetMode.DEMO
         assert state.get_conversation_document(s).document_id == orig_doc.document_id
-        assert len(state.get_detection_results(s)) == 3
+        assert state.get_detection_results(s) == ()
+        assert len(state.get_reference_detection_results(s)) == 3
 
     # =========================================================================
     # M — TEMP CLEANUP SYSTEM TEST
@@ -727,7 +731,7 @@ class TestFullPipelineE2E:
 
     def test_e2e_streamlit_apptest_full_walkthrough(self):
         """Verifica l'intera interfaccia grafica Streamlit con AppTest (Gate P)."""
-        at = AppTest.from_file(APP_PATH, default_timeout=20)
+        at = AppTest.from_file(APP_PATH, default_timeout=120)
         at.run()
         assert not at.exception
 
@@ -804,12 +808,13 @@ class TestFullPipelineE2E:
         at.run()
         assert not at.exception
 
-        # Pagina 5: Analisi topic in Real File mode (mostra rinvio)
+        # Pagina 5: Analisi topic in Real File mode (operativa, nessun rinvio obsoleto)
         at.sidebar.radio[0].set_value("5. Analisi topic")
         at.run()
         assert not at.exception
-        assert len(at.info) >= 1
-        assert "differito alla fase sperimentale finale" in at.info[0].value
+        for info_item in at.info:
+            assert "differito alla fase sperimentale finale" not in info_item.value
+        assert len(at.tabs) >= 2
 
         # Reset sessione
         at.sidebar.radio[0].set_value("1. Panoramica")

@@ -1,0 +1,114 @@
+=== SMOKE_TEST_MOCK_NORMAL ===
+Timestamp: 2026-10-11T19:03:32.610013+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe scripts/smoke_operational_ai.py --fake --fake-mode normal
+Exit Code: 0 (Expected: 0)
+Execution Duration: 3.02s
+Status: PASSED
+Test Results: passed=0, failed=1, skipped=0, deselected=0
+--- STDOUT ---
+===========================================================================
+SMOKE TEST OPERATIVO AI � CHATANALYSIS RELEASE GATE (UBUNTU READY)
+===========================================================================
+[MODE] Utilizzo FakeSmokeClient deterministico per diagnostica ambiente CI/Mock.
+
+--- 1. ESECUZIONE TOPIC DISCOVERY LIVE (DEMO) ---
+Document ID      : doc::demo_forensic_chat
+Discovery Run ID : run_disc_e4ed123885
+Discovery Origin : MOCK_INSPECTION
+Status Discovery : COMPLETE
+Topic scoperti   : 1
+
+--- 2. PROVA DEL NOVE: SECONDA DETECTION LIVE INDIPENDENTE ---
+Topic Verificato : Ispezione Depositi e Merci
+Decisione        : PRESENT
+Consistency      : CONSISTENT
+Rationale        : Evidenza semantica confermata nel documento analizzato.
+Discovery Resp   : qwen2.5-7b-instruct
+Detection Resp   : qwen2.5-7b-instruct
+
+--- 3. CASO SEMANTICO DI CONTROLLO: 'Logistica e Ispezione Depositi' ---
+Topic Controllo  : Logistica e Ispezione Depositi
+Target Evidence  : msg::5::VISION_DESCRIPTION
+Decisione        : PRESENT
+Evidenze Citate  : ['msg::5::VISION_DESCRIPTION']
+Rationale        : Evidenza semantica confermata nel documento analizzato.
+
+--- 4. ISOLAMENTO DOCUMENT-LEVEL (STORE SINTETICO) ---
+
+--- 5. SCENARIO END-TO-END FILE: IMPORTAZIONE REALE WHATSAPP TXT ---
+
+--- 6. VERIFICA ISOLAMENTO CROSS-DOCUMENT (DEMO vs FILE REALE) ---
+
+--- 7. VERIFICA AGGIUNTIVA: INGESTION ARCHIVIO WHATSAPP ZIP ---
+
+===========================================================================
+REPORT STRUTTURATO AUDIT & RELEASE GATE AI:
+===========================================================================
+requested_canonical_model       : qwen2.5-7b-instruct
+resolved_model_key             : mock-qwen2.5-7b-instruct
+loaded_instance_id             : mock-instance-01
+api_identifier                 : mock-qwen2.5-7b-instruct
+discovery_response_model       : qwen2.5-7b-instruct
+detection_response_model       : qwen2.5-7b-instruct
+requested_context_length       : 8192
+configured_context_length      : 8192
+loaded_instance_context_length : 8192
+model_max_context_length       : None
+server_confirmed_context_length: 8192
+context_evidence_source        : MOCK_CONFIRMED_8192
+document_id                    : doc::demo_forensic_chat
+discovery_run_id               : run_disc_e4ed123885
+discovery_origin               : MOCK_INSPECTION
+discovered_topic               : Ispezione Depositi e Merci
+discovery_evidence_ids         : ['msg::5::VISION_DESCRIPTION']
+detection_decision             : PRESENT
+detection_evidence_ids         : ['msg::5::VISION_DESCRIPTION']
+consistency_status             : CONSISTENT
+rationale                      : Evidenza semantica confermata nel documento analizzato.
+latency                        : Discovery=0.01s, Detection=0.01s, Control=0.00s
+completed_chunk_count          : 1
+failed_chunk_count             : 0
+verification_classification    : MOCK_VERIFIED
+---------------------------------------------------------------------------
+control_topic                  : Logistica e Ispezione Depositi
+control_target_evidence        : msg::5::VISION_DESCRIPTION
+control_decision               : PRESENT
+control_evidence_ids           : ['msg::5::VISION_DESCRIPTION']
+control_rationale              : Evidenza semantica confermata nel documento analizzato.
+---------------------------------------------------------------------------
+file_real_source               : whatsapp_export
+file_real_document_id          : doc::whatsapp_export::db5042181a8e::cb5ef8378d12
+file_real_discovery_run_id     : run_disc_0924714794
+file_real_discovered_topic     : Operazioni Doganali e Logistica Container
+file_real_consistency          : CONSISTENT
+document_store_isolation       : PASSED (Zero leak)
+multi_conv_cross_isolation     : PASSED (Zero leak)
+===========================================================================
+
+TABELLA ESITI CONTROLLI OBBLIGATORI:
+---------------------------------------------------------------------------
+[PASSED      ] CHECK_MODEL_RESOLUTION               : Modello canonico 'qwen2.5-7b-instruct' risolto correttamente su 'mock-qwen2.5-7b-instruct'
+[PASSED      ] CHECK_MODEL_QUANTIZATION             : Quantizzazione Q4_K_M verificata e conforme in ambiente mock
+[PASSED      ] CHECK_CONFIRMED_CONTEXT_LENGTH       : Context length 8192 confermato e conforme alla specifica operativa
+[PASSED      ] CHECK_BACKEND_AVAILABILITY           : Backend mock disponibile per inferenza deterministica
+[PASSED      ] CHECK_DEMO_DISCOVERY_TOPICS          : Topic scoperti: 1
+[PASSED      ] CHECK_DEMO_DISCOVERY_REGISTRATION    : Run registrata nello store per document_id: True
+[PASSED      ] CHECK_DEMO_DETECTION_EXECUTION       : Detection eseguita con rationale valido (55 caratteri)
+[PASSED      ] CHECK_DEMO_CONSISTENCY               : Consistency valutata: CONSISTENT
+[PASSED      ] CHECK_RESPONSE_MODEL_IDENTITY        : Response models verificati (Discovery='qwen2.5-7b-instruct', Detection='qwen2.5-7b-instruct', binding_match=True)
+[PASSED      ] CHECK_INDEPENDENT_INFERENCES         : Inferenze indipendenti con run_id distinti (Discovery=run_disc_e4ed123885, Detection=run_det_a768091a12)
+[PASSED      ] CHECK_CONTROL_CASE_EXECUTION         : Caso di controllo eseguito con successo, decisione: PRESENT
+[PASSED      ] CHECK_STORE_DOCUMENT_ISOLATION       : Isolamento store DEMO <-> Synth: PASS
+[PASSED      ] CHECK_REAL_FILE_INGESTION_STATUS     : Ingestion reale WhatsApp TXT: status=SUCCESS, docs=1, raw_records=4, unified_msgs=4
+[PASSED      ] CHECK_REAL_FILE_PIPELINE_INVARIANTS  : Invarianti documento: msgs=4/4, source=whatsapp_export, eids=4, doc_id=doc::whatsapp_export::db504218...
+[PASSED      ] CHECK_REAL_FILE_DISCOVERY            : Discovery su documento reale: 1 topic scoperti
+[PASSED      ] CHECK_REAL_FILE_DETECTION_AND_CONSISTENCY : Detection ed esito consistency su documento reale: decision=PRESENT, consistency=CONSISTENT
+[PASSED      ] CHECK_CROSS_DOCUMENT_ISOLATION       : Isolamento DEMO <-> FILE reale: PASSED (Zero leak)
+[PASSED      ] CHECK_ZIP_ARCHIVE_INGESTION          : Ingestion archivio ZIP: status=SUCCESS, documents=1
+---------------------------------------------------------------------------
+ESITO SMOKE TEST OPERATIVO: SUCCESSO
+===========================================================================
+============================================================

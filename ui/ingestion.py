@@ -46,8 +46,10 @@ from importer.cellebrite_xml import CellebriteXmlImporter
 from importer.whatsapp_export import WhatsAppExportImporter
 from importer.whatsapp_msgstore import WhatsAppMsgstoreImporter
 from importer.whatsapp_wa import WhatsAppWaDbImporter
+from multimodal.asset_access import MediaAssetRegistry
 from multimodal.evidence import MessageEvidenceBundle
 from normalization.normalizer import RecordNormalizer
+from ui.staging import IngestionStagingStore
 from unified.builder import UnifiedModelBuilder
 from unified.context import UnifiedBuildContext
 from unified.models import UnifiedMessage
@@ -63,6 +65,7 @@ from ui.models import (
 )
 
 SQLITE_HEADER = b"SQLite format 3\x00"
+MAX_UPLOAD_SIZE = MAX_UPLOAD_SIZE_BYTES  # 2 GB (dimensione massima del file trasferito)
 
 
 class IngestionError(Exception):
@@ -267,11 +270,15 @@ def ingest_file_payload(
     source_format: SourceFormat | str | None = None,
     companion_bytes_or_io: bytes | BinaryIO | None = None,
     companion_filename: str | None = None,
+    media_registry: MediaAssetRegistry | None = None,
 ) -> IngestionResult:
     """
     Esegue l'intero ciclo di ingestion su un upload reale in un'area temporanea isolata.
     Accetta o un oggetto IngestionRequest o i singoli parametri.
+    L'accesso e la conservazione degli asset multimediali avviene tramite istanza esplicita
+    di MediaAssetRegistry senza alcuno stato globale di processo mutabile condiviso.
     """
+    active_registry = media_registry if media_registry is not None else MediaAssetRegistry()
     if isinstance(file_bytes_or_io, IngestionRequest):
         req = file_bytes_or_io
         actual_bytes = req.file_bytes
@@ -308,6 +315,16 @@ def ingest_file_payload(
         elif enum_format == SourceFormat.WHATSAPP_EXPORT:
             _validate_whatsapp_export_preflight(safe_primary_path)
 
+        # Registrazione sicura della sorgente archivio nel registro di sessione (solo per ZIP con media)
+        managed_source_path: Path | None = None
+        is_zip = str(actual_filename).lower().endswith(".zip")
+        if enum_format == SourceFormat.WHATSAPP_EXPORT and is_zip:
+            managed_source_path = active_registry.copy_source_to_managed(
+                source_id=file_sha256,
+                src_path=safe_primary_path,
+                filename=Path(actual_filename).name,
+            )
+
         # 2. Gestione eventuale file companion wa.db
         companion_sha256: str | None = None
         safe_companion_path: Path | None = None
@@ -325,169 +342,198 @@ def ingest_file_payload(
                 safe_companion_path = None
                 companion_sha256 = None
 
-        # 3. Importazione Record
+        # 3. Importazione Record in Streaming e Staging SQLite
         validator = RecordValidator()
         normalizer = RecordNormalizer()
         resolver = DeterministicEntityResolver()
 
-        try:
-            raw_records = list(importer.import_records(safe_primary_path))
-        except Exception as exc:
-            raise PipelineStageError(
-                stage="importer",
-                safe_message="Il file non è compatibile con il formato selezionato o presenta una struttura corrotta.",
-            ) from exc
+        raw_record_count = 0
+        primary_aux_count = 0
+        total_validation_issues = 0
 
-        val_results = list(validator.validate_stream(raw_records))
-        norm_records = list(normalizer.normalize_stream(val_results))
+        def stream_primary_validated():
+            nonlocal raw_record_count, primary_aux_count, total_validation_issues
+            try:
+                for r in importer.import_records(safe_primary_path):
+                    raw_record_count += 1
+                    if r.record_type != "message":
+                        primary_aux_count += 1
+                    val = validator.validate(r)
+                    total_validation_issues += len(val.issues)
+                    yield val
+            except Exception as exc:
+                raise PipelineStageError(
+                    stage="importer",
+                    safe_message="Il file non è compatibile con il formato selezionato o presenta una struttura corrotta.",
+                ) from exc
 
-        total_validation_issues = sum(len(v.issues) for v in val_results)
+        staging_path = temp_dir / "ingestion_staging.sqlite"
+        with IngestionStagingStore(staging_path) as staging:
+            try:
+                primary_norm_stream = normalizer.normalize_stream(stream_primary_validated())
+                primary_norm_count = staging.stage_stream(primary_norm_stream)
+            except PipelineStageError:
+                raise
+            except Exception as exc:
+                raise PipelineStageError(
+                    stage="importer",
+                    safe_message="Il file non è compatibile con il formato selezionato o presenta una struttura corrotta.",
+                ) from exc
 
-        # Caso wa.db Standalone: sola gestione dati contatto
-        if enum_format == SourceFormat.WHATSAPP_WA:
+            # Caso wa.db Standalone: sola gestione dati contatto
+            if enum_format == SourceFormat.WHATSAPP_WA:
+                summary = IngestionSummary(
+                    source_format=enum_format,
+                    original_filename=Path(actual_filename).name,
+                    sha256=file_sha256,
+                    file_size_bytes=file_size,
+                    raw_record_count=raw_record_count,
+                    validation_issue_count=total_validation_issues,
+                    normalized_record_count=primary_norm_count,
+                    unified_message_count=0,
+                    conversation_count=0,
+                    auxiliary_record_count=raw_record_count,
+                    warnings=("wa.db contiene dati contatto/identità e non costituisce da solo una conversazione analizzabile.",),
+                    available_conversations=(),
+                    selected_document_id=None,
+                    companion_filename=None,
+                    companion_sha256=None,
+                    status=IngestionStatus.AUXILIARY_ONLY,
+                )
+                return IngestionResult(summary=summary, documents={})
+
+            # Integrazione companion wa.db se fornito con msgstore
+            companion_aux_count = 0
+            ingestion_warnings: list[str] = []
+
+            if companion_init_failed:
+                ingestion_warnings.append(
+                    "Il companion wa.db non è stato utilizzato perché non è risultato compatibile o leggibile. "
+                    "L'analisi di msgstore è proseguita senza arricchimento contatti."
+                )
+            elif safe_companion_path is not None and enum_format == SourceFormat.WHATSAPP_MSGSTORE:
+                wa_importer = WhatsAppWaDbImporter()
+                try:
+                    def stream_companion_validated():
+                        nonlocal total_validation_issues, companion_aux_count
+                        for r in wa_importer.import_records(safe_companion_path):
+                            companion_aux_count += 1
+                            val = validator.validate(r)
+                            total_validation_issues += len(val.issues)
+                            yield val
+
+                    comp_stream = normalizer.normalize_stream(stream_companion_validated())
+                    staging.stage_stream(comp_stream)
+                except Exception:
+                    companion_aux_count = 0
+                    ingestion_warnings.append(
+                        "Il companion wa.db non è stato utilizzato perché non è risultato compatibile o leggibile. "
+                        "L'analisi di msgstore è proseguita senza arricchimento contatti."
+                    )
+
+            # 4. Entity Resolution & Context pre-calculation from SQLite staging (BOUNDED WORKING MEMORY)
+            try:
+                resolution = resolver.resolve(staging)
+                chat_titles = staging.extract_chat_titles()
+                build_ctx = UnifiedBuildContext.create(
+                    resolution=resolution,
+                    chat_titles=chat_titles,
+                )
+                builder = UnifiedModelBuilder(context=build_ctx)
+            except Exception as exc:
+                raise PipelineStageError(
+                    stage="unified_building",
+                    safe_message="Errore durante la correlazione e costruzione dei messaggi unificati.",
+                ) from exc
+
+            # 5. Costruzione deterministica dei documenti chat per chat (BOUNDED WORKING MEMORY)
+            ordered_keys = staging.get_distinct_chat_keys()
+            documents: dict[str, ConversationEvidenceDocument] = {}
+            conversations_info: list[ImportedConversationInfo] = []
+            total_unified_message_count = 0
+
+            regular_chat_idx = 1
+            for chat_key in ordered_keys:
+                chat_records = staging.iter_records_for_chat(chat_key)
+                group_msgs = list(builder.build_stream(chat_records))
+                total_unified_message_count += len(group_msgs)
+
+                bundles = [MessageEvidenceBundle(message=m) for m in group_msgs]
+                effective_chat_id = (
+                    group_msgs[0].chat.chat_id
+                    if (group_msgs and group_msgs[0].chat and group_msgs[0].chat.chat_id)
+                    else (chat_key if chat_key != "UNRESOLVED" else None)
+                )
+                doc_id = derive_deterministic_document_id(
+                    source_name=importer.source_name,
+                    file_sha256=file_sha256,
+                    chat_key=effective_chat_id or "UNRESOLVED",
+                )
+
+                doc = ConversationEvidenceDocument(
+                    document_id=doc_id,
+                    bundles=tuple(bundles),
+                    chat_id=effective_chat_id,
+                    source_name=importer.source_name,
+                    metadata={
+                        "source_format": enum_format.value,
+                        "original_filename": Path(actual_filename).name,
+                        "sha256": file_sha256,
+                        "is_unresolved": (chat_key == "UNRESOLVED"),
+                    },
+                )
+                documents[doc_id] = doc
+
+                # Registra la sorgente gestita per questo specifico document_id se presente
+                if managed_source_path is not None:
+                    active_registry.register_source(doc_id, managed_source_path)
+
+                # Etichetta pseudonimizzata non sensibile: nessuna chat_id raw, titolo, JID o telefono
+                short_id = doc_id.rsplit("::", 1)[-1][:8]
+                if chat_key == "UNRESOLVED":
+                    label = f"Messaggi non associati — {len(bundles)} messaggi — [{short_id}]"
+                else:
+                    label = f"Conversazione {regular_chat_idx} — {len(bundles)} messaggi — [{short_id}]"
+                    regular_chat_idx += 1
+
+                languages = tuple(sorted({s.language for s in doc.all_evidence_sections if s.language}))
+
+                conversations_info.append(
+                    ImportedConversationInfo(
+                        document_id=doc_id,
+                        chat_id=effective_chat_id,
+                        display_label=label,
+                        bundle_count=len(bundles),
+                        section_count=len(doc.all_evidence_sections),
+                        languages=languages,
+                        source_name=importer.source_name,
+                    )
+                )
+
+            auxiliary_count = companion_aux_count + primary_aux_count
+            selected_id = conversations_info[0].document_id if conversations_info else None
+
             summary = IngestionSummary(
                 source_format=enum_format,
                 original_filename=Path(actual_filename).name,
                 sha256=file_sha256,
                 file_size_bytes=file_size,
-                raw_record_count=len(raw_records),
+                raw_record_count=raw_record_count,
                 validation_issue_count=total_validation_issues,
-                normalized_record_count=len(norm_records),
-                unified_message_count=0,
-                conversation_count=0,
-                auxiliary_record_count=len(raw_records),
-                warnings=("wa.db contiene dati contatto/identità e non costituisce da solo una conversazione analizzabile.",),
-                available_conversations=(),
-                selected_document_id=None,
-                companion_filename=None,
-                companion_sha256=None,
-                status=IngestionStatus.AUXILIARY_ONLY,
-            )
-            return IngestionResult(summary=summary, documents={})
-
-        # Integrazione companion wa.db se fornito con msgstore
-        companion_aux_count = 0
-        all_norm_records = list(norm_records)
-        ingestion_warnings: list[str] = []
-
-        if companion_init_failed:
-            ingestion_warnings.append(
-                "Il companion wa.db non è stato utilizzato perché non è risultato compatibile o leggibile. "
-                "L'analisi di msgstore è proseguita senza arricchimento contatti."
-            )
-        elif safe_companion_path is not None and enum_format == SourceFormat.WHATSAPP_MSGSTORE:
-            wa_importer = WhatsAppWaDbImporter()
-            try:
-                raw_companion = list(wa_importer.import_records(safe_companion_path))
-                val_companion = list(validator.validate_stream(raw_companion))
-                norm_companion = list(normalizer.normalize_stream(val_companion))
-                companion_aux_count = len(raw_companion)
-                total_validation_issues += sum(len(v.issues) for v in val_companion)
-                all_norm_records.extend(norm_companion)
-            except Exception:
-                companion_aux_count = 0
-                ingestion_warnings.append(
-                    "Il companion wa.db non è stato utilizzato perché non è risultato compatibile o leggibile. "
-                    "L'analisi di msgstore è proseguita senza arricchimento contatti."
-                )
-
-        # 4. Entity Resolution & Unified Messages
-        try:
-            resolution = resolver.resolve(all_norm_records)
-            build_ctx = UnifiedBuildContext.from_records(all_norm_records, resolution=resolution)
-            builder = UnifiedModelBuilder(context=build_ctx)
-            unified_messages = builder.build_all(all_norm_records)
-        except Exception as exc:
-            raise PipelineStageError(
-                stage="unified_building",
-                safe_message="Errore durante la correlazione e costruzione dei messaggi unificati.",
-            ) from exc
-
-        # 5. Raggruppamento per conversazione
-        chat_groups: dict[str, list[UnifiedMessage]] = {}
-        for msg in unified_messages:
-            cid = msg.chat.chat_id if msg.chat and msg.chat.chat_id else None
-            key = cid if cid is not None else "UNRESOLVED"
-            if key not in chat_groups:
-                chat_groups[key] = []
-            chat_groups[key].append(msg)
-
-        # Ordinamento deterministico delle conversazioni (UNRESOLVED in coda se presente)
-        standard_keys = sorted([k for k in chat_groups.keys() if k != "UNRESOLVED"])
-        ordered_keys = list(standard_keys)
-        if "UNRESOLVED" in chat_groups:
-            ordered_keys.append("UNRESOLVED")
-
-        # 6. Costruzione dei ConversationEvidenceDocument con label pseudonimizzate
-        documents: dict[str, ConversationEvidenceDocument] = {}
-        conversations_info: list[ImportedConversationInfo] = []
-
-        regular_chat_idx = 1
-        for chat_key in ordered_keys:
-            group_msgs = chat_groups[chat_key]
-            bundles = [MessageEvidenceBundle(message=m) for m in group_msgs]
-            doc_id = derive_deterministic_document_id(
-                source_name=importer.source_name,
-                file_sha256=file_sha256,
-                chat_key=chat_key,
+                normalized_record_count=primary_norm_count,
+                unified_message_count=total_unified_message_count,
+                conversation_count=len(documents),
+                auxiliary_record_count=auxiliary_count,
+                warnings=tuple(ingestion_warnings),
+                available_conversations=tuple(conversations_info),
+                selected_document_id=selected_id,
+                companion_filename=Path(actual_comp_filename).name if actual_comp_filename else None,
+                companion_sha256=companion_sha256,
+                status=IngestionStatus.SUCCESS,
             )
 
-            doc = ConversationEvidenceDocument(
-                document_id=doc_id,
-                bundles=tuple(bundles),
-                chat_id=chat_key if chat_key != "UNRESOLVED" else None,
-                source_name=importer.source_name,
-                metadata={
-                    "source_format": enum_format.value,
-                    "original_filename": Path(actual_filename).name,
-                    "sha256": file_sha256,
-                    "is_unresolved": (chat_key == "UNRESOLVED"),
-                },
+            return IngestionResult(
+                summary=summary,
+                documents=documents,
+                media_registry=active_registry,
             )
-            documents[doc_id] = doc
-
-            # Etichetta pseudonimizzata non sensibile: nessuna chat_id raw, titolo, JID o telefono
-            short_id = doc_id.rsplit("::", 1)[-1][:8]
-            if chat_key == "UNRESOLVED":
-                label = f"Messaggi non associati — {len(bundles)} messaggi — [{short_id}]"
-            else:
-                label = f"Conversazione {regular_chat_idx} — {len(bundles)} messaggi — [{short_id}]"
-                regular_chat_idx += 1
-
-            languages = tuple(sorted({s.language for s in doc.all_evidence_sections if s.language}))
-
-            conversations_info.append(
-                ImportedConversationInfo(
-                    document_id=doc_id,
-                    chat_id=chat_key if chat_key != "UNRESOLVED" else None,
-                    display_label=label,
-                    bundle_count=len(bundles),
-                    section_count=len(doc.all_evidence_sections),
-                    languages=languages,
-                    source_name=importer.source_name,
-                )
-            )
-
-        auxiliary_count = companion_aux_count + sum(1 for r in raw_records if r.record_type != "message")
-        selected_id = conversations_info[0].document_id if conversations_info else None
-
-        summary = IngestionSummary(
-            source_format=enum_format,
-            original_filename=Path(actual_filename).name,
-            sha256=file_sha256,
-            file_size_bytes=file_size,
-            raw_record_count=len(raw_records),
-            validation_issue_count=total_validation_issues,
-            normalized_record_count=len(norm_records),
-            unified_message_count=len(unified_messages),
-            conversation_count=len(documents),
-            auxiliary_record_count=auxiliary_count,
-            warnings=tuple(ingestion_warnings),
-            available_conversations=tuple(conversations_info),
-            selected_document_id=selected_id,
-            companion_filename=Path(actual_comp_filename).name if actual_comp_filename else None,
-            companion_sha256=companion_sha256,
-            status=IngestionStatus.SUCCESS,
-        )
-
-        return IngestionResult(summary=summary, documents=documents)

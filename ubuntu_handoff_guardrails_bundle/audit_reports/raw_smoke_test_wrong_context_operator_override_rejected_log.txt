@@ -1,0 +1,20 @@
+=== SMOKE_TEST_WRONG_CONTEXT_OPERATOR_OVERRIDE_REJECTED ===
+Timestamp: 2026-10-11T19:27:39.359741+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe scripts/smoke_operational_ai.py --fake --fake-mode wrong_context --confirmed-context 8192
+Exit Code: 1 (Expected: 1)
+Execution Duration: 1.48s
+Status: PASSED
+--- STDOUT ---
+===========================================================================
+SMOKE TEST OPERATIVO AI � CHATANALYSIS RELEASE GATE (UBUNTU READY)
+===========================================================================
+[MODE] Utilizzo FakeSmokeClient deterministico per diagnostica ambiente CI/Mock.
+[MANUAL DECLARATION] Ricevuta dichiarazione manuale operatore per context length: 8192 (evidenza supplementare annotata)
+
+ARRESTO PRELIMINARE SMOKE TEST: Prerequisiti di modello o contesto non soddisfatti:
+  - [FAILED] CHECK_CONFIRMED_CONTEXT_LENGTH: Context length confermato dal server (4096) non conforme a 8192 richiesto. La dichiarazione dell'operatore (8192) non puo sovrascrivere i metadati espliciti del server. (Context mismatch: server has 4096, expected 8192)
+ESITO SMOKE TEST OPERATIVO: FALLITO
+============================================================

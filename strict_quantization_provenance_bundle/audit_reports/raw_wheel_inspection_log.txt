@@ -1,0 +1,42 @@
+=== WHEEL_INSPECTION ===
+Timestamp: 2026-10-11T19:07:34.021688+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi\dist
+Command: zipfile.namelist whatsapp_forensic_importer-0.1.0-py3-none-any.whl
+Exit Code: 0 (Expected: 0)
+Execution Duration: 0.05s
+Status: PASSED
+--- STDOUT ---
+Wheel File: whatsapp_forensic_importer-0.1.0-py3-none-any.whl
+Total Files in Wheel: 90
+Python Source Files in Wheel: 86
+Bytecode .pyc Files in Wheel: 0 (MUST BE ZERO)
+--- File Sample ---
+  ai/__init__.py
+  ai/backend.py
+  ai/benchmark.py
+  ai/chunking.py
+  ai/cloud_experiment.py
+  ai/cloud_test.py
+  ai/discovery.py
+  ai/experiment.py
+  ai/hardware.py
+  ai/lmstudio.py
+  ai/models.py
+  ai/serializer.py
+  ai/structured.py
+  ai/topics.py
+  ai/translation.py
+  analysis/__init__.py
+  analysis/consistency.py
+  analysis/models.py
+  analysis/service.py
+  core/__init__.py
+  core/config.py
+  core/immutability.py
+  entity_resolution/__init__.py
+  entity_resolution/base.py
+  entity_resolution/models.py
+  ... (+ 65 more files)
+============================================================

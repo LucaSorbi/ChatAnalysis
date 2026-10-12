@@ -1,0 +1,878 @@
+============================================================
+AUDIT RICERCA VECCHI BLOCCHI E GUARD OBSOLETI
+Totale match trovati: 68
+============================================================
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: ui/presentation.py:96
+LINE:     is_real_file = state.get_dataset_mode() == DatasetMode.FILE
+CONTEXT:
+      93:                 st.rerun()
+      94:         return
+      95: 
+>>>   96:     is_real_file = state.get_dataset_mode() == DatasetMode.FILE
+      97:     ing_summary = state.get_ingestion_summary()
+      98:     doc = state.get_conversation_document()
+      99:     detections = state.get_detection_results()
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: ui/presentation.py:307
+LINE:     if real_res is not None and state.get_dataset_mode() == DatasetMode.FILE:
+CONTEXT:
+     304: 
+     305:     # Visualizzazione Summary Ingestion e Selezione Conversazione se presente
+     306:     real_res = state.get_real_ingestion_result()
+>>>  307:     if real_res is not None and state.get_dataset_mode() == DatasetMode.FILE:
+     308:         st.divider()
+     309:         st.subheader("📋 Riepilogo Ultima Ingestion Reale")
+     310:         sm = real_res.summary
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: ui/presentation.py:380
+LINE:         if state.get_dataset_mode() == DatasetMode.FILE:
+CONTEXT:
+     377: 
+     378:     doc = state.get_conversation_document()
+     379:     if doc is None:
+>>>  380:         if state.get_dataset_mode() == DatasetMode.FILE:
+     381:             st.info("Nessuna conversazione selezionabile per il dataset corrente (es. archivio solo ausiliario o contatti).")
+     382:         return
+     383: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: ui/presentation.py:440
+LINE:         if state.get_dataset_mode() == DatasetMode.FILE:
+CONTEXT:
+     437:     service = state.get_search_service()
+     438:     doc = state.get_conversation_document()
+     439:     if service is None or doc is None:
+>>>  440:         if state.get_dataset_mode() == DatasetMode.FILE:
+     441:             st.info("Nessuna conversazione attiva per la ricerca (es. archivio solo ausiliario o contatti).")
+     442:         else:
+     443:             st.warning("Servizio di ricerca non configurato.")
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Local AI Results'
+FILE: ui/presentation.py:529
+LINE:     st.header("🏷️ Analisi Tematica (Local AI Results)")
+CONTEXT:
+     526: 
+     527: def render_topics() -> None:
+     528:     """Schermata Analisi Topic: visualizzazione deterministica di Detection e Discovery."""
+>>>  529:     st.header("🏷️ Analisi Tematica (Local AI Results)")
+     530: 
+     531:     if not state.is_dataset_loaded():
+     532:         st.info("Nessun dataset caricato. Caricare un dataset per visualizzare l'analisi dei topic.")
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: ui/presentation.py:537
+LINE:         state.get_dataset_mode() == DatasetMode.FILE
+CONTEXT:
+     534: 
+     535:     # Gestione specifica per Real File Mode senza risultati AI
+     536:     if (
+>>>  537:         state.get_dataset_mode() == DatasetMode.FILE
+     538:         and not state.get_detection_results()
+     539:         and not state.get_discovery_results()
+     540:     ):
+------------------------------------------------------------
+
+MATCH KEYWORD: 'differito'
+FILE: ui/presentation.py:544
+LINE:             "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
+CONTEXT:
+     541:         st.info(
+     542:             "Il dataset reale è stato importato correttamente.\n\n"
+     543:             "L'analisi AI non è stata eseguita in questa fase.\n\n"
+>>>  544:             "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
+     545:         )
+     546:         if state.get_conversation_document() is None:
+     547:             return
+------------------------------------------------------------
+
+MATCH KEYWORD: 'fase sperimentale finale'
+FILE: ui/presentation.py:544
+LINE:             "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
+CONTEXT:
+     541:         st.info(
+     542:             "Il dataset reale è stato importato correttamente.\n\n"
+     543:             "L'analisi AI non è stata eseguita in questa fase.\n\n"
+>>>  544:             "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
+     545:         )
+     546:         if state.get_conversation_document() is None:
+     547:             return
+------------------------------------------------------------
+
+MATCH KEYWORD: 'benchmark/inference'
+FILE: ui/presentation.py:544
+LINE:             "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
+CONTEXT:
+     541:         st.info(
+     542:             "Il dataset reale è stato importato correttamente.\n\n"
+     543:             "L'analisi AI non è stata eseguita in questa fase.\n\n"
+>>>  544:             "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
+     545:         )
+     546:         if state.get_conversation_document() is None:
+     547:             return
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: ui/state.py:272
+LINE:     target[KEY_DATASET_MODE] = DatasetMode.FILE
+CONTEXT:
+     269:     target[KEY_REAL_INGESTION_RESULT] = result
+     270:     target[KEY_INGESTION_SUMMARY] = result.summary
+     271:     target[KEY_DATASET_LOADED] = True
+>>>  272:     target[KEY_DATASET_MODE] = DatasetMode.FILE
+     273:     target[KEY_DETECTION_RESULTS] = ()
+     274:     target[KEY_DISCOVERY_RESULTS] = ()
+     275:     target[KEY_SELECTED_EVIDENCE_ID] = None
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: tests/integration/test_full_pipeline_e2e.py:536
+LINE:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+CONTEXT:
+     533:         ))
+     534:         state.set_real_ingestion_result(res_msg, s)
+     535:         assert state.is_dataset_loaded(s)
+>>>  536:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+     537:         assert state.get_detection_results(s) == ()
+     538:         assert state.get_discovery_results(s) == ()
+     539:         doc_msg = state.get_conversation_document(s)
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: tests/integration/test_full_pipeline_e2e.py:550
+LINE:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+CONTEXT:
+     547:             file_bytes=CELLEBRITE_CSV_FILE.read_bytes(),
+     548:         ))
+     549:         state.set_real_ingestion_result(res_csv, s)
+>>>  550:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+     551:         doc_csv = state.get_conversation_document(s)
+     552:         assert doc_csv is not None
+     553:         assert doc_csv.source_name == "cellebrite_csv"
+------------------------------------------------------------
+
+MATCH KEYWORD: 'differito'
+FILE: tests/integration/test_full_pipeline_e2e.py:812
+LINE:         assert "differito alla fase sperimentale finale" in at.info[0].value
+CONTEXT:
+     809:         at.run()
+     810:         assert not at.exception
+     811:         assert len(at.info) >= 1
+>>>  812:         assert "differito alla fase sperimentale finale" in at.info[0].value
+     813: 
+     814:         # Reset sessione
+     815:         at.sidebar.radio[0].set_value("1. Panoramica")
+------------------------------------------------------------
+
+MATCH KEYWORD: 'fase sperimentale finale'
+FILE: tests/integration/test_full_pipeline_e2e.py:812
+LINE:         assert "differito alla fase sperimentale finale" in at.info[0].value
+CONTEXT:
+     809:         at.run()
+     810:         assert not at.exception
+     811:         assert len(at.info) >= 1
+>>>  812:         assert "differito alla fase sperimentale finale" in at.info[0].value
+     813: 
+     814:         # Reset sessione
+     815:         at.sidebar.radio[0].set_value("1. Panoramica")
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: tests/unit/test_operational_model_management.py:50
+LINE: 40. Nessun riferimento ad AMD A8-7410 hardcoded nella UI o diagnostica;
+CONTEXT:
+      47: 39. Ingestion reale continua a non invocare client LLM.
+      48: 
+      49: SEZIONE SISTEMA / STATO (40-43):
+>>>   50: 40. Nessun riferimento ad AMD A8-7410 hardcoded nella UI o diagnostica;
+      51: 41. Nessun 'Hardware Block' a schermo nella pagina Sistema/Stato;
+      52: 42. Nessun 'Rinvio Benchmark' a schermo;
+      53: 43. Stato benchmark neutro e portabile esposto dall'application layer.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: tests/unit/test_operational_model_management.py:51
+LINE: 41. Nessun 'Hardware Block' a schermo nella pagina Sistema/Stato;
+CONTEXT:
+      48: 
+      49: SEZIONE SISTEMA / STATO (40-43):
+      50: 40. Nessun riferimento ad AMD A8-7410 hardcoded nella UI o diagnostica;
+>>>   51: 41. Nessun 'Hardware Block' a schermo nella pagina Sistema/Stato;
+      52: 42. Nessun 'Rinvio Benchmark' a schermo;
+      53: 43. Stato benchmark neutro e portabile esposto dall'application layer.
+      54: """
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Rinvio Benchmark'
+FILE: tests/unit/test_operational_model_management.py:52
+LINE: 42. Nessun 'Rinvio Benchmark' a schermo;
+CONTEXT:
+      49: SEZIONE SISTEMA / STATO (40-43):
+      50: 40. Nessun riferimento ad AMD A8-7410 hardcoded nella UI o diagnostica;
+      51: 41. Nessun 'Hardware Block' a schermo nella pagina Sistema/Stato;
+>>>   52: 42. Nessun 'Rinvio Benchmark' a schermo;
+      53: 43. Stato benchmark neutro e portabile esposto dall'application layer.
+      54: """
+      55: from __future__ import annotations
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: tests/unit/test_operational_model_management.py:714
+LINE:         assert "AMD A8-7410" not in str(val)
+CONTEXT:
+     711: def test_40_no_amd_a8_hardcoded_in_system_status():
+     712:     status = get_system_status_info("1.63.0")
+     713:     for key, val in status.items():
+>>>  714:         assert "AMD A8-7410" not in str(val)
+     715:         assert "DEFERRED" not in str(val)
+     716: 
+     717: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DEFERRED'
+FILE: tests/unit/test_operational_model_management.py:715
+LINE:         assert "DEFERRED" not in str(val)
+CONTEXT:
+     712:     status = get_system_status_info("1.63.0")
+     713:     for key, val in status.items():
+     714:         assert "AMD A8-7410" not in str(val)
+>>>  715:         assert "DEFERRED" not in str(val)
+     716: 
+     717: 
+     718: def test_41_no_hardware_block_in_system_status_page():
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: tests/unit/test_operational_model_management.py:725
+LINE:     assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+CONTEXT:
+     722:     at.run()
+     723:     assert not at.exception
+     724:     subheaders = [sh.value for sh in at.subheader]
+>>>  725:     assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+     726:     assert "LM Studio / Benchmark" in subheaders
+     727: 
+     728: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Rinvio Benchmark'
+FILE: tests/unit/test_operational_model_management.py:725
+LINE:     assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+CONTEXT:
+     722:     at.run()
+     723:     assert not at.exception
+     724:     subheaders = [sh.value for sh in at.subheader]
+>>>  725:     assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+     726:     assert "LM Studio / Benchmark" in subheaders
+     727: 
+     728: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Rinvio Benchmark'
+FILE: tests/unit/test_operational_model_management.py:735
+LINE:     assert "Nota Rinvio Benchmark" not in all_text
+CONTEXT:
+     732:     at.sidebar.radio[0].set_value("6. Sistema / Stato")
+     733:     at.run()
+     734:     all_text = " ".join([m.value for m in at.markdown] + [i.value for i in at.info] + [w.value for w in at.warning])
+>>>  735:     assert "Nota Rinvio Benchmark" not in all_text
+     736:     assert "AMD A8-7410" not in all_text
+     737: 
+     738: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: tests/unit/test_operational_model_management.py:736
+LINE:     assert "AMD A8-7410" not in all_text
+CONTEXT:
+     733:     at.run()
+     734:     all_text = " ".join([m.value for m in at.markdown] + [i.value for i in at.info] + [w.value for w in at.warning])
+     735:     assert "Nota Rinvio Benchmark" not in all_text
+>>>  736:     assert "AMD A8-7410" not in all_text
+     737: 
+     738: 
+     739: def test_43_portable_system_status_contract():
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: tests/unit/test_ui_application.py:184
+LINE:         assert "AMD A8-7410" not in str(info)
+CONTEXT:
+     181:         assert info["search_layer"] == "READY"
+     182:         assert info["local_ai_architecture"] == "READY - LOCAL LM STUDIO"
+     183:         assert info["real_lm_studio_benchmark"] == "READY / EXTERNAL BENCHMARK RUNNER"
+>>>  184:         assert "AMD A8-7410" not in str(info)
+     185:         assert "DEFERRED" not in str(info)
+     186:         assert "PORTABLE" in info["hardware_rationale"]
+     187:         assert info["streamlit_version"] == "1.63.0"
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DEFERRED'
+FILE: tests/unit/test_ui_application.py:185
+LINE:         assert "DEFERRED" not in str(info)
+CONTEXT:
+     182:         assert info["local_ai_architecture"] == "READY - LOCAL LM STUDIO"
+     183:         assert info["real_lm_studio_benchmark"] == "READY / EXTERNAL BENCHMARK RUNNER"
+     184:         assert "AMD A8-7410" not in str(info)
+>>>  185:         assert "DEFERRED" not in str(info)
+     186:         assert "PORTABLE" in info["hardware_rationale"]
+     187:         assert info["streamlit_version"] == "1.63.0"
+     188:         assert info["network_status"] == "LOCAL ONLY / LOOPBACK FOR LM STUDIO"
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: tests/unit/test_ui_manual_topic_detection.py:469
+LINE:     assert state.get_dataset_mode(session) == DatasetMode.FILE
+CONTEXT:
+     466:     state.set_real_ingestion_result(res, state=session)
+     467: 
+     468:     # In modalità FILE iniziale le detection e discovery devono essere rigorosamente vuote
+>>>  469:     assert state.get_dataset_mode(session) == DatasetMode.FILE
+     470:     assert state.get_detection_results(session) == ()
+     471:     assert state.get_discovery_results(session) == ()
+     472: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: tests/unit/test_ui_models.py:31
+LINE:         assert DatasetMode.FILE.value == "FILE"
+CONTEXT:
+      28:     def test_dataset_mode_enum(self):
+      29:         assert DatasetMode.NONE.value == "NONE"
+      30:         assert DatasetMode.DEMO.value == "DEMO"
+>>>   31:         assert DatasetMode.FILE.value == "FILE"
+      32: 
+      33:     def test_source_format_enum(self):
+      34:         assert "msgstore" in SourceFormat.WHATSAPP_MSGSTORE.value
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: tests/unit/test_ui_smoke.py:162
+LINE:         at.session_state["dataset_mode"] = DatasetMode.FILE
+CONTEXT:
+     159:         at.run()
+     160: 
+     161:         at.session_state["dataset_loaded"] = True
+>>>  162:         at.session_state["dataset_mode"] = DatasetMode.FILE
+     163:         at.session_state["detection_results"] = ()
+     164:         at.session_state["discovery_results"] = ()
+     165: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'differito'
+FILE: tests/unit/test_ui_smoke.py:170
+LINE:         assert "differito alla fase sperimentale finale" in at.info[0].value
+CONTEXT:
+     167:         at.run()
+     168:         assert not at.exception
+     169:         assert len(at.info) >= 1
+>>>  170:         assert "differito alla fase sperimentale finale" in at.info[0].value
+     171: 
+     172:     def test_real_file_rendering_success_with_conversations_selection(self):
+     173:         """Verifica rendering REAL FILE con IngestionResult SUCCESS, 2 conversazioni e selectbox attiva (Gate G.2)."""
+------------------------------------------------------------
+
+MATCH KEYWORD: 'fase sperimentale finale'
+FILE: tests/unit/test_ui_smoke.py:170
+LINE:         assert "differito alla fase sperimentale finale" in at.info[0].value
+CONTEXT:
+     167:         at.run()
+     168:         assert not at.exception
+     169:         assert len(at.info) >= 1
+>>>  170:         assert "differito alla fase sperimentale finale" in at.info[0].value
+     171: 
+     172:     def test_real_file_rendering_success_with_conversations_selection(self):
+     173:         """Verifica rendering REAL FILE con IngestionResult SUCCESS, 2 conversazioni e selectbox attiva (Gate G.2)."""
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: tests/unit/test_ui_smoke.py:350
+LINE:         """Verifica che la pagina Sistema / Stato sia portabile, priva di vecchi hardware block e mostri LM Studio / Benchmark."""
+CONTEXT:
+     347:         assert "IngestionError: Errore generico sanitizzato." in at.error[0].value
+     348: 
+     349:     def test_system_status_page_portable_no_hardware_block(self):
+>>>  350:         """Verifica che la pagina Sistema / Stato sia portabile, priva di vecchi hardware block e mostri LM Studio / Benchmark."""
+     351:         at = AppTest.from_file(APP_PATH, default_timeout=15)
+     352:         at.run()
+     353:         at.sidebar.radio[0].set_value("6. Sistema / Stato")
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: tests/unit/test_ui_smoke.py:359
+LINE:         assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+CONTEXT:
+     356:         assert not at.exception
+     357:         subheaders = [sh.value for sh in at.subheader]
+     358:         assert "LM Studio / Benchmark" in subheaders
+>>>  359:         assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+     360: 
+     361:         warnings = [w.value for w in at.warning]
+     362:         for w in warnings:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Rinvio Benchmark'
+FILE: tests/unit/test_ui_smoke.py:359
+LINE:         assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+CONTEXT:
+     356:         assert not at.exception
+     357:         subheaders = [sh.value for sh in at.subheader]
+     358:         assert "LM Studio / Benchmark" in subheaders
+>>>  359:         assert "Nota Rinvio Benchmark LM Studio (Hardware Block)" not in subheaders
+     360: 
+     361:         warnings = [w.value for w in at.warning]
+     362:         for w in warnings:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: tests/unit/test_ui_smoke.py:363
+LINE:             assert "AMD A8-7410" not in w
+CONTEXT:
+     360: 
+     361:         warnings = [w.value for w in at.warning]
+     362:         for w in warnings:
+>>>  363:             assert "AMD A8-7410" not in w
+     364: 
+     365:         all_text = " ".join(
+     366:             [sh.value for sh in at.subheader]
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: tests/unit/test_ui_smoke.py:371
+LINE:         assert "AMD A8-7410" not in all_text
+CONTEXT:
+     368:             + [i.value for i in at.info]
+     369:             + [w.value for w in at.warning]
+     370:         )
+>>>  371:         assert "AMD A8-7410" not in all_text
+     372:         assert "DEFERRED" not in all_text
+     373:         assert "127.0.0.1:1234" in all_text
+     374: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DEFERRED'
+FILE: tests/unit/test_ui_smoke.py:372
+LINE:         assert "DEFERRED" not in all_text
+CONTEXT:
+     369:             + [w.value for w in at.warning]
+     370:         )
+     371:         assert "AMD A8-7410" not in all_text
+>>>  372:         assert "DEFERRED" not in all_text
+     373:         assert "127.0.0.1:1234" in all_text
+     374: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: tests/unit/test_ui_state.py:153
+LINE:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+CONTEXT:
+     150:         state.set_real_ingestion_result(res, s)
+     151: 
+     152:         assert state.is_dataset_loaded(s) is True
+>>>  153:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+     154:         assert state.get_selected_document_id(s) == "doc::chat1"
+     155:         assert state.get_conversation_document(s) == doc1
+     156:         assert state.get_detection_results(s) == ()
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: tests/unit/test_ui_state.py:208
+LINE:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+CONTEXT:
+     205: 
+     206:         state.set_real_ingestion_result(res, s)
+     207:         assert state.is_dataset_loaded(s) is True
+>>>  208:         assert state.get_dataset_mode(s) == DatasetMode.FILE
+     209:         assert state.get_conversation_document(s) is None
+     210:         assert state.get_search_service(s) is None
+     211:         assert state.get_available_documents(s) == {}
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: docs/agent-report.md:332
+LINE: - **Processore**: AMD A8-7410, privo di AVX2
+CONTEXT:
+     329: Il progetto distingue formalmente l'ambiente utilizzato per lo sviluppo e l'ingegnerizzazione del software dalla workstation di calcolo dedicata alla sperimentazione empirica dei modelli:
+     330: 
+     331: #### AMBIENTE DI SVILUPPO
+>>>  332: - **Processore**: AMD A8-7410, privo di AVX2
+     333: - **Utilizzo**: Utilizzato per sviluppo e test software.
+     334: 
+     335: #### AMBIENTE SPERIMENTALE BENCHMARK
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AVX2'
+FILE: docs/agent-report.md:332
+LINE: - **Processore**: AMD A8-7410, privo di AVX2
+CONTEXT:
+     329: Il progetto distingue formalmente l'ambiente utilizzato per lo sviluppo e l'ingegnerizzazione del software dalla workstation di calcolo dedicata alla sperimentazione empirica dei modelli:
+     330: 
+     331: #### AMBIENTE DI SVILUPPO
+>>>  332: - **Processore**: AMD A8-7410, privo di AVX2
+     333: - **Utilizzo**: Utilizzato per sviluppo e test software.
+     334: 
+     335: #### AMBIENTE SPERIMENTALE BENCHMARK
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AVX2'
+FILE: docs/agent-report.md:337
+LINE: - **Processore**: Intel Core i5-9600K, 6 core / 6 thread, AVX2
+CONTEXT:
+     334: 
+     335: #### AMBIENTE SPERIMENTALE BENCHMARK
+     336: - **Sistema Operativo**: Ubuntu 22.04.5 LTS
+>>>  337: - **Processore**: Intel Core i5-9600K, 6 core / 6 thread, AVX2
+     338: - **Memoria RAM**: circa 32 GB RAM
+     339: - **Scheda Video**: NVIDIA GeForce GTX TITAN X, 12 GB VRAM
+     340: - **Driver NVIDIA**: 550.107.02
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DEFERRED'
+FILE: docs/agent-report.md:369
+LINE: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+CONTEXT:
+     366: - **UI senza upload WhatsApp TXT/ZIP**: la schermata "Importazione" in Streamlit non esponeva il selettore `SourceFormat.WHATSAPP_EXPORT` con label `"WhatsApp export chat (TXT / ZIP)"` e l'uploader limitava i tipi a `.db/.csv/.json/.xml`, impedendo all'utente di caricare archivi `.zip` ed export `.txt` nativi di WhatsApp.
+     367: - **HTTP 400 da LM Studio durante auto-load**: durante l'avvio della Topic Detection, la chiamata REST a `POST /api/v1/models/load` generava l'errore:
+     368:   `HTTP 400 Bad Request: Unrecognized key(s) in object: 'identifier', 'contextLength', 'gpu_offload', 'gpuOffload'`. L'applicazione falliva l'auto-load e interrompeva il flusso prima dell'inferenza.
+>>>  369: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+     370: 
+     371: ### 2. ROOT CAUSE
+     372: - **Problema A (WhatsApp UI & Preflight)**:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: docs/agent-report.md:369
+LINE: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+CONTEXT:
+     366: - **UI senza upload WhatsApp TXT/ZIP**: la schermata "Importazione" in Streamlit non esponeva il selettore `SourceFormat.WHATSAPP_EXPORT` con label `"WhatsApp export chat (TXT / ZIP)"` e l'uploader limitava i tipi a `.db/.csv/.json/.xml`, impedendo all'utente di caricare archivi `.zip` ed export `.txt` nativi di WhatsApp.
+     367: - **HTTP 400 da LM Studio durante auto-load**: durante l'avvio della Topic Detection, la chiamata REST a `POST /api/v1/models/load` generava l'errore:
+     368:   `HTTP 400 Bad Request: Unrecognized key(s) in object: 'identifier', 'contextLength', 'gpu_offload', 'gpuOffload'`. L'applicazione falliva l'auto-load e interrompeva il flusso prima dell'inferenza.
+>>>  369: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+     370: 
+     371: ### 2. ROOT CAUSE
+     372: - **Problema A (WhatsApp UI & Preflight)**:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Rinvio Benchmark'
+FILE: docs/agent-report.md:369
+LINE: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+CONTEXT:
+     366: - **UI senza upload WhatsApp TXT/ZIP**: la schermata "Importazione" in Streamlit non esponeva il selettore `SourceFormat.WHATSAPP_EXPORT` con label `"WhatsApp export chat (TXT / ZIP)"` e l'uploader limitava i tipi a `.db/.csv/.json/.xml`, impedendo all'utente di caricare archivi `.zip` ed export `.txt` nativi di WhatsApp.
+     367: - **HTTP 400 da LM Studio durante auto-load**: durante l'avvio della Topic Detection, la chiamata REST a `POST /api/v1/models/load` generava l'errore:
+     368:   `HTTP 400 Bad Request: Unrecognized key(s) in object: 'identifier', 'contextLength', 'gpu_offload', 'gpuOffload'`. L'applicazione falliva l'auto-load e interrompeva il flusso prima dell'inferenza.
+>>>  369: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+     370: 
+     371: ### 2. ROOT CAUSE
+     372: - **Problema A (WhatsApp UI & Preflight)**:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: docs/agent-report.md:369
+LINE: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+CONTEXT:
+     366: - **UI senza upload WhatsApp TXT/ZIP**: la schermata "Importazione" in Streamlit non esponeva il selettore `SourceFormat.WHATSAPP_EXPORT` con label `"WhatsApp export chat (TXT / ZIP)"` e l'uploader limitava i tipi a `.db/.csv/.json/.xml`, impedendo all'utente di caricare archivi `.zip` ed export `.txt` nativi di WhatsApp.
+     367: - **HTTP 400 da LM Studio durante auto-load**: durante l'avvio della Topic Detection, la chiamata REST a `POST /api/v1/models/load` generava l'errore:
+     368:   `HTTP 400 Bad Request: Unrecognized key(s) in object: 'identifier', 'contextLength', 'gpu_offload', 'gpuOffload'`. L'applicazione falliva l'auto-load e interrompeva il flusso prima dell'inferenza.
+>>>  369: - **Vecchio Hardware Block nella UI**: la pagina "Sistema / Stato" riportava hardcoded riferimenti obsoleti legati alla macchina di sviluppo originaria (`"AMD A8-7410"`, `"Hardware Block"`, `"Rinvio Benchmark LM Studio"`, `"DEFERRED"`), violando la portabilità dell'applicazione.
+     370: 
+     371: ### 2. ROOT CAUSE
+     372: - **Problema A (WhatsApp UI & Preflight)**:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: docs/agent-report.md:380
+LINE: - **Problema C (Hardware Block)**:
+CONTEXT:
+     377:   - In `ai/lmstudio.py` il metodo `load_model()` inviava chiavi derivate dalla sintassi CLI (`identifier`, `contextLength`, `gpu_offload`, `gpuOffload`). L'endpoint REST nativo v1 di LM Studio (`POST /api/v1/models/load`) effettua validazione stretta dello schema JSON e rifiuta chiavi non contemplate.
+     378:   - La risoluzione del modello locale utilizzava scorciatoie che non interrogavano la struttura ricca restituita da `GET /api/v1/models` (`key`, `display_name`, `quantization`, `loaded_instances`, `max_context_length`), rischiando di passare alias errati all'inferenza o scegliere arbitrariamente modelli in caso di ambiguità.
+     379:   - Mancava la cattura strutturata dell'errore HTTP 400 con conservazione di `status_code` e corpo di risposta tecnica (`technical_details`).
+>>>  380: - **Problema C (Hardware Block)**:
+     381:   - In `ui/application.py` (`get_system_status_info()`) e in `ui/presentation.py` (`render_system_status_page()`) erano presenti costanti e stringhe hardcoded relative al processore `AMD A8-7410` e al differimento sperimentale, anziché esporre contratti agnostici e portabili.
+     382: 
+     383: ### 3. FILE DI CODICE MODIFICATI
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: docs/agent-report.md:381
+LINE:   - In `ui/application.py` (`get_system_status_info()`) e in `ui/presentation.py` (`render_system_status_page()`) erano presenti costanti e stringhe hardcoded relative al processore `AMD A8-7410` e al differimento sperimentale, anziché esporre contratti agnostici e portabili.
+CONTEXT:
+     378:   - La risoluzione del modello locale utilizzava scorciatoie che non interrogavano la struttura ricca restituita da `GET /api/v1/models` (`key`, `display_name`, `quantization`, `loaded_instances`, `max_context_length`), rischiando di passare alias errati all'inferenza o scegliere arbitrariamente modelli in caso di ambiguità.
+     379:   - Mancava la cattura strutturata dell'errore HTTP 400 con conservazione di `status_code` e corpo di risposta tecnica (`technical_details`).
+     380: - **Problema C (Hardware Block)**:
+>>>  381:   - In `ui/application.py` (`get_system_status_info()`) e in `ui/presentation.py` (`render_system_status_page()`) erano presenti costanti e stringhe hardcoded relative al processore `AMD A8-7410` e al differimento sperimentale, anziché esporre contratti agnostici e portabili.
+     382: 
+     383: ### 3. FILE DI CODICE MODIFICATI
+     384: - [ai/backend.py](file:///c:/Users/lucas/Desktop/Tesi/ai/backend.py)
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: docs/agent-report.md:422
+LINE:   - `render_system_status_page`: rimozione dei blocchi hardcoded "Hardware Block" e neutralizzazione dello stato benchmark.
+CONTEXT:
+     419: - `ui.presentation`:
+     420:   - `render_import`: integrazione di `SourceFormat.WHATSAPP_EXPORT` con dicitura `"Export nativo WhatsApp ottenuto tramite Esporta chat, con o senza media."` e tipo `type=["txt", "zip"]`.
+     421:   - `render_manual_topic_detection_section` & `render_topic_discovery_page`: progressione degli stati UX (`"Verifica LM Studio locale..."` -> `"Preparazione del modello AI locale..."` -> `"Modello locale pronto."` -> `"Analisi locale in corso..."`), blocco dei traceback a schermo e messaggi amichevoli controllati.
+>>>  422:   - `render_system_status_page`: rimozione dei blocchi hardcoded "Hardware Block" e neutralizzazione dello stato benchmark.
+     423: 
+     424: ### 5. PAYLOAD LM STUDIO PRIMA
+     425: Le chiavi JSON precedentemente inviate da `load_model()` includevano opzioni CLI non ammesse dallo schema REST:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: docs/agent-report.md:472
+LINE: ### 9. HARDWARE BLOCK
+CONTEXT:
+     469: - **Normalizer**: compatibilità completa con `normalize_records` per la produzione di `ConversationEvidenceDocument`.
+     470: - **Zero AI**: l'ingestion non invoca alcun endpoint LM Studio né apre socket di rete.
+     471: 
+>>>  472: ### 9. HARDWARE BLOCK
+     473: Sono stati completamente rimossi dal codice applicativo attivo (`ui/application.py`, `ui/presentation.py`):
+     474: - Stringhe hardcoded `"AMD A8-7410"`.
+     475: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: docs/agent-report.md:474
+LINE: - Stringhe hardcoded `"AMD A8-7410"`.
+CONTEXT:
+     471: 
+     472: ### 9. HARDWARE BLOCK
+     473: Sono stati completamente rimossi dal codice applicativo attivo (`ui/application.py`, `ui/presentation.py`):
+>>>  474: - Stringhe hardcoded `"AMD A8-7410"`.
+     475: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+     476: - Stato `"Real LM Studio Benchmark: DEFERRED"`.
+     477: - Menzioni di incompatibilità AVX2 nella UI operativa.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: docs/agent-report.md:475
+LINE: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+CONTEXT:
+     472: ### 9. HARDWARE BLOCK
+     473: Sono stati completamente rimossi dal codice applicativo attivo (`ui/application.py`, `ui/presentation.py`):
+     474: - Stringhe hardcoded `"AMD A8-7410"`.
+>>>  475: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+     476: - Stato `"Real LM Studio Benchmark: DEFERRED"`.
+     477: - Menzioni di incompatibilità AVX2 nella UI operativa.
+     478: La pagina di diagnostica espone ora parametri operativi portabili:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Rinvio Benchmark'
+FILE: docs/agent-report.md:475
+LINE: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+CONTEXT:
+     472: ### 9. HARDWARE BLOCK
+     473: Sono stati completamente rimossi dal codice applicativo attivo (`ui/application.py`, `ui/presentation.py`):
+     474: - Stringhe hardcoded `"AMD A8-7410"`.
+>>>  475: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+     476: - Stato `"Real LM Studio Benchmark: DEFERRED"`.
+     477: - Menzioni di incompatibilità AVX2 nella UI operativa.
+     478: La pagina di diagnostica espone ora parametri operativi portabili:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DEFERRED'
+FILE: docs/agent-report.md:476
+LINE: - Stato `"Real LM Studio Benchmark: DEFERRED"`.
+CONTEXT:
+     473: Sono stati completamente rimossi dal codice applicativo attivo (`ui/application.py`, `ui/presentation.py`):
+     474: - Stringhe hardcoded `"AMD A8-7410"`.
+     475: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+>>>  476: - Stato `"Real LM Studio Benchmark: DEFERRED"`.
+     477: - Menzioni di incompatibilità AVX2 nella UI operativa.
+     478: La pagina di diagnostica espone ora parametri operativi portabili:
+     479: - `Local AI Layer: READY - LM STUDIO LOCAL`
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AVX2'
+FILE: docs/agent-report.md:477
+LINE: - Menzioni di incompatibilità AVX2 nella UI operativa.
+CONTEXT:
+     474: - Stringhe hardcoded `"AMD A8-7410"`.
+     475: - Sezione `"Nota Rinvio Benchmark LM Studio (Hardware Block)"`.
+     476: - Stato `"Real LM Studio Benchmark: DEFERRED"`.
+>>>  477: - Menzioni di incompatibilità AVX2 nella UI operativa.
+     478: La pagina di diagnostica espone ora parametri operativi portabili:
+     479: - `Local AI Layer: READY - LM STUDIO LOCAL`
+     480: - `LM Studio endpoint: http://127.0.0.1:1234`
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Hardware Block'
+FILE: docs/agent-report.md:488
+LINE:   - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
+CONTEXT:
+     485: - [tests/unit/test_operational_model_management.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py): nuova suite esaustiva contenente i 43 test contrattuali obbligatori:
+     486:   - WhatsApp Export (test 1-19): enum, dispatch, Android TXT, iOS TXT, multilinea, messaggi sistema, Unicode/emoji, URL con `:`, ZIP in memoria, allegati ZIP, rifiuto ZIP ambiguo, protezione traversal `..`, protezione ZIP bomb, rifiuto file generici, pipeline integration SearchService, AppTest presenza UI, AppTest accettazione `.txt`/`.zip`, verifica zero AI durante ingestion.
+     487:   - LM Studio Model Management (test 20-39): parsing `GET /api/v1/models`, skip ricaricamento se già in memoria, `POST /api/v1/models/load` con payload conforme (`model`, `context_length`), assenza tassativa di `identifier`, `contextLength`, `gpu_offload`, `gpuOffload`, gestione modello assente, gestione ambiguità, server offline, gestione HTTP 400, timeout load, timeout inferenza, corrispondenza `model_id` istanza caricata, timeout configurato a 240s, divieto download automatici, divieto endpoint esterni non loopback, verifica assenza AI in ingestion.
+>>>  488:   - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
+     489: - [tests/unit/test_ai_lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_lmstudio.py): aggiornamento test unitari `get_models_detailed`, `load_model` e `ensure_model_loaded` per il nuovo schema REST v1 e fallback trasparente.
+     490: - [tests/unit/test_ui_manual_topic_detection.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_manual_topic_detection.py): aggiornamento mock per verificare il payload pulito privo di parametri GPU arbitrari.
+     491: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'Rinvio Benchmark'
+FILE: docs/agent-report.md:488
+LINE:   - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
+CONTEXT:
+     485: - [tests/unit/test_operational_model_management.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py): nuova suite esaustiva contenente i 43 test contrattuali obbligatori:
+     486:   - WhatsApp Export (test 1-19): enum, dispatch, Android TXT, iOS TXT, multilinea, messaggi sistema, Unicode/emoji, URL con `:`, ZIP in memoria, allegati ZIP, rifiuto ZIP ambiguo, protezione traversal `..`, protezione ZIP bomb, rifiuto file generici, pipeline integration SearchService, AppTest presenza UI, AppTest accettazione `.txt`/`.zip`, verifica zero AI durante ingestion.
+     487:   - LM Studio Model Management (test 20-39): parsing `GET /api/v1/models`, skip ricaricamento se già in memoria, `POST /api/v1/models/load` con payload conforme (`model`, `context_length`), assenza tassativa di `identifier`, `contextLength`, `gpu_offload`, `gpuOffload`, gestione modello assente, gestione ambiguità, server offline, gestione HTTP 400, timeout load, timeout inferenza, corrispondenza `model_id` istanza caricata, timeout configurato a 240s, divieto download automatici, divieto endpoint esterni non loopback, verifica assenza AI in ingestion.
+>>>  488:   - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
+     489: - [tests/unit/test_ai_lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_lmstudio.py): aggiornamento test unitari `get_models_detailed`, `load_model` e `ensure_model_loaded` per il nuovo schema REST v1 e fallback trasparente.
+     490: - [tests/unit/test_ui_manual_topic_detection.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_manual_topic_detection.py): aggiornamento mock per verificare il payload pulito privo di parametri GPU arbitrari.
+     491: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: docs/agent-report.md:488
+LINE:   - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
+CONTEXT:
+     485: - [tests/unit/test_operational_model_management.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py): nuova suite esaustiva contenente i 43 test contrattuali obbligatori:
+     486:   - WhatsApp Export (test 1-19): enum, dispatch, Android TXT, iOS TXT, multilinea, messaggi sistema, Unicode/emoji, URL con `:`, ZIP in memoria, allegati ZIP, rifiuto ZIP ambiguo, protezione traversal `..`, protezione ZIP bomb, rifiuto file generici, pipeline integration SearchService, AppTest presenza UI, AppTest accettazione `.txt`/`.zip`, verifica zero AI durante ingestion.
+     487:   - LM Studio Model Management (test 20-39): parsing `GET /api/v1/models`, skip ricaricamento se già in memoria, `POST /api/v1/models/load` con payload conforme (`model`, `context_length`), assenza tassativa di `identifier`, `contextLength`, `gpu_offload`, `gpuOffload`, gestione modello assente, gestione ambiguità, server offline, gestione HTTP 400, timeout load, timeout inferenza, corrispondenza `model_id` istanza caricata, timeout configurato a 240s, divieto download automatici, divieto endpoint esterni non loopback, verifica assenza AI in ingestion.
+>>>  488:   - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
+     489: - [tests/unit/test_ai_lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_lmstudio.py): aggiornamento test unitari `get_models_detailed`, `load_model` e `ensure_model_loaded` per il nuovo schema REST v1 e fallback trasparente.
+     490: - [tests/unit/test_ui_manual_topic_detection.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_manual_topic_detection.py): aggiornamento mock per verificare il payload pulito privo di parametri GPU arbitrari.
+     491: 
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AMD A8'
+FILE: docs/agent-report.md:790
+LINE: 1. **Ambiente di Sviluppo Corrente (AMD A8-7410, Windows)**:
+CONTEXT:
+     787: ### 10.3 Stato Reale del Backend e Riconciliazione Ambienti
+     788: 
+     789: In conformità ai principi di integrità e onestà forense:
+>>>  790: 1. **Ambiente di Sviluppo Corrente (AMD A8-7410, Windows)**:
+     791:    - È stato effettuato un probe di rete locale verso `http://127.0.0.1:1234/v1/models`.
+     792:    - Il demone locale LM Studio è risultato **offline / non avviato** (`ConnectionRefusedError: [WinError 10061]`).
+     793:    - L'applicazione intercetta tale stato tramite `LmStudioUnavailableError`, comunicando correttamente all'operatore: *"LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo."* senza simulare né inventare risposte di rete fittizie.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AVX2'
+FILE: docs/cloud-e2e-design.md:42
+LINE: | **Hardware** | Workstation locale con AVX2/GPU | Qualsiasi (inferenza remota) |
+CONTEXT:
+      39: | **Interfaccia Base** | `BaseLocalLlmClient` | `BaseLlmClient` (NON `BaseLocalLlmClient`) |
+      40: | **Network Policy** | **LOOPBACK ONLY** (`127.0.0.1`, `localhost`, `::1`) | Endpoint remoto HTTPS esplicito |
+      41: | **Modelli** | Modelli Open Weight locali (Qwen, Llama, DeepSeek) | Modelli remoti compatibili OpenAI (es. OpenAI, OpenRouter) |
+>>>   42: | **Hardware** | Workstation locale con AVX2/GPU | Qualsiasi (inferenza remota) |
+      43: | **Politica Dati** | **Dati forensi reali** autorizzati e sintetici | **SYNTHETIC DATA ONLY — DIVIETO ASSOLUTO DI DATI REALI** |
+      44: | **Streamlit UI** | Integrato per analisi investigativa locale | **NON DISPONIBILE — NESSUNA OPZIONE CLOUD IN UI** |
+      45: | **Credenziali** | Token opzionale per server locale | API key esclusivamente da environment variable |
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AVX2'
+FILE: docs/e2e-acceptance.md:5
+LINE: Il **Full E2E System Acceptance — Pre-Hardware Gate** costituisce la validazione complessiva, end-to-end e integrata del software forense implementato nel repository, prima dell'esecuzione dei benchmark sperimentali con modelli LLM locali su workstation dotata di set istruzioni AVX2.
+CONTEXT:
+       2: 
+       3: ## 1. Scope del Gate di Accettazione
+       4: 
+>>>    5: Il **Full E2E System Acceptance — Pre-Hardware Gate** costituisce la validazione complessiva, end-to-end e integrata del software forense implementato nel repository, prima dell'esecuzione dei benchmark sperimentali con modelli LLM locali su workstation dotata di set istruzioni AVX2.
+       6: 
+       7: L'obiettivo primario del gate è certificare:
+       8: 1. La piena operatività della pipeline cross-layer dall'ingestion alla presentazione grafica.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'DatasetMode.FILE'
+FILE: docs/e2e-acceptance.md:72
+LINE:    - Per `DatasetMode.FILE`, `detection_results = ()` e `discovery_results = ()`.
+CONTEXT:
+      69: ## 6. Isolamento AI su File Reali e Assenza di Rete Esterna
+      70: 
+      71: 1. **Zero LLM su File Reali**:
+>>>   72:    - Per `DatasetMode.FILE`, `detection_results = ()` e `discovery_results = ()`.
+      73:    - Né `FakeLocalLlmClient` né `LmStudioClient` vengono istanziati durante il parsing, l'ingestion o l'esplorazione dei file reali.
+      74:    - La schermata Analisi Topic visualizza lo stato corretto: inferenza AI non eseguita, benchmark differito alla fase finale.
+      75: 2. **EXTERNAL NETWORK REQUIRED: NO**:
+------------------------------------------------------------
+
+MATCH KEYWORD: 'differito'
+FILE: docs/e2e-acceptance.md:74
+LINE:    - La schermata Analisi Topic visualizza lo stato corretto: inferenza AI non eseguita, benchmark differito alla fase finale.
+CONTEXT:
+      71: 1. **Zero LLM su File Reali**:
+      72:    - Per `DatasetMode.FILE`, `detection_results = ()` e `discovery_results = ()`.
+      73:    - Né `FakeLocalLlmClient` né `LmStudioClient` vengono istanziati durante il parsing, l'ingestion o l'esplorazione dei file reali.
+>>>   74:    - La schermata Analisi Topic visualizza lo stato corretto: inferenza AI non eseguita, benchmark differito alla fase finale.
+      75: 2. **EXTERNAL NETWORK REQUIRED: NO**:
+      76:    - Durante l'intero ciclo di vita (ingestion, cambio conversazione, ricerca lessicale, navigazione Streamlit), nessun tentativo di rete esterna è stato osservato durante i percorsi testati.
+      77:    - Il test intercetta `socket.socket.connect` consentendo unicamente le connessioni locali loopback necessarie al framework (`127.0.0.1`, `::1`, `localhost`, `0.0.0.0`) e bloccando categoricamente qualsiasi tentativo di connessione verso indirizzi esterni.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AVX2'
+FILE: docs/e2e-acceptance.md:155
+LINE: 2. **Benchmark LM Studio**: Eseguito separatamente tramite la suite sperimentale dedicata (`ai/experiment.py` / `run_benchmark.sh`) su workstation con supporto GPU/AVX2.
+CONTEXT:
+     152: ## 13. Architettura Sperimentale e Attività della Fase Finale
+     153: 
+     154: 1. **Portabilità e Disaccoppiamento Host**: L'applicazione e la UI sono indipendenti dall'hardware host. La configurazione e i dettagli di sistema vengono rilevati e registrati nei report del benchmark sperimentale.
+>>>  155: 2. **Benchmark LM Studio**: Eseguito separatamente tramite la suite sperimentale dedicata (`ai/experiment.py` / `run_benchmark.sh`) su workstation con supporto GPU/AVX2.
+     156: 3. **Multimodal Processing con File Binari Fisici**: Elaborazione con trascrizione STT e modelli Vision delegata alla fase sperimentale con acquisizioni complete comprensive di dump multimediali fisici.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'fase sperimentale finale'
+FILE: docs/real-ingestion-design.md:182
+LINE: 3. **Topic Results Vuoti**: Per i dataset reali caricati da file, `detection_results = ()` e `discovery_results = ()`. La schermata Topic informa chiaramente l'utente che l'inferenza con modelli locali è differita alla fase sperimentale finale.
+CONTEXT:
+     179: Come stabilito dai vincoli architetturali del progetto:
+     180: 1. **Zero Rete**: Nessuna richiesta HTTP, download di pesi o apertura di socket viene effettuata (`test_no_network_and_no_ai_invoked` lo garantisce categoricamente a livello di test).
+     181: 2. **Zero Invocazione AI**: Né `LmStudioClient` né `FakeLocalLlmClient` vengono istanziati durante l'ingestion o l'analisi di file reali.
+>>>  182: 3. **Topic Results Vuoti**: Per i dataset reali caricati da file, `detection_results = ()` e `discovery_results = ()`. La schermata Topic informa chiaramente l'utente che l'inferenza con modelli locali è differita alla fase sperimentale finale.
+     183: 4. **Ricerca Lessicale Attiva**: Il motore di ricerca deterministico (Search Layer approvato) opera pienamente sui testi dei messaggi reali estratti.
+     184: 
+     185: ---
+------------------------------------------------------------
+
+MATCH KEYWORD: 'differito'
+FILE: docs/real-ingestion-design.md:189
+LINE: 1. **Media Parsing Differito**: L'estrazione e il processing multimodale da payload binari fisici (immagini e audio effettivi) è delegata a fasi successive.
+CONTEXT:
+     186: 
+     187: ## 10. Limiti della Fase
+     188: 
+>>>  189: 1. **Media Parsing Differito**: L'estrazione e il processing multimodale da payload binari fisici (immagini e audio effettivi) è delegata a fasi successive.
+     190: 2. **Benchmark LM Studio Differito**: La valutazione empirica con modelli locali (GGUF/llama.cpp) su modelli reali (Llama, Qwen, DeepSeek) è differita alla fase finale con workstation dotata di set istruzioni AVX2.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'differito'
+FILE: docs/real-ingestion-design.md:190
+LINE: 2. **Benchmark LM Studio Differito**: La valutazione empirica con modelli locali (GGUF/llama.cpp) su modelli reali (Llama, Qwen, DeepSeek) è differita alla fase finale con workstation dotata di set istruzioni AVX2.
+CONTEXT:
+     187: ## 10. Limiti della Fase
+     188: 
+     189: 1. **Media Parsing Differito**: L'estrazione e il processing multimodale da payload binari fisici (immagini e audio effettivi) è delegata a fasi successive.
+>>>  190: 2. **Benchmark LM Studio Differito**: La valutazione empirica con modelli locali (GGUF/llama.cpp) su modelli reali (Llama, Qwen, DeepSeek) è differita alla fase finale con workstation dotata di set istruzioni AVX2.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'AVX2'
+FILE: docs/real-ingestion-design.md:190
+LINE: 2. **Benchmark LM Studio Differito**: La valutazione empirica con modelli locali (GGUF/llama.cpp) su modelli reali (Llama, Qwen, DeepSeek) è differita alla fase finale con workstation dotata di set istruzioni AVX2.
+CONTEXT:
+     187: ## 10. Limiti della Fase
+     188: 
+     189: 1. **Media Parsing Differito**: L'estrazione e il processing multimodale da payload binari fisici (immagini e audio effettivi) è delegata a fasi successive.
+>>>  190: 2. **Benchmark LM Studio Differito**: La valutazione empirica con modelli locali (GGUF/llama.cpp) su modelli reali (Llama, Qwen, DeepSeek) è differita alla fase finale con workstation dotata di set istruzioni AVX2.
+------------------------------------------------------------
+
+MATCH KEYWORD: 'benchmark finale'
+FILE: run_benchmark.sh:146
+LINE:     echo "Il benchmark finale non può partire con modifiche non committate."
+CONTEXT:
+     143:     echo "ERRORE: WORKING TREE NON PULITO"
+     144:     echo "============================================================"
+     145:     echo
+>>>  146:     echo "Il benchmark finale non può partire con modifiche non committate."
+     147:     echo
+     148: 
+     149:     git status --short
+------------------------------------------------------------
+

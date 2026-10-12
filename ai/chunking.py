@@ -21,6 +21,8 @@ Principi architetturali (Fasi H, I):
 """
 from __future__ import annotations
 
+import string
+import unicodedata
 from dataclasses import dataclass, field
 from typing import Any, Mapping, Sequence
 
@@ -302,14 +304,35 @@ def aggregate_topic_detection(
     )
 
 
+def normalize_topic_label(label: str) -> str:
+    """
+    Normalizza deterministicamente una label tematica per il consolidamento:
+    - Normalizzazione Unicode NFKC;
+    - casefold;
+    - rimozione punteggiatura (sostituita da spazio) e normalizzazione spazi.
+    """
+    if not label:
+        return ""
+    norm = unicodedata.normalize("NFKC", label).casefold()
+    table = str.maketrans(string.punctuation, " " * len(string.punctuation))
+    norm = norm.translate(table)
+    return " ".join(norm.split())
+
+
 def aggregate_topic_discovery(
     chunk_results: Sequence[TopicDiscoveryResult],
     parent_document_id: str,
     max_topics: int = 10,
 ) -> TopicDiscoveryResult:
     """
-    Aggrega i risultati di Topic Discovery provenienti da più chunk fondendo temi con label identiche
-    e preservando tutti gli evidence_ids associati.
+    Aggrega deterministicamente i risultati di Topic Discovery provenienti da più chunk.
+    Fonde topic semanticamente/sintatticamente equivalenti (NFKC, casefold, punteggiatura)
+    preservando tutti gli evidence_ids e tracciando il supporto dei chunk.
+    Se il numero di topic consolidati supera max_topics, applica Deterministic Support Ranking:
+    1. Supporto dei chunk indipendenti (quanti chunk hanno rilevato il tema);
+    2. Numero di evidenze uniche a supporto;
+    3. Posizione iniziale nel documento;
+    4. Tie-breaker alfabetico stabile sulla label normalizzata.
     """
     if not chunk_results:
         return TopicDiscoveryResult(
@@ -318,34 +341,61 @@ def aggregate_topic_discovery(
             metadata={"aggregation": "empty"},
         )
 
+    raw_topics_count = 0
     consolidated: dict[str, dict[str, Any]] = {}
+    order_idx = 0
 
-    for cr in chunk_results:
+    for chunk_idx, cr in enumerate(chunk_results):
+        chunk_id = getattr(cr, "metadata", {}).get("chunk_id") or f"{getattr(cr, 'provenance_document_id', 'doc')}::chunk_{chunk_idx}"
         for t in cr.topics:
-            norm_key = t.label.strip().lower()
+            raw_topics_count += 1
+            norm_key = normalize_topic_label(t.label) or t.label.strip().casefold()
             if norm_key in consolidated:
-                existing = consolidated[norm_key]
-                combined_eids = list(existing["evidence_ids"])
+                item = consolidated[norm_key]
+                item["supporting_chunks"].add(chunk_id)
                 for eid in t.evidence_ids:
-                    if eid not in combined_eids:
-                        combined_eids.append(eid)
-                existing["evidence_ids"] = combined_eids
+                    if eid not in item["evidence_ids"]:
+                        item["evidence_ids"].append(eid)
+                if len(t.short_description.strip()) > len(item["short_description"]):
+                    item["short_description"] = t.short_description.strip()
             else:
                 consolidated[norm_key] = {
                     "label": t.label.strip(),
+                    "norm_key": norm_key,
                     "short_description": t.short_description.strip(),
                     "evidence_ids": list(t.evidence_ids),
+                    "supporting_chunks": {chunk_id},
+                    "first_seen_index": order_idx,
                 }
+                order_idx += 1
 
-    topics: list[DiscoveredTopic] = []
-    for item in list(consolidated.values())[:max_topics]:
-        topics.append(
-            DiscoveredTopic(
-                label=item["label"],
-                short_description=item["short_description"],
-                evidence_ids=tuple(item["evidence_ids"]),
-            )
+    consolidated_items = list(consolidated.values())
+    consolidated_count = len(consolidated_items)
+
+    if consolidated_count > max_topics:
+        ranked_items = sorted(
+            consolidated_items,
+            key=lambda it: (
+                -len(it["supporting_chunks"]),
+                -len(it["evidence_ids"]),
+                it["first_seen_index"],
+                it["norm_key"],
+            ),
         )
+        selected_items = ranked_items[:max_topics]
+        reduction_strategy = "deterministic_support_ranking"
+    else:
+        selected_items = consolidated_items
+        reduction_strategy = "none"
+
+    topics = [
+        DiscoveredTopic(
+            label=it["label"],
+            short_description=it["short_description"],
+            evidence_ids=tuple(it["evidence_ids"]),
+        )
+        for it in selected_items
+    ]
 
     return TopicDiscoveryResult(
         topics=tuple(topics),
@@ -353,6 +403,9 @@ def aggregate_topic_discovery(
         metadata={
             "aggregation": "consolidated_multi_chunk",
             "total_raw_chunks": len(chunk_results),
-            "consolidated_count": len(topics),
+            "raw_topic_count": raw_topics_count,
+            "consolidated_topic_count": consolidated_count,
+            "selected_topic_count": len(topics),
+            "reduction_strategy": reduction_strategy,
         },
     )

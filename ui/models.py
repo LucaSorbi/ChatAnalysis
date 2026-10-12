@@ -123,6 +123,7 @@ class IngestionResult:
     documents: Mapping[str, Any]
     error_stage: Optional[str] = None
     error_message: Optional[str] = None
+    media_registry: Optional[Any] = None
 
     @property
     def document_list(self) -> tuple[Any, ...]:

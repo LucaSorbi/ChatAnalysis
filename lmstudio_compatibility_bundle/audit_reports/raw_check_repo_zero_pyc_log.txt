@@ -1,0 +1,15 @@
+=== CHECK_REPO_ZERO_PYC ===
+Timestamp: 2026-10-11T15:35:15.023086+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: check zero_pyc
+Exit Code: 0 (Expected: 0)
+Execution Duration: 0.01s
+Status: PASSED
+
+--- STDOUT ---
+Repo bytecode check: PASS (0 .pyc files in source tree)
+
+--- STDERR ---
+(empty)

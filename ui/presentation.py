@@ -42,19 +42,23 @@ from ai.lmstudio import (
     get_model_display_name,
 )
 from ai.models import TopicDecision
+from analysis.models import ConsistencyStatus
 from search.models import MatchMode
+from search.service import SearchService
 from ui import state
 from ui.application import (
     TopicProvenanceMismatchError,
     build_topic_query,
     check_lm_studio_status,
+    execute_discovery_verification,
+    execute_local_media_processing,
     execute_manual_topic_detection,
+    execute_topic_discovery,
     execute_evidence_search,
     execute_real_ingestion,
     filter_evidence_sections,
     get_evidence_filter_options,
     get_system_status_info,
-    prepare_operational_model,
     search_topic_detections,
     search_topic_discoveries,
     summarize_document,
@@ -194,6 +198,69 @@ def render_overview() -> None:
             st.write(", ".join(f"`{lang}`" for lang in summary.languages))
         else:
             st.write("Nessuna informazione linguistica esplicita.")
+
+    # Sezione Elaborazione Media Locale (On-Demand)
+    has_media_references = any(bool(b.message.media_reference) for b in doc.bundles)
+    if has_media_references:
+        st.divider()
+        st.subheader("🎬 Elaborazione Multimediale Locale (On-Demand)")
+        st.markdown(
+            "Questo documento contiene riferimenti ad allegati multimediali (audio/immagini). "
+            "L'elaborazione è rigorosamente locale e opzionale: nessun motore AI/STT/OCR viene eseguito automaticamente all'ingestion."
+        )
+
+        col_stt, col_ocr, col_vis = st.columns(3)
+        from multimodal.transcriber import FasterWhisperTranscriber
+        from multimodal.ocr import TesseractImageTextExtractor
+        stt_avail = FasterWhisperTranscriber.is_available()
+        ocr_avail = TesseractImageTextExtractor.is_available()
+
+        with col_stt:
+            st.metric("Speech-to-Text (Audio)", "Faster-Whisper" if stt_avail else "Non installato")
+            if not stt_avail:
+                st.caption("faster-whisper non installato o non rilevato nel runtime.")
+        with col_ocr:
+            st.metric("OCR (Immagini)", "Tesseract OCR" if ocr_avail else "Non installato")
+            if not ocr_avail:
+                st.caption("tesseract non rilevato nel PATH di sistema.")
+        with col_vis:
+            st.metric("Vision (Scena)", "Non configurato")
+            st.caption("Vision locale reale non configurata (disabilitata per dati reali).")
+
+        col_btn, _ = st.columns([1, 2])
+        with col_btn:
+            btn_label = "🎙️ Elabora media localmente"
+            curr_status = doc.metadata.get("multimodal_status")
+            if curr_status in ("PARTIAL", "FAILED"):
+                btn_label = "🔁 Riprova elaborazione media"
+            if st.button(btn_label, use_container_width=True):
+                with st.spinner("Elaborazione multimediale locale in corso..."):
+                    try:
+                        registry = state.get_media_asset_registry(doc.document_id)
+                        enriched_doc, report = execute_local_media_processing(
+                            document=doc,
+                            registry=registry,
+                        )
+                        state.update_conversation_document(enriched_doc)
+                        res_status = enriched_doc.metadata.get("multimodal_status")
+                        if res_status == "COMPLETE":
+                            st.success(
+                                f"Elaborazione completata con successo! "
+                                f"Sezioni di evidenza derivate: {report['derived_sections']} "
+                                f"(Totale sezioni: {len(enriched_doc.all_evidence_sections)})."
+                            )
+                        elif res_status == "PARTIAL":
+                            st.warning(
+                                f"Elaborazione parziale: {report['derived_sections']} sezioni derivate. "
+                                f"Alcuni media non sono stati elaborati."
+                            )
+                        else:
+                            st.error(
+                                "Elaborazione non riuscita: nessun media elaborato con successo (backend assenti o falliti)."
+                            )
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Errore durante l'elaborazione dei media: {err}")
 
     st.divider()
     if st.button("🔄 Reimposta Sessione / Scarica Dataset"):
@@ -381,6 +448,48 @@ def render_explore() -> None:
             st.info("Nessuna conversazione selezionabile per il dataset corrente (es. archivio solo ausiliario o contatti).")
         return
 
+    has_media_references = any(bool(b.message.media_reference) for b in doc.bundles)
+    if has_media_references:
+        m_status = doc.metadata.get("multimodal_status", "NOT_PROCESSED")
+        if not doc.metadata.get("multimodal_processed", False):
+            if m_status == "PARTIAL":
+                st.warning("⚠️ Elaborazione multimediale parziale: alcuni allegati non sono stati elaborati. È possibile riprovare.")
+                btn_explore_label = "🔁 Riprova elaborazione media parziale"
+            elif m_status == "FAILED":
+                st.error("❌ Elaborazione multimediale precedente non riuscita (motori non disponibili o errore). È possibile riprovare.")
+                btn_explore_label = "🔁 Riprova elaborazione media"
+            else:
+                st.info("ℹ️ Questa conversazione contiene allegati multimediali. L'estrazione STT/OCR è disponibile su richiesta.")
+                btn_explore_label = "🎙️ Elabora media localmente"
+
+            if st.button(btn_explore_label, key="explore_process_media_btn"):
+                with st.spinner("Elaborazione multimediale locale in corso..."):
+                    try:
+                        registry = state.get_media_asset_registry(doc.document_id)
+                        enriched_doc, report = execute_local_media_processing(
+                            document=doc,
+                            registry=registry,
+                        )
+                        state.update_conversation_document(enriched_doc)
+                        res_status = enriched_doc.metadata.get("multimodal_status")
+                        if res_status == "COMPLETE":
+                            st.success(
+                                f"Elaborazione completata con successo! Nuove sezioni derivate: {report['derived_sections']}."
+                            )
+                        elif res_status == "PARTIAL":
+                            st.warning(
+                                f"Elaborazione parziale ({report['derived_sections']} sezioni derivate). Alcuni media non hanno avuto successo."
+                            )
+                        else:
+                            st.error(
+                                "Elaborazione non riuscita: nessun media estratto con successo (motori non disponibili)."
+                            )
+                        st.rerun()
+                    except Exception as err:
+                        st.error(f"Errore elaborazione media: {err}")
+        else:
+            st.success("✅ Tutti gli allegati multimediali supportati sono stati elaborati con successo.")
+
     options = get_evidence_filter_options(doc)
 
     col_f1, col_f2, col_f3 = st.columns(3)
@@ -532,20 +641,6 @@ def render_topics() -> None:
         st.info("Nessun dataset caricato. Caricare un dataset per visualizzare l'analisi dei topic.")
         return
 
-    # Gestione specifica per Real File Mode senza risultati AI
-    if (
-        state.get_dataset_mode() == DatasetMode.FILE
-        and not state.get_detection_results()
-        and not state.get_discovery_results()
-    ):
-        st.info(
-            "Il dataset reale è stato importato correttamente.\n\n"
-            "L'analisi AI non è stata eseguita in questa fase.\n\n"
-            "Il benchmark/inference con modelli locali è differito alla fase sperimentale finale."
-        )
-        if state.get_conversation_document() is None:
-            return
-
     doc = state.get_conversation_document()
     if doc is None:
         st.info("Nessuna conversazione attiva per l'analisi.")
@@ -617,25 +712,13 @@ def render_topics() -> None:
                     raw_model_choice = model_input.strip() if model_input.strip() else (state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL)
                     status_placeholder = st.empty()
                     try:
-                        status_placeholder.info("Verifica LM Studio locale...")
-                        is_loaded = hasattr(client, "is_model_loaded") and client.is_model_loaded(raw_model_choice)
-                        if not is_loaded:
-                            status_placeholder.info("Preparazione del modello AI locale...")
-
-                        resolved_model = prepare_operational_model(
-                            client=client,
-                            requested_model=raw_model_choice,
-                            timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
-                        )
-                        display_name = get_model_display_name(resolved_model)
-                        status_placeholder.info(f"{display_name} pronto.")
-
+                        status_placeholder.info("Preparazione ed esecuzione analisi locale...")
                         with st.spinner("Analisi locale in corso..."):
                             det_res = execute_manual_topic_detection(
                                 document=doc,
                                 topic=q,
                                 client=client,
-                                model_id=resolved_model,
+                                model_id=raw_model_choice,
                                 timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
                                 max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
                             )
@@ -644,7 +727,7 @@ def render_topics() -> None:
                         state.set_last_manual_detection(det_res)
                         state.set_custom_topic_label(topic_input)
                         state.set_custom_topic_description(desc_input)
-                        state.set_lm_studio_model(resolved_model)
+                        state.set_lm_studio_model(det_res.metadata.get("model", raw_model_choice))
                         st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
                     except LmStudioUnavailableError:
                         status_placeholder.empty()
@@ -811,13 +894,62 @@ def render_topics() -> None:
                                 "Testo Originale Acquisito",
                                 value=sec.text,
                                 height=60,
-                                key=f"sec_top_{hit.topic_id}_{sec.evidence_id}_{s_idx}",
+                                key=f"sec_top_{idx}_{hit.topic_id}_{sec.evidence_id}_{s_idx}",
                                 disabled=True,
                             )
 
     with tab_disc:
-        st.subheader("Argomenti Emersi (Open Topic Discovery)")
-        st.caption("Argomenti e cluster identificati autonomamente dal layer AI durante la scansione aperta.")
+        st.subheader("💡 Topic Discovery (Scansione Argomenti Emersi)")
+        st.caption(
+            "Identifica autonomamente i temi principali e i cluster della conversazione corrente "
+            "eseguendo una scansione aperta tramite LM Studio locale (Qwen2.5-7B-Instruct)."
+        )
+
+        col_d1, col_d2 = st.columns([2, 1])
+        with col_d1:
+            disc_model_val = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
+            disc_model_input = st.text_input(
+                "Modello LM Studio per Discovery:",
+                value=disc_model_val,
+                placeholder="qwen2.5-7b-instruct",
+                key="disc_model_input",
+            )
+        with col_d2:
+            max_topics_val = st.number_input(
+                "Numero max topic:",
+                min_value=1,
+                max_value=25,
+                value=10,
+                key="disc_max_topics",
+            )
+
+        run_discovery_btn = st.button("🚀 Esegui Topic Discovery (LIVE)", type="primary", key="btn_run_live_discovery")
+
+        if run_discovery_btn:
+            client = state.get_lm_studio_client()
+            raw_model = disc_model_input.strip() if disc_model_input.strip() else DEFAULT_OPERATIONAL_MODEL
+            disc_status = st.empty()
+            try:
+                disc_status.info("Preparazione LM Studio per Topic Discovery...")
+                with st.spinner("Scansione aperta e scoperta argomenti in corso..."):
+                    disc_res = execute_topic_discovery(
+                        document=doc,
+                        client=client,
+                        model_id=raw_model,
+                        max_topics=int(max_topics_val),
+                    )
+                disc_status.empty()
+                state.add_discovery_result(disc_res)
+                state.set_lm_studio_model(raw_model)
+                st.success(f"Topic Discovery completata! Emersi {len(disc_res.topics)} argomenti.")
+            except LmStudioUnavailableError:
+                disc_status.empty()
+                st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
+            except Exception as exc:
+                disc_status.empty()
+                st.error(f"Errore durante l'esecuzione di Topic Discovery: {type(exc).__name__}: {exc}")
+
+        st.divider()
 
         query_disc = st.text_input("Cerca negli argomenti scoperti", placeholder="Es. logistica, contratti", key="disc_query_input")
 
@@ -834,7 +966,7 @@ def render_topics() -> None:
         st.write(f"Visualizzati **{len(disc_results.hits)}** argomenti emersi.")
 
         if not disc_results.hits:
-            st.info("Nessun argomento emerso corrisponde alla ricerca.")
+            st.info("Nessun argomento emerso corrisponde alla ricerca. Avviare la Topic Discovery per analizzare la chat.")
 
         for idx, hit in enumerate(disc_results.hits, start=1):
             with st.container(border=True):
@@ -852,11 +984,11 @@ def render_topics() -> None:
                                 "Testo Originale di Supporto",
                                 value=sec.text,
                                 height=60,
-                                key=f"disc_sec_{hit.topic_id}_{sec.evidence_id}_{s_idx}",
+                                key=f"disc_sec_{idx}_{hit.topic_id}_{sec.evidence_id}_{s_idx}",
                                 disabled=True,
                             )
 
-                # Pulsante: Verifica con Topic Detection
+                # Pulsante: Verifica con Topic Detection (Prova del Nove)
                 verify_col, _ = st.columns([2, 3])
                 with verify_col:
                     verify_btn = st.button(
@@ -878,143 +1010,83 @@ def render_topics() -> None:
                             )
                         except TopicProvenanceMismatchError as p_err:
                             st.error(f"Operazione bloccata per discrepanza di provenienza: {p_err}")
-                            disc_query = None
                         else:
-                            try:
-                                disc_query = build_topic_query(
-                                    label=hit.label,
-                                    description=hit.description,
-                                )
-                            except ValueError as v_err:
-                                st.error(f"Errore nella creazione della TopicQuery: {v_err}")
-                                disc_query = None
-
-                        if disc_query is not None:
                             client = state.get_lm_studio_client()
                             raw_model = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
                             disc_status = st.empty()
                             try:
-                                disc_status.info("Verifica LM Studio locale...")
-                                is_loaded = hasattr(client, "is_model_loaded") and client.is_model_loaded(raw_model)
-                                if not is_loaded:
-                                    disc_status.info("Preparazione del modello AI locale...")
-
-                                resolved_model = prepare_operational_model(
-                                    client=client,
-                                    requested_model=raw_model,
-                                    timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
-                                )
-                                display_name = get_model_display_name(resolved_model)
-                                disc_status.info(f"{display_name} pronto.")
-
-                                with st.spinner("Analisi locale in corso..."):
-                                    det_res = execute_manual_topic_detection(
+                                disc_status.info("Preparazione seconda inferenza indipendente...")
+                                with st.spinner("Seconda inferenza indipendente (Prova del Nove) in corso..."):
+                                    det_res, consistency_res = execute_discovery_verification(
                                         document=doc,
-                                        topic=disc_query,
+                                        discovered_topic=hit.raw_result,
+                                        discovery_run_id=hit.metadata.get("run_id"),
                                         client=client,
-                                        model_id=resolved_model,
-                                        timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
-                                        max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
+                                        model_id=raw_model,
                                     )
                                 disc_status.empty()
                                 state.add_detection_result(det_res)
+                                state.add_consistency_result(consistency_res)
                                 state.set_last_manual_detection(det_res)
                                 state.set_custom_topic_label(hit.label)
                                 state.set_custom_topic_description(hit.description)
-                                state.set_lm_studio_model(resolved_model)
+                                state.set_lm_studio_model(raw_model)
 
-                                if det_res.decision == TopicDecision.ABSENT:
-                                    st.warning(
-                                        f"⚠️ DISCREPANZA DISCOVERY → DETECTION: Topic '{hit.label}' "
-                                        f"emerso in Discovery ma valutato ABSENT in Topic Detection"
-                                    )
-                                elif det_res.decision == TopicDecision.PRESENT:
-                                    st.success(f"Topic '{hit.label}' verificato! Esito: PRESENT (COERENTE)")
+                                if consistency_res.status == ConsistencyStatus.CONSISTENT:
+                                    st.success(f"Topic '{hit.label}' verificato! Esito: PRESENT (COERENTE con evidenze in comune)")
+                                elif consistency_res.status == ConsistencyStatus.PARTIALLY_CONSISTENT:
+                                    st.info(f"Topic '{hit.label}' verificato! Esito: PRESENT (PARZIALMENTE COERENTE su evidenze distinte)")
+                                elif consistency_res.status == ConsistencyStatus.DISCREPANCY_ABSENT:
+                                    st.warning(f"⚠️ DISCREPANZA: Topic '{hit.label}' valutato ABSENT in Topic Detection")
                                 else:
-                                    st.info(f"Topic '{hit.label}' verificato. Esito: UNCERTAIN")
+                                    st.warning(f"⚠️ INCERTO: Topic '{hit.label}' valutato UNCERTAIN in Topic Detection")
                             except LmStudioUnavailableError:
                                 disc_status.empty()
                                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
-                            except AiModelNotInstalledError as ni_err:
-                                disc_status.empty()
-                                st.error(str(ni_err))
-                            except AiModelAmbiguousError as amb_err:
-                                disc_status.empty()
-                                st.error(str(amb_err))
-                            except AiModelLoadError as l_err:
-                                disc_status.empty()
-                                st.error(f"Errore durante il caricamento del modello in LM Studio: {l_err}")
-                            except AiBackendTimeoutError as t_err:
-                                disc_status.empty()
-                                st.error(f"Timeout durante l'operazione con LM Studio: {t_err}")
-                            except AiModelMismatchError as m_err:
-                                disc_status.empty()
-                                st.error(f"Disallineamento modello LM Studio: {m_err}")
-                            except AiInvalidEvidenceCitationError as c_err:
-                                disc_status.empty()
-                                st.error(f"Errore citazione evidenze: {c_err}")
-                            except AiStructuredOutputError as s_err:
-                                disc_status.empty()
-                                st.error(f"Errore schema strutturato: {s_err}")
-                            except (AiBackendRequestError, AiBackendProtocolError) as b_err:
-                                disc_status.empty()
-                                st.error(f"Errore di comunicazione con LM Studio: {b_err}")
                             except Exception as exc:
                                 disc_status.empty()
-                                st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}")
+                                st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}: {exc}")
 
-                last_det = state.get_last_manual_detection()
-                if last_det is not None and last_det.topic.label == hit.label:
+                # Visualizzazione dell'esito di verifica e consistency
+                cons_list = [c for c in state.get_consistency_results(doc.document_id) if c.topic_label == hit.label]
+                if cons_list:
+                    latest_cons = cons_list[-1]
                     with st.container(border=True):
-                        dec_val = last_det.decision.value
-                        actual_model = last_det.metadata.get("model", "n/a")
-                        req_model = last_det.metadata.get("requested_model")
-
-                        if dec_val == "PRESENT":
-                            consistency_status = "COERENTE (Discovery e Detection concordano)"
-                            status_badge = "✅ COERENTE"
-                        elif dec_val == "ABSENT":
-                            consistency_status = "⚠️ DISCREPANZA DISCOVERY → DETECTION"
-                            status_badge = "⚠️ DISCREPANZA DISCOVERY → DETECTION"
+                        if latest_cons.status == ConsistencyStatus.CONSISTENT:
+                            badge_str = "✅ COERENTE"
+                        elif latest_cons.status == ConsistencyStatus.PARTIALLY_CONSISTENT:
+                            badge_str = "🔵 PARZIALMENTE COERENTE"
+                        elif latest_cons.status == ConsistencyStatus.DISCREPANCY_ABSENT:
+                            badge_str = "⚠️ DISCREPANZA (ABSENT)"
                         else:
-                            consistency_status = "INCERTO (Evidenza parziale o ambigua)"
-                            status_badge = "🟡 INCERTO"
+                            badge_str = "🟡 INCERTO (UNCERTAIN)"
 
-                        st.markdown(f"#### 🔬 Risultato Verifica: {status_badge}")
-                        st.markdown(f"**Consistency status:** `{consistency_status}`")
-
-                        if req_model and actual_model != "n/a" and actual_model != req_model:
-                            st.error(f"⚠️ MODEL MISMATCH: Richiesto '{req_model}', restituito '{actual_model}'")
-                        else:
-                            st.markdown(f"**Model:** `{actual_model}`")
+                        st.markdown(f"#### 🔬 Risultato Verifica Indipendente: {badge_str}")
+                        st.markdown(f"**Consistency status:** `{latest_cons.status.value}`")
+                        st.info(f"**Valutazione Consistenza:** {latest_cons.rationale}")
 
                         c_d1, c_d2 = st.columns(2)
                         with c_d1:
                             st.markdown(f"**Discovery topic:** {hit.label}")
-                            disc_eids_str = ", ".join(hit.evidence_ids) if hit.evidence_ids else "Nessuna"
+                            disc_eids_str = ", ".join(latest_cons.discovery_evidence_ids) if latest_cons.discovery_evidence_ids else "Nessuna"
                             st.markdown(f"**Discovery evidence IDs:** `{disc_eids_str}`")
                         with c_d2:
-                            badge_dec = "🟢 PRESENT" if dec_val == "PRESENT" else "⚪ ABSENT" if dec_val == "ABSENT" else "🟡 UNCERTAIN"
-                            st.markdown(f"**Detection decision:** {badge_dec}")
-                            det_eids_str = ", ".join(last_det.evidence_ids) if last_det.evidence_ids else "Nessuna"
+                            st.markdown(f"**Detection decision:** `{latest_cons.metadata.get('detection_decision', 'n/a')}`")
+                            det_eids_str = ", ".join(latest_cons.detection_evidence_ids) if latest_cons.detection_evidence_ids else "Nessuna"
                             st.markdown(f"**Detection evidence IDs:** `{det_eids_str}`")
 
-                        st.info(f"**Detection rationale:** {last_det.rationale}")
+                        overlap_str = ", ".join(latest_cons.overlap_evidence_ids) if latest_cons.overlap_evidence_ids else "Nessuna evidenza in comune"
+                        st.caption(f"Evidenze condivise in overlap: `{overlap_str}`")
 
-                        lat = last_det.metadata.get("latency_seconds")
-                        lat_str = f"{lat:.2f}s" if isinstance(lat, (int, float)) else "n/a"
-                        st.caption(f"Latenza: `{lat_str}` | Prompt: `{last_det.metadata.get('prompt_version', 'n/a')}`")
-
-                        if state.get_dataset_mode() == DatasetMode.DEMO and last_det.metadata.get("raw_response"):
-                            with st.expander("🔍 Diagnostica Debug (Raw Structured LLM Response)"):
-                                st.json({
-                                    "model": actual_model,
-                                    "decision": dec_val,
-                                    "evidence_ids": list(last_det.evidence_ids),
-                                    "rationale": last_det.rationale,
-                                    "latency_seconds": lat,
-                                    "raw_response": last_det.metadata.get("raw_response"),
-                                })
+        # Sezione opzionale di riferimento per la modalità DEMO
+        if state.get_dataset_mode() == DatasetMode.DEMO:
+            ref_discoveries = state.get_demo_reference_discovery_results()
+            if ref_discoveries:
+                with st.expander("📋 Risultati di Riferimento Sintetici (DEMO Reference)", expanded=False):
+                    st.caption("Argomenti attesi dal dataset sintetico per verifica e test offline.")
+                    for ref_d in ref_discoveries:
+                        for top in ref_d.topics:
+                            st.markdown(f"- **{top.label}**: {top.short_description} (Evidenze attese: `{', '.join(top.evidence_ids)}`)")
 
 
 def render_system_status() -> None:

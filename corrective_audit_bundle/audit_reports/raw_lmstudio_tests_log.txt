@@ -1,0 +1,113 @@
+=== LMSTUDIO_BINDING_LIFECYCLE ===
+Timestamp: 2026-10-10T18:41:39.899902+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest -v --tb=short tests/unit/test_lmstudio_binding_lifecycle.py tests/unit/test_operational_model_management.py tests/unit/test_lmstudio_model_loading.py
+Exit Code: 0
+Execution Duration: 0.00s
+Status: PASSED
+Test Results: passed=87, failed=0, skipped=0, deselected=0
+
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 87 items
+
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_binding_registered_and_unload_success PASSED [  1%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_binding_registered_and_unload_failure PASSED [  2%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_two_independent_clients_isolated_bindings PASSED [  3%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_two_different_instances_distinct_bindings PASSED [  4%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_same_instance_id_reused_subsequently PASSED [  5%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_response_missing_or_empty_choices PASSED [  6%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_response_missing_message PASSED [  8%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_malformed_json PASSED [  9%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_wrong_response_model PASSED [ 10%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_unknown_status_rejected PASSED [ 11%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_loading_status PASSED [ 12%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_loaded_valid PASSED [ 13%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_jit_unverified_preserves_unverified PASSED [ 14%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_provisional_binding_promoted_only_after_full_completion PASSED [ 16%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_no_cross_model_contamination PASSED [ 17%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_no_premature_metadata_update_on_failure PASSED [ 18%]
+tests/unit/test_operational_model_management.py::test_01_source_format_whatsapp_export_exists PASSED [ 19%]
+tests/unit/test_operational_model_management.py::test_02_dispatch_returns_whatsapp_export_importer PASSED [ 20%]
+tests/unit/test_operational_model_management.py::test_03_txt_android_parsing PASSED [ 21%]
+tests/unit/test_operational_model_management.py::test_04_txt_ios_parsing PASSED [ 22%]
+tests/unit/test_operational_model_management.py::test_05_multiline_messages_preserved PASSED [ 24%]
+tests/unit/test_operational_model_management.py::test_06_system_messages_identified PASSED [ 25%]
+tests/unit/test_operational_model_management.py::test_07_unicode_and_emojis_preserved PASSED [ 26%]
+tests/unit/test_operational_model_management.py::test_08_url_and_colon_in_sender_or_text PASSED [ 27%]
+tests/unit/test_operational_model_management.py::test_09_zip_transcript_in_memory PASSED [ 28%]
+tests/unit/test_operational_model_management.py::test_10_zip_media_references PASSED [ 29%]
+tests/unit/test_operational_model_management.py::test_11_zip_ambiguous_transcript_rejected PASSED [ 31%]
+tests/unit/test_operational_model_management.py::test_12_zip_path_traversal_protection PASSED [ 32%]
+tests/unit/test_operational_model_management.py::test_13_zip_bomb_protection PASSED [ 33%]
+tests/unit/test_operational_model_management.py::test_14_generic_txt_rejected PASSED [ 34%]
+tests/unit/test_operational_model_management.py::test_15_generic_zip_rejected PASSED [ 35%]
+tests/unit/test_operational_model_management.py::test_16_integration_pipeline_txt_to_search_service PASSED [ 36%]
+tests/unit/test_operational_model_management.py::test_17_streamlit_apptest_whatsapp_export_displayed PASSED [ 37%]
+tests/unit/test_operational_model_management.py::test_18_streamlit_apptest_uploader_accepts_txt_and_zip PASSED [ 39%]
+tests/unit/test_operational_model_management.py::test_19_zero_ai_during_ingestion PASSED [ 40%]
+tests/unit/test_operational_model_management.py::test_20_get_api_v1_models_parsing PASSED [ 41%]
+tests/unit/test_operational_model_management.py::test_21_model_already_loaded_skips_post_load PASSED [ 42%]
+tests/unit/test_operational_model_management.py::test_22_to_28_model_unloaded_sends_post_load_with_exact_payload PASSED [ 43%]
+tests/unit/test_operational_model_management.py::test_29_model_absent_raises_controlled_error PASSED [ 44%]
+tests/unit/test_operational_model_management.py::test_30_ambiguous_models_raises_controlled_error PASSED [ 45%]
+tests/unit/test_operational_model_management.py::test_31_server_offline_raises_controlled_error PASSED [ 47%]
+tests/unit/test_operational_model_management.py::test_32_http_400_during_load_captured PASSED [ 48%]
+tests/unit/test_operational_model_management.py::test_33_load_timeout_raises_ai_backend_timeout_error PASSED [ 49%]
+tests/unit/test_operational_model_management.py::test_34_inference_timeout_raises_ai_backend_timeout_error PASSED [ 50%]
+tests/unit/test_operational_model_management.py::test_35_model_id_inference_matches_loaded_instance PASSED [ 51%]
+tests/unit/test_operational_model_management.py::test_36_operational_timeout_configuration_is_240s PASSED [ 52%]
+tests/unit/test_operational_model_management.py::test_37_no_automatic_downloads_local_only PASSED [ 54%]
+tests/unit/test_operational_model_management.py::test_38_no_external_endpoints_loopback_only PASSED [ 55%]
+tests/unit/test_operational_model_management.py::test_39_ingestion_continues_zero_ai_invocations PASSED [ 56%]
+tests/unit/test_operational_model_management.py::test_40_no_amd_a8_hardcoded_in_system_status PASSED [ 57%]
+tests/unit/test_operational_model_management.py::test_41_no_hardware_block_in_system_status_page PASSED [ 58%]
+tests/unit/test_operational_model_management.py::test_42_no_rinvio_benchmark_in_system_status_page PASSED [ 59%]
+tests/unit/test_operational_model_management.py::test_43_portable_system_status_contract PASSED [ 60%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_success PASSED [ 62%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_failure_payload_raises_error PASSED [ 63%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_malformed_json_raises_protocol_error PASSED [ 64%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_empty_body_raises_protocol_error PASSED [ 65%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_400_raises_model_load_error PASSED [ 66%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_404_returns_jit_unverified_without_loaded_state PASSED [ 67%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_405_returns_jit_unverified PASSED [ 68%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_500_raises_model_load_error PASSED [ 70%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_timeout_raises_timeout_error PASSED [ 71%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_connection_refused_raises_unavailable_error PASSED [ 72%]
+tests/unit/test_lmstudio_model_loading.py::test_jit_completion_verifies_model_binding PASSED [ 73%]
+tests/unit/test_lmstudio_model_loading.py::test_jit_completion_wrong_model_raises_model_mismatch PASSED [ 74%]
+tests/unit/test_lmstudio_model_loading.py::test_deepseek_and_qwen_strict_separation PASSED [ 75%]
+tests/unit/test_lmstudio_model_loading.py::test_qwen3_and_qwen25_strict_separation PASSED [ 77%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_arbitrary_payload_raises_protocol_error PASSED [ 78%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_still_loading_status_returns_loading_lifecycle PASSED [ 79%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_empty_dict_raises_protocol_error PASSED [ 80%]
+tests/unit/test_lmstudio_model_loading.py::test_ensure_model_loaded_still_loading_raises_error PASSED [ 81%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_generic_status_no_identity_returns_jit_unverified_and_no_last_loaded_model PASSED [ 82%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_wrong_model_key_raises_model_mismatch PASSED [ 83%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_ambiguous_conflicting_instance_id_raises_model_mismatch PASSED [ 85%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_qwen3_identity_when_qwen25_requested_raises_mismatch PASSED [ 86%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_deepseek_identity_when_qwen25_requested_raises_mismatch PASSED [ 87%]
+tests/unit/test_lmstudio_model_loading.py::test_chat_completion_response_model_mismatch_raises_error PASSED [ 88%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_1_http_200_opaque_instance_id_only_is_jit_unverified PASSED [ 89%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_2_http_200_status_loaded_and_opaque_instance_id_is_jit_unverified PASSED [ 90%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_3_http_200_valid_model_key_and_opaque_instance_id_is_loaded PASSED [ 91%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_4_http_200_different_model_raises_mismatch_error PASSED [ 93%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_5_completion_with_opaque_target_and_bound_canonical_response_succeeds PASSED [ 94%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_6_completion_with_opaque_target_and_foreign_response_model_raises_mismatch PASSED [ 95%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_7_qwen25_strictly_distinct_from_qwen3 PASSED [ 96%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_8_deepseek_r1_distill_strictly_distinct_from_qwen25 PASSED [ 97%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_9_jit_unverified_never_falsely_confirms_loaded PASSED [ 98%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_10_no_premature_update_of_last_loaded_model PASSED [100%]
+
+============================= 87 passed in 8.90s ==============================
+
+
+--- STDERR ---
+(empty)

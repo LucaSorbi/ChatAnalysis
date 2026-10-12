@@ -57,10 +57,29 @@ from multimodal.vision import (
     FakeImageVisionAnalyzer,
     VisionBackendError,
     VisionBackendUnavailableError,
-    VisionModelLoadError,
+)
+from multimodal.asset_access import (
+    MediaAccessError,
+    MediaArchiveSecurityError,
+    MediaAssetAccessService,
+    MediaAssetRegistry,
+    MediaBackendUnavailableError,
+    MediaMemberNotFoundError,
+    MediaProcessingStatus,
+    MediaSourceUnavailableError,
+    validate_zip_member_security,
 )
 
 __all__ = [
+    "MediaAccessError",
+    "MediaArchiveSecurityError",
+    "MediaAssetAccessService",
+    "MediaAssetRegistry",
+    "MediaBackendUnavailableError",
+    "MediaMemberNotFoundError",
+    "MediaProcessingStatus",
+    "MediaSourceUnavailableError",
+    "validate_zip_member_security",
     "MediaKind",
     "MediaResolutionStatus",
     "ResolvedMediaAsset",

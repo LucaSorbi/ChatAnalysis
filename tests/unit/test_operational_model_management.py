@@ -105,7 +105,6 @@ from ui.application import (
     execute_manual_topic_detection,
     execute_real_ingestion,
     get_system_status_info,
-    prepare_operational_model,
 )
 from ui.demo import build_synthetic_demo_dataset
 from ui.ingestion import get_importer_for_format
@@ -669,6 +668,11 @@ def test_35_model_id_inference_matches_loaded_instance(monkeypatch: pytest.Monke
 
     res = execute_manual_topic_detection(document=doc, topic=topic, client=client, timeout_seconds=240.0)
     assert res.metadata["model"] == "real-instance-uuid-42"
+    assert res.metadata["requested_model"] == "qwen2.5-7b-instruct"
+    assert res.metadata["resolved_model_key"] == "qwen2.5-7b-instruct"
+    assert res.metadata["loaded_instance_id"] == "real-instance-uuid-42"
+    assert res.metadata["api_identifier"] == "real-instance-uuid-42"
+    assert res.metadata["response_model"] == "real-instance-uuid-42"
     assert captured_chat_model[0] == "real-instance-uuid-42"
 
 

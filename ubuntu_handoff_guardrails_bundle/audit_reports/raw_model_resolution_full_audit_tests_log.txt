@@ -1,0 +1,95 @@
+=== MODEL_RESOLUTION_FULL_AUDIT_TESTS ===
+Timestamp: 2026-10-11T19:27:04.017265+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest tests/unit/test_model_resolution_audit.py
+Exit Code: 0 (Expected: 0)
+Execution Duration: 4.88s
+Status: PASSED
+Test Results: passed=73, failed=0, skipped=0, deselected=0
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 73 items
+
+tests/unit/test_model_resolution_audit.py::test_model_resolution_strict_family_isolation PASSED [  1%]
+tests/unit/test_model_resolution_audit.py::test_qwen3_never_resolved_as_qwen25 PASSED [  2%]
+tests/unit/test_model_resolution_audit.py::test_deepseek_never_resolved_as_qwen25 PASSED [  4%]
+tests/unit/test_model_resolution_audit.py::test_preferred_quantization_q4_k_m PASSED [  5%]
+tests/unit/test_model_resolution_audit.py::test_ambiguity_detection_without_preferred_quant PASSED [  6%]
+tests/unit/test_model_resolution_audit.py::test_model_equivalence_and_mismatch PASSED [  8%]
+tests/unit/test_model_resolution_audit.py::test_jit_fallback_404_returns_jit_unverified_and_not_loaded PASSED [  9%]
+tests/unit/test_model_resolution_audit.py::test_is_model_loaded_propagates_real_errors PASSED [ 10%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_loaded_instance_at_4096 PASSED [ 12%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_loaded_instance_at_8192 PASSED [ 13%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_max_32768_with_loaded_4096 PASSED [ 15%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_instance_context_absent PASSED [ 16%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_installed_but_unloaded PASSED [ 17%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_configured_8192_backend_4096 PASSED [ 19%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_loader_confirms_8192 PASSED [ 20%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_incoherent_metadata PASSED [ 21%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_absence_of_verifiable_info PASSED [ 23%]
+tests/unit/test_model_resolution_audit.py::test_context_resolution_audit_reproduction_matrix PASSED [ 24%]
+tests/unit/test_model_resolution_audit.py::test_official_rest_payload_config_context_8192 PASSED [ 26%]
+tests/unit/test_model_resolution_audit.py::test_official_rest_payload_config_context_4096 PASSED [ 27%]
+tests/unit/test_model_resolution_audit.py::test_official_rest_payload_max_32768_and_instance_4096 PASSED [ 28%]
+tests/unit/test_model_resolution_audit.py::test_official_rest_payload_instance_without_context_config PASSED [ 30%]
+tests/unit/test_model_resolution_audit.py::test_two_instances_same_model_different_contexts_and_selection PASSED [ 31%]
+tests/unit/test_model_resolution_audit.py::test_official_rest_payload_incoherent_nested_metadata PASSED [ 32%]
+tests/unit/test_model_resolution_audit.py::test_official_rest_payload_installed_not_loaded PASSED [ 34%]
+tests/unit/test_model_resolution_audit.py::test_official_rest_payload_unverifiable_context PASSED [ 35%]
+tests/unit/test_model_resolution_audit.py::test_quantization_q4_k_m_verified_independently PASSED [ 36%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_1_single_instance_correct_target PASSED [ 38%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_2_two_instances_target_first PASSED [ 39%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_3_two_instances_target_second PASSED [ 41%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_4_nonexistent_target_raises_not_installed PASSED [ 42%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_5_target_belonging_to_different_model_raises_mismatch PASSED [ 43%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_6_target_with_context_4096_when_8192_required PASSED [ 45%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_7_target_with_context_8192_correct PASSED [ 46%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_8_no_target_single_instance PASSED [ 47%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_9_no_target_multiple_compatible_instances_raises_ambiguous PASSED [ 49%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_10_no_instance_loaded PASSED [ 50%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_11_incomplete_metadata PASSED [ 52%]
+tests/unit/test_model_resolution_audit.py::test_blocker1_12_no_binding_created_for_nonexistent_target PASSED [ 53%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_1_quantization_object_with_name PASSED [ 54%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_2_quantization_string PASSED [ 56%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_3_quantization_null PASSED [ 57%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_4_quantization_object_without_name PASSED [ 58%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_5_q4_k_m_loaded PASSED [ 60%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_6_q4_k_m_installed_not_loaded PASSED [ 61%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_7_q8_0_loaded_and_q4_k_m_installed PASSED [ 63%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_8_q8_0_only_available PASSED [ 64%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_9_multiple_q4_k_m_unambiguous PASSED [ 65%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_10_incoherent_quantization_metadata PASSED [ 67%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_11_context_8192_correct_wrong_quantization PASSED [ 68%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_12_correct_quantization_context_4096 PASSED [ 69%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_13_model_key_correct_instance_id_mismatch PASSED [ 71%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_14_smoke_rejects_q8_0_when_q4_k_m_mandatory PASSED [ 72%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_q4_k_m_requested_and_available_accepted PASSED [ 73%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_q4_k_m_requested_and_loaded_accepted PASSED [ 75%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_q4_k_m_requested_only_q8_0_rejected PASSED [ 76%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_allow_fallback_false_with_q8_0_rejected PASSED [ 78%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_allow_fallback_true_with_q8_0_tracked PASSED [ 79%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_target_instance_q8_0_with_required_q4_k_m_rejected PASSED [ 80%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_target_instance_q4_k_m_accepted PASSED [ 82%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_q4_k_m_unloaded_preferred_over_loaded_q8_0 PASSED [ 83%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_unknown_quantization_in_strict_mode PASSED [ 84%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_no_spurious_binding_after_quantization_mismatch PASSED [ 86%]
+tests/unit/test_model_resolution_audit.py::test_strict_quant_no_regression_family_identities_qwen_llama_deepseek PASSED [ 87%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_official_quantization_object_q4_k_m_pass PASSED [ 89%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_official_quantization_string_q4_k_m_pass PASSED [ 90%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_quantization_missing_q4_k_m_in_name_not_verified_scientific PASSED [ 91%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_quantization_unknown_not_verified PASSED [ 93%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_quantization_q8_0_declared_q4_k_m_in_name_failed PASSED [ 94%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_model_key_correct_instance_id_belonging_to_another_model_failed PASSED [ 95%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_model_key_correct_quantization_incompatible_failed PASSED [ 97%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_source_model_key_inferred_cannot_certify_q4_k_m PASSED [ 98%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_verifiable_alternative_source_pass_with_recorded_evidence PASSED [100%]
+
+============================= 73 passed in 1.82s ==============================
+============================================================

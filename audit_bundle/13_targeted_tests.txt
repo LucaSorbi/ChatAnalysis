@@ -1,0 +1,184 @@
+============================================================
+AUDIT TEST MIRATI (TARGETED TESTS)
+============================================================
+
+TEST TARGET: tests/unit/test_ui_manual_topic_detection.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 12 items
+
+tests\unit\test_ui_manual_topic_detection.py ............                [100%]
+
+============================= 12 passed in 4.89s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_operational_model_management.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 37 items
+
+tests\unit\test_operational_model_management.py ........................ [ 64%]
+.............                                                            [100%]
+
+============================= 37 passed in 10.33s =============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_ai_lmstudio.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 31 items
+
+tests\unit\test_ai_lmstudio.py ...............................           [100%]
+
+============================= 31 passed in 6.44s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_whatsapp_export_importer.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 41 items
+
+tests\unit\test_whatsapp_export_importer.py ............................ [ 68%]
+.............                                                            [100%]
+
+============================= 41 passed in 2.08s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_whatsapp_msgstore_importer.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 56 items
+
+tests\unit\test_whatsapp_msgstore_importer.py .......................... [ 46%]
+..............................                                           [100%]
+
+============================= 56 passed in 5.27s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_whatsapp_wa_importer.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 51 items
+
+tests\unit\test_whatsapp_wa_importer.py ................................ [ 62%]
+...................                                                      [100%]
+
+============================= 51 passed in 2.83s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_ui_application.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 14 items
+
+tests\unit\test_ui_application.py ..............                         [100%]
+
+============================= 14 passed in 0.76s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_ui_smoke.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 13 items
+
+tests\unit\test_ui_smoke.py .............                                [100%]
+
+============================= 13 passed in 15.49s =============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/unit/test_ui_state.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 6 items
+
+tests\unit\test_ui_state.py ......                                       [100%]
+
+============================== 6 passed in 2.71s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/integration/test_real_ingestion.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 10 items
+
+tests\integration\test_real_ingestion.py ..........                      [100%]
+
+============================= 10 passed in 2.06s ==============================
+
+------------------------------------------------------------
+
+TEST TARGET: tests/integration/test_full_pipeline_e2e.py
+EXIT CODE: 0
+OUTPUT:
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collected 20 items
+
+tests\integration\test_full_pipeline_e2e.py ....................         [100%]
+
+============================= 20 passed in 11.24s =============================
+
+------------------------------------------------------------
+

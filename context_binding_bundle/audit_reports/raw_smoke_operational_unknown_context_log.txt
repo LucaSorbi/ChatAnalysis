@@ -1,0 +1,23 @@
+=== SMOKE_OPERATIONAL_UNKNOWN_CONTEXT_NEGATIVE ===
+Timestamp: 2026-10-11T14:28:28.908356+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe scripts/smoke_operational_ai.py --fake --fake-mode unknown_context
+Exit Code: 2 (Expected: 2)
+Execution Duration: 2.11s
+Status: PASSED
+
+--- STDOUT ---
+===========================================================================
+SMOKE TEST OPERATIVO AI � CHATANALYSIS RELEASE GATE (UBUNTU READY)
+===========================================================================
+[MODE] Utilizzo FakeSmokeClient deterministico per diagnostica ambiente CI/Mock.
+
+ARRESTO PRELIMINARE SMOKE TEST: Prerequisiti di modello o contesto non soddisfatti:
+  - [NOT_VERIFIED] CHECK_CONFIRMED_CONTEXT_LENGTH: Context length non verificabile nell'ambiente (UNKNOWN) (Context length unverified)
+ESITO SMOKE TEST OPERATIVO: NOT_VERIFIED
+
+
+--- STDERR ---
+(empty)

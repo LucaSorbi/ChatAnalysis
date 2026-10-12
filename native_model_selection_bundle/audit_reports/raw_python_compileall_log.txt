@@ -1,0 +1,12 @@
+=== PYTHON_COMPILEALL ===
+Timestamp: 2026-10-11T16:40:48.656365+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m compileall -q ai analysis core entity_resolution importer multimodal normalization profiler search ui unified validation scripts
+Exit Code: 0 (Expected: 0)
+Execution Duration: 2.45s
+Status: PASSED
+--- STDOUT ---
+
+============================================================

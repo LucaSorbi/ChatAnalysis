@@ -24,6 +24,7 @@ from ai.models import (
     TopicDiscoveryResult,
     TopicQuery,
 )
+from analysis.models import AnalysisOrigin
 from importer.models import RawRecord
 from multimodal.evidence import EvidenceSourceType, MessageEvidenceBundle
 from multimodal.models import (
@@ -286,7 +287,11 @@ def build_synthetic_demo_dataset() -> tuple[
         bundles=(bundle1, bundle2, bundle3, bundle4, bundle5, bundle6, bundle7, bundle8),
         chat_id="chat::synthetic_investigation",
         source_name=source_name,
-        metadata={"environment": "demo_synthetic", "case_reference": "CASO-TEST-2026-01"},
+        metadata={
+            "environment": "demo_synthetic",
+            "case_reference": "CASO-TEST-2026-01",
+            "data_classification": "SYNTHETIC_DEMO",
+        },
     )
 
     # Costruzione TopicDetectionResult (PRESENT, ABSENT, UNCERTAIN)
@@ -341,7 +346,11 @@ def build_synthetic_demo_dataset() -> tuple[
             ),
         ),
         provenance_document_id=doc_id,
-        metadata={"engine": "synthetic-discovery-pilot"},
+        metadata={
+            "engine": "synthetic-discovery-pilot",
+            "run_id": "run::discovery::demo_synthetic_run_01",
+            "origin": AnalysisOrigin.SYNTHETIC_REFERENCE.value,
+        },
     )
 
     return doc, (t_present, t_absent, t_uncertain), (discovery,)

@@ -1,0 +1,24 @@
+=== WHEEL_BUILD ===
+Timestamp: 2026-10-11T19:31:04.459497+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pip wheel . --no-deps -w C:\Users\lucas\Desktop\Tesi\dist
+Exit Code: 0 (Expected: 0)
+Execution Duration: 29.56s
+Status: PASSED
+--- STDOUT ---
+Processing .\.
+  Installing build dependencies: started
+  Installing build dependencies: finished with status 'done'
+  Getting requirements to build wheel: started
+  Getting requirements to build wheel: finished with status 'done'
+  Preparing metadata (pyproject.toml): started
+  Preparing metadata (pyproject.toml): finished with status 'done'
+Building wheels for collected packages: whatsapp-forensic-importer
+  Building wheel for whatsapp-forensic-importer (pyproject.toml): started
+  Building wheel for whatsapp-forensic-importer (pyproject.toml): finished with status 'done'
+  Created wheel for whatsapp-forensic-importer: filename=whatsapp_forensic_importer-0.1.0-py3-none-any.whl size=276487 sha256=db092422de96471edb88a926472ab118f5a5ff92801acb54e03b63df0cfa1a5b
+  Stored in directory: C:\Users\lucas\AppData\Local\Temp\pip-ephem-wheel-cache-235fogwu\wheels\93\e0\0c\60533c847c4de5cc7d5b612c5b3e830e63e65f4b958dbdf065
+Successfully built whatsapp-forensic-importer
+============================================================

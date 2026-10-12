@@ -1,0 +1,27 @@
+=== SMOKE_OPERATIONAL_LMSTUDIO_UNREACHABLE_NEGATIVE ===
+Timestamp: 2026-10-11T14:28:39.858545+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe scripts/smoke_operational_ai.py --model unreachable_probe_model
+Exit Code: 2 (Expected: 2)
+Execution Duration: 3.52s
+Status: PASSED
+
+--- STDOUT ---
+===========================================================================
+SMOKE TEST OPERATIVO AI � CHATANALYSIS RELEASE GATE (UBUNTU READY)
+===========================================================================
+[MODE] Connessione a LM Studio locale su http://127.0.0.1:1234 (Richiesto: unreachable_probe_model)
+
+LIVE LM STUDIO: NOT EXECUTED (NOT_VERIFIED)
+Motivo: server LM Studio non raggiungibile su http://127.0.0.1:1234.
+Prerequisiti per l'ambiente live (PC Ubuntu):
+  1. Avviare LM Studio.
+  2. Attivare il Server Locale (porta 1234, loopback 127.0.0.1).
+  3. Verificare installazione e caricamento del modello 'unreachable_probe_model'.
+  4. Impostare Context Length esplicita: 8192.
+
+
+--- STDERR ---
+(empty)

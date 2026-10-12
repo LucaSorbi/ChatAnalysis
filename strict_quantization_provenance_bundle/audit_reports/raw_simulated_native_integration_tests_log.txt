@@ -1,0 +1,25 @@
+=== SIMULATED_NATIVE_INTEGRATION_TESTS ===
+Timestamp: 2026-10-11T19:03:15.415378+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest tests/unit/test_lmstudio_native_integration.py
+Exit Code: 0 (Expected: 0)
+Execution Duration: 5.18s
+Status: PASSED
+Test Results: passed=3, failed=0, skipped=0, deselected=0
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 3 items
+
+tests/unit/test_lmstudio_native_integration.py::test_full_simulated_native_integration_sequence PASSED [ 33%]
+tests/unit/test_lmstudio_native_integration.py::test_simulated_native_integration_negative_nonexistent_instance PASSED [ 66%]
+tests/unit/test_lmstudio_native_integration.py::test_simulated_native_integration_negative_wrong_quantization PASSED [100%]
+
+============================== 3 passed in 1.31s ==============================
+============================================================

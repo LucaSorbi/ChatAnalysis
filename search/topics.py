@@ -164,6 +164,20 @@ class TopicSearchEngine:
             # Risoluzione evidence_ids in modalità strict
             matched_sections = self._resolve_sections(det.evidence_ids)
 
+            det_meta = {
+                "rationale": det.rationale,
+                "provenance_document_id": det.provenance_document_id,
+                "model": det.metadata.get("model"),
+                "requested_model": det.metadata.get("requested_model"),
+                "latency_seconds": det.metadata.get("latency_seconds"),
+                "prompt_version": det.metadata.get("prompt_version"),
+                "strategy": det.metadata.get("strategy"),
+                "run_id": det.metadata.get("run_id"),
+                "origin": det.metadata.get("origin"),
+                "chunk_count": det.metadata.get("chunk_count"),
+                "completed_chunk_count": det.metadata.get("completed_chunk_count"),
+            }
+
             hit = TopicSearchHit(
                 topic_id=det.topic.topic_id,
                 label=det.topic.label,
@@ -173,10 +187,7 @@ class TopicSearchEngine:
                 evidence_ids=det.evidence_ids,
                 matched_sections=matched_sections,
                 raw_result=det,
-                metadata={
-                    "rationale": det.rationale,
-                    "provenance_document_id": det.provenance_document_id,
-                },
+                metadata=det_meta,
             )
             hits.append(hit)
 
@@ -199,6 +210,18 @@ class TopicSearchEngine:
         hits: list[TopicSearchHit] = []
 
         for disc_doc in self._discoveries:
+            disc_meta = {
+                "provenance_document_id": disc_doc.provenance_document_id,
+                "model": disc_doc.metadata.get("model"),
+                "requested_model": disc_doc.metadata.get("requested_model"),
+                "latency_seconds": disc_doc.metadata.get("latency_seconds"),
+                "prompt_version": disc_doc.metadata.get("prompt_version"),
+                "strategy": disc_doc.metadata.get("strategy"),
+                "run_id": disc_doc.metadata.get("run_id"),
+                "origin": disc_doc.metadata.get("origin"),
+                "chunk_count": disc_doc.metadata.get("chunk_count"),
+                "completed_chunk_count": disc_doc.metadata.get("completed_chunk_count"),
+            }
             for topic in disc_doc.topics:
                 # Filtro testuale su label o short_description
                 if norm_query is not None:
@@ -218,7 +241,7 @@ class TopicSearchEngine:
                     evidence_ids=topic.evidence_ids,
                     matched_sections=matched_sections,
                     raw_result=topic,
-                    metadata={"provenance_document_id": disc_doc.provenance_document_id},
+                    metadata=disc_meta,
                 )
                 hits.append(hit)
 

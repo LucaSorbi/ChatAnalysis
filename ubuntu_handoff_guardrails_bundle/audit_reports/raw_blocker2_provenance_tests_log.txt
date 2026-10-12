@@ -1,0 +1,45 @@
+=== BLOCKER2_PROVENANCE_TESTS ===
+Timestamp: 2026-10-11T19:26:57.505314+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest tests/unit/test_model_resolution_audit.py -k blocker2
+Exit Code: 0 (Expected: 0)
+Execution Duration: 6.51s
+Status: PASSED
+Test Results: passed=23, failed=0, skipped=0, deselected=50
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 73 items / 50 deselected / 23 selected
+
+tests/unit/test_model_resolution_audit.py::test_blocker2_1_quantization_object_with_name PASSED [  4%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_2_quantization_string PASSED [  8%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_3_quantization_null PASSED [ 13%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_4_quantization_object_without_name PASSED [ 17%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_5_q4_k_m_loaded PASSED [ 21%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_6_q4_k_m_installed_not_loaded PASSED [ 26%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_7_q8_0_loaded_and_q4_k_m_installed PASSED [ 30%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_8_q8_0_only_available PASSED [ 34%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_9_multiple_q4_k_m_unambiguous PASSED [ 39%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_10_incoherent_quantization_metadata PASSED [ 43%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_11_context_8192_correct_wrong_quantization PASSED [ 47%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_12_correct_quantization_context_4096 PASSED [ 52%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_13_model_key_correct_instance_id_mismatch PASSED [ 56%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_14_smoke_rejects_q8_0_when_q4_k_m_mandatory PASSED [ 60%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_official_quantization_object_q4_k_m_pass PASSED [ 65%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_official_quantization_string_q4_k_m_pass PASSED [ 69%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_quantization_missing_q4_k_m_in_name_not_verified_scientific PASSED [ 73%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_quantization_unknown_not_verified PASSED [ 78%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_quantization_q8_0_declared_q4_k_m_in_name_failed PASSED [ 82%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_model_key_correct_instance_id_belonging_to_another_model_failed PASSED [ 86%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_model_key_correct_quantization_incompatible_failed PASSED [ 91%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_source_model_key_inferred_cannot_certify_q4_k_m PASSED [ 95%]
+tests/unit/test_model_resolution_audit.py::test_blocker2_verifiable_alternative_source_pass_with_recorded_evidence PASSED [100%]
+
+====================== 23 passed, 50 deselected in 1.60s ======================
+============================================================

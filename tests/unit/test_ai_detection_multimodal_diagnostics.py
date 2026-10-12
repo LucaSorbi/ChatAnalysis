@@ -525,6 +525,14 @@ def test_mandatory_control_case_demo_dataset():
     assert det_res.metadata["raw_response"] is not None
 
     # Verifica contenuto prompt
+    sent_system = client.call_history[-1]["messages"][0]["content"]
+    assert "The requested topic may be expressed semantically rather than through literal keyword overlap." in sent_system
+    assert "Evaluate the meaning of ALL evidence sources, including:" in sent_system
+    assert "image vision descriptions" in sent_system
+    assert "return PRESENT even when the exact words used in the topic label do not appear literally in the evidence." in sent_system
+    assert "PRESENT still requires at least one valid evidence_id." in sent_system
+    assert "Do not infer beyond the supplied evidence." in sent_system
+
     user_payload = client.call_history[-1]["messages"][1]["content"]
     assert "msg::5::VISION_DESCRIPTION" in user_payload
     assert "magazzino industriale" in user_payload

@@ -129,13 +129,20 @@ _SYSTEM_PHRASES = (
     "appel manqué",
 )
 
-# Regex per estrazione del nome file allegato nel testo del messaggio
-_ATTACHMENT_RE = re.compile(
-    r"(?:<allegato:\s*|<attached:\s*)(?P<fn1>[^>]+)>|"
-    r"(?P<fn2>[^\r\n:]+?)\s*\((?:file allegato|file attached|archivo adjunto|fichier attaché)\)|"
-    r"\b(?P<fn3>[a-zA-Z0-9_\-.]+\.(?:jpg|jpeg|png|webp|gif|opus|mp3|wav|ogg|m4a|aac|mp4|3gp|mov|pdf|docx?|xlsx?|txt|vcf))\b",
+# Regex per estrazione del nome file allegato nel testo del messaggio (ottimizzati con guardie veloci)
+_ATTACHMENT_TAG_RE = re.compile(
+    r"(?:<allegato:\s*|<attached:\s*)(?P<fn>[^>]+)>",
     re.IGNORECASE,
 )
+_ATTACHMENT_PAREN_RE = re.compile(
+    r"(?P<fn>[^\r\n:]+?)\s*\((?:file allegato|file attached|archivo adjunto|fichier attaché)\)",
+    re.IGNORECASE,
+)
+_ATTACHMENT_EXT_RE = re.compile(
+    r"\b(?P<fn>[a-zA-Z0-9_\-.]+\.(?:jpg|jpeg|png|webp|gif|opus|mp3|wav|ogg|m4a|aac|mp4|3gp|mov|pdf|docx?|xlsx?|txt|vcf))\b",
+    re.IGNORECASE,
+)
+_ATTACHMENT_PAREN_KEYWORDS = ("allegato", "attached", "adjunto", "attaché")
 
 
 def _strip_invisible(s: str) -> str:
@@ -164,7 +171,8 @@ def _detect_and_decode_text(raw_bytes: bytes) -> tuple[str, str]:
 
         results = from_bytes(raw_bytes)
         best = results.best()
-        if best and best.encoding:
+        # Criterio documentato: accettare fallback soltanto con bassa caoticità (<= 0.15)
+        if best and best.encoding and getattr(best, "chaos", 1.0) <= 0.15:
             return str(best), best.encoding
     except Exception:
         pass
@@ -175,8 +183,9 @@ def _detect_and_decode_text(raw_bytes: bytes) -> tuple[str, str]:
 def _validate_zip_archive(zf: zipfile.ZipFile) -> None:
     """
     Esegue controlli di sicurezza rigorosi su un archivio ZIP:
-    - Path traversal ('..')
-    - Percorsi assoluti
+    - Path traversal ('..', '..\', '../', etc.) cross-platform
+    - Percorsi assoluti (POSIX e Windows con drive letter)
+    - UNC path (\\ o //)
     - Symlink pericolosi
     - Limite numero membri
     - Limite dimensione decompressa totale e per file (ZIP bomb)
@@ -191,13 +200,24 @@ def _validate_zip_archive(zf: zipfile.ZipFile) -> None:
     for info in infolist:
         name = info.filename
 
-        # Verifica path assoluti
-        if os.path.isabs(name) or name.startswith(("/", "\\")) or (len(name) > 1 and name[1] == ":"):
+        # Normalizzazione cross-platform di separatori per il controllo di traversal
+        norm_name = name.replace("\\", "/")
+
+        # Verifica percorsi assoluti POSIX, Windows e UNC
+        if (
+            norm_name.startswith("/")
+            or name.startswith(("\\\\", "//"))
+            or (len(name) >= 2 and name[1] == ":" and name[0].isalpha())
+            or os.path.isabs(name)
+            or os.path.isabs(norm_name)
+        ):
             raise ValueError(f"Membro ZIP con percorso assoluto non consentito: {name}")
 
-        # Verifica path traversal
-        norm_parts = Path(name).parts
-        if ".." in norm_parts or any(p in ("..", "~") for p in norm_parts):
+        # Verifica path traversal ('..' o '~') su componenti normalizzati
+        parts = [p for p in norm_name.split("/") if p]
+        if ".." in parts or any(p in ("..", "~") or ".." in p for p in parts):
+            raise ValueError(f"Membro ZIP con path traversal ('..') non consentito: {name}")
+        if "../" in norm_name or "/.." in norm_name or norm_name == "..":
             raise ValueError(f"Membro ZIP con path traversal ('..') non consentito: {name}")
 
         # Verifica symlink (attributi POSIX in zip)
@@ -299,6 +319,39 @@ def _find_unique_transcript(zf: zipfile.ZipFile) -> zipfile.ZipInfo:
     return candidates[0]
 
 
+def _extract_attachment_name(text_content: str) -> str | None:
+    """
+    Estrae il nome del file allegato dal testo del messaggio in modo ottimizzato e deterministico,
+    evitando scansioni a ritroso (backtracking) su messaggi ordinari privi di allegati.
+    """
+    if not text_content:
+        return None
+    # 1. Sintassi a tag esplicito: <allegato: file.ext> o <attached: file.ext>
+    if "<" in text_content:
+        m = _ATTACHMENT_TAG_RE.search(text_content)
+        if m:
+            clean = _strip_invisible(m.group("fn")).strip()
+            if clean:
+                return clean
+    # 2. Sintassi tra parentesi: file.ext (file allegato / file attached / ...)
+    if "(" in text_content:
+        lower = text_content.lower()
+        if any(kw in lower for kw in _ATTACHMENT_PAREN_KEYWORDS):
+            m = _ATTACHMENT_PAREN_RE.search(text_content)
+            if m:
+                clean = _strip_invisible(m.group("fn")).strip()
+                if clean:
+                    return clean
+    # 3. Nome file diretto con estensione multimediale/documentale riconosciuta
+    if "." in text_content:
+        m = _ATTACHMENT_EXT_RE.search(text_content)
+        if m:
+            clean = _strip_invisible(m.group("fn")).strip()
+            if clean:
+                return clean
+    return None
+
+
 class WhatsAppExportImporter(BaseImporter):
     """
     Importer per esportazioni chat di WhatsApp in formato TXT o archivio ZIP.
@@ -350,7 +403,11 @@ class WhatsAppExportImporter(BaseImporter):
     def import_records(self, source_path: Path) -> Iterator[RawRecord]:
         """
         Legge il transcript WhatsApp (da TXT o da ZIP) e produce RawRecord in streaming.
+        Utilizza un lettore incrementale line-by-line per supportare file grandi (>200 MB / 2 GB)
+        senza caricare l'intero transcript in memoria.
         """
+        import io
+
         self.validate_source(source_path)
 
         is_archive = zipfile.is_zipfile(source_path)
@@ -361,21 +418,67 @@ class WhatsAppExportImporter(BaseImporter):
                 _validate_zip_archive(zf)
                 transcript_info = _find_unique_transcript(zf)
                 transcript_name = transcript_info.filename
-                raw_bytes = zf.read(transcript_info)
+
+                # Campionamento iniziale sicuro per rilevare l'encoding senza bufferizzare l'intero file
+                with zf.open(transcript_info, "r") as sample_fp:
+                    header_bytes = sample_fp.read(65536)
+                _, encoding = _detect_and_decode_text(header_bytes)
 
                 # Mappa dei file allegati presenti nell'archivio (escludendo il transcript stesso)
                 for info in zf.infolist():
                     if not info.is_dir() and info.filename != transcript_name:
-                        # Mappa sia il percorso relativo completo che il solo nome file
                         archive_members_by_name[info.filename] = info
                         archive_members_by_name[Path(info.filename).name] = info
+
+                # Lettura streaming line-by-line del transcript ZIP
+                try:
+                    with zf.open(transcript_info, "r") as raw_stream:
+                        with io.TextIOWrapper(raw_stream, encoding=encoding, errors="strict") as text_stream:
+                            yield from self._parse_lines_stream(
+                                source_path=source_path,
+                                lines_iterator=text_stream,
+                                encoding=encoding,
+                                is_archive=True,
+                                transcript_name=transcript_name,
+                                archive_members=archive_members_by_name,
+                            )
+                except UnicodeDecodeError as exc:
+                    raise ValueError(
+                        f"Errore di decodifica forense nel transcript ZIP con encoding '{encoding}': {exc}"
+                    ) from exc
         else:
             transcript_name = source_path.name
-            raw_bytes = source_path.read_bytes()
+            with open(source_path, "rb") as sample_fp:
+                header_bytes = sample_fp.read(65536)
+            _, encoding = _detect_and_decode_text(header_bytes)
 
-        decoded_text, encoding = _detect_and_decode_text(raw_bytes)
+            try:
+                with open(source_path, "r", encoding=encoding, errors="strict") as text_stream:
+                    yield from self._parse_lines_stream(
+                        source_path=source_path,
+                        lines_iterator=text_stream,
+                        encoding=encoding,
+                        is_archive=False,
+                        transcript_name=transcript_name,
+                        archive_members={},
+                    )
+            except UnicodeDecodeError as exc:
+                raise ValueError(
+                    f"Errore di decodifica forense nel transcript TXT con encoding '{encoding}': {exc}"
+                ) from exc
 
-        lines = decoded_text.splitlines()
+    def _parse_lines_stream(
+        self,
+        source_path: Path,
+        lines_iterator: Iterable[str],
+        encoding: str,
+        is_archive: bool,
+        transcript_name: str,
+        archive_members: dict[str, zipfile.ZipInfo],
+    ) -> Iterator[RawRecord]:
+        """
+        Scansiona un iteratore di righe ed emette RawRecord preservando i messaggi multilinea.
+        """
         msg_idx = 0
 
         # Buffer per il messaggio corrente (per gestire messaggi multilinea)
@@ -387,7 +490,8 @@ class WhatsAppExportImporter(BaseImporter):
         cur_line_start: int = 0
         cur_line_end: int = 0
 
-        for line_idx, line in enumerate(lines, start=1):
+        for line_idx, raw_line in enumerate(lines_iterator, start=1):
+            line = raw_line.rstrip("\r\n")
             matched = _match_header_line(line)
 
             if matched is not None:
@@ -407,7 +511,7 @@ class WhatsAppExportImporter(BaseImporter):
                         encoding=encoding,
                         is_archive=is_archive,
                         transcript_name=transcript_name,
-                        archive_members=archive_members_by_name,
+                        archive_members=archive_members,
                     )
 
                 # Inizializza il nuovo messaggio
@@ -444,7 +548,7 @@ class WhatsAppExportImporter(BaseImporter):
                 encoding=encoding,
                 is_archive=is_archive,
                 transcript_name=transcript_name,
-                archive_members=archive_members_by_name,
+                archive_members=archive_members,
             )
 
     def _parse_sender_and_body(self, remainder: str) -> tuple[str | None, str, bool]:
@@ -497,14 +601,7 @@ class WhatsAppExportImporter(BaseImporter):
         text_content = "\n".join(body_lines)
 
         # Ricerca eventuale allegato
-        attachment_name: str | None = None
-        matched_att = _ATTACHMENT_RE.search(text_content)
-        if matched_att:
-            raw_fn = matched_att.group("fn1") or matched_att.group("fn2") or matched_att.group("fn3")
-            if raw_fn:
-                clean_fn = _strip_invisible(raw_fn).strip()
-                if clean_fn:
-                    attachment_name = clean_fn
+        attachment_name = _extract_attachment_name(text_content)
 
         # Riconoscimento media reference con membro ZIP
         media_reference: str | None = None

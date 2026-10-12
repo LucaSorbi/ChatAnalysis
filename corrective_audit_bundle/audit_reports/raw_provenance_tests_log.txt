@@ -1,0 +1,78 @@
+=== DISCOVERY_PROVENANCE_HARDENING ===
+Timestamp: 2026-10-10T18:41:52.132311+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest -v --tb=short tests/unit/test_discovery_provenance_hardening.py tests/unit/test_discovery_provenance_service.py tests/unit/test_discovery_detection_invariants.py
+Exit Code: 0
+Execution Duration: 0.00s
+Status: PASSED
+Test Results: passed=52, failed=0, skipped=0, deselected=0
+
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 52 items
+
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_run_produced_by_operational_discovery_is_accepted PASSED [  1%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_synthetic_reference_rejected_from_live_registration_and_verification PASSED [  3%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_forged_external_run_with_live_origin_rejected PASSED [  5%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_mock_discovery_run_explicit_test_interface PASSED [  7%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_unregistered_run_rejected_by_verification PASSED [  9%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_foreign_document_run_rejected PASSED [ 11%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_tampered_topic_rejected PASSED [ 13%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_foreign_evidence_ids_in_topic_rejected PASSED [ 15%]
+tests/unit/test_discovery_provenance_hardening.py::TestDiscoveryProvenanceHardening::test_detection_receives_only_label_and_short_description_no_evidence_ids PASSED [ 17%]
+tests/unit/test_discovery_provenance_service.py::test_discovery_a_document_a_allowed PASSED [ 19%]
+tests/unit/test_discovery_provenance_service.py::test_discovery_a_document_b_rejected PASSED [ 21%]
+tests/unit/test_discovery_provenance_service.py::test_foreign_evidence_id_in_discovered_topic_rejected PASSED [ 23%]
+tests/unit/test_discovery_provenance_service.py::test_foreign_evidence_id_in_detection_result_rejected PASSED [ 25%]
+tests/unit/test_discovery_provenance_service.py::test_missing_discovery_run_rejected PASSED [ 26%]
+tests/unit/test_discovery_provenance_service.py::test_invalid_topic_reference_rejected PASSED [ 28%]
+tests/unit/test_discovery_provenance_service.py::test_multi_conversation_isolation_and_history_preservation PASSED [ 30%]
+tests/unit/test_discovery_provenance_service.py::test_discovery_evidence_ids_not_passed_to_detection PASSED [ 32%]
+tests/unit/test_discovery_provenance_service.py::test_detection_generates_independent_llm_call PASSED [ 34%]
+tests/unit/test_discovery_provenance_service.py::test_consistency_uses_actual_results_matrix[PRESENT-0-CONSISTENT] PASSED [ 36%]
+tests/unit/test_discovery_provenance_service.py::test_consistency_uses_actual_results_matrix[PRESENT-1-PARTIALLY_CONSISTENT] PASSED [ 38%]
+tests/unit/test_discovery_provenance_service.py::test_consistency_uses_actual_results_matrix[ABSENT-None-DISCREPANCY_ABSENT] PASSED [ 40%]
+tests/unit/test_discovery_provenance_service.py::test_consistency_uses_actual_results_matrix[UNCERTAIN-None-DISCREPANCY_UNCERTAIN] PASSED [ 42%]
+tests/unit/test_discovery_provenance_service.py::test_nonexistent_discovery_run_rejected PASSED [ 44%]
+tests/unit/test_discovery_provenance_service.py::test_foreign_document_discovery_run_rejected PASSED [ 46%]
+tests/unit/test_discovery_provenance_service.py::test_foreign_topic_not_in_registered_run_rejected PASSED [ 48%]
+tests/unit/test_discovery_provenance_service.py::test_forged_external_run_cannot_be_implicitly_registered_via_verify PASSED [ 50%]
+tests/unit/test_discovery_provenance_service.py::test_same_label_different_description_rejected PASSED [ 51%]
+tests/unit/test_discovery_provenance_service.py::test_same_label_different_evidence_ids_rejected PASSED [ 53%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_1_demo_loaded_without_live_discovery PASSED [ 55%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_2_live_runs_start_empty PASSED [ 57%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_3_synthetic_references_visible_separately PASSED [ 59%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_4_synthetic_reference_rejected_from_live_registry PASSED [ 61%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_5_live_verification_requires_actual_live_run PASSED [ 63%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_6_nonexistent_run_rejected PASSED [ 65%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_7_foreign_document_run_rejected PASSED [ 67%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_8_tampered_topic_rejected PASSED [ 69%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_9_mock_discovery_correctly_identified_as_mock PASSED [ 71%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_10_lmstudio_discovery_verified_via_new_detection PASSED [ 73%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_11_no_discovery_evidence_ids_passed_to_detection PASSED [ 75%]
+tests/unit/test_discovery_provenance_service.py::test_audit_b3_12_consistency_uses_only_properly_identified_results PASSED [ 76%]
+tests/unit/test_discovery_detection_invariants.py::test_chunk_count_is_strictly_int PASSED [ 78%]
+tests/unit/test_discovery_detection_invariants.py::test_discovery_forwards_max_tokens PASSED [ 80%]
+tests/unit/test_discovery_detection_invariants.py::test_discovery_all_chunks_fail_raises_operational_analysis_failed_error PASSED [ 82%]
+tests/unit/test_discovery_detection_invariants.py::test_discovery_partial_chunk_failure_marked_partial_metadata PASSED [ 84%]
+tests/unit/test_discovery_detection_invariants.py::test_fatal_backend_error_propagates_immediately PASSED [ 86%]
+tests/unit/test_discovery_detection_invariants.py::test_detection_all_chunks_fail_raises_operational_analysis_failed_error PASSED [ 88%]
+tests/unit/test_discovery_detection_invariants.py::test_deterministic_support_ranking_for_max_topics PASSED [ 90%]
+tests/unit/test_discovery_detection_invariants.py::test_normalize_topic_label_nfkc_casefold_punctuation PASSED [ 92%]
+tests/unit/test_discovery_detection_invariants.py::test_document_with_no_analyzable_evidence_raises_error PASSED [ 94%]
+tests/unit/test_discovery_detection_invariants.py::test_discovery_provenance_validation_in_service PASSED [ 96%]
+tests/unit/test_discovery_detection_invariants.py::test_consistency_service_rejects_cross_document PASSED [ 98%]
+tests/unit/test_discovery_detection_invariants.py::test_synthetic_data_classification_gating PASSED [100%]
+
+============================= 52 passed in 3.49s ==============================
+
+
+--- STDERR ---
+(empty)

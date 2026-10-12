@@ -1,0 +1,23 @@
+=== SMOKE_OPERATIONAL_WRONG_MODEL_NEGATIVE ===
+Timestamp: 2026-10-11T15:31:15.141939+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe scripts/smoke_operational_ai.py --fake --fake-mode wrong_model
+Exit Code: 1 (Expected: 1)
+Execution Duration: 1.60s
+Status: PASSED
+
+--- STDOUT ---
+===========================================================================
+SMOKE TEST OPERATIVO AI � CHATANALYSIS RELEASE GATE (UBUNTU READY)
+===========================================================================
+[MODE] Utilizzo FakeSmokeClient deterministico per diagnostica ambiente CI/Mock.
+
+ARRESTO PRELIMINARE SMOKE TEST: Prerequisiti di modello o contesto non soddisfatti:
+  - [FAILED] CHECK_MODEL_RESOLUTION: Modello risolto ('mock-meta-llama-3.1-8b-instruct') incompatibile con il modello richiesto ('qwen2.5-7b-instruct') (Model family conflict)
+ESITO SMOKE TEST OPERATIVO: FALLITO
+
+
+--- STDERR ---
+(empty)

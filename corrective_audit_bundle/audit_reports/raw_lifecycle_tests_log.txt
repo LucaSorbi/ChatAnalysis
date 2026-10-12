@@ -1,0 +1,50 @@
+=== LIFECYCLE_STATE_TESTS ===
+Timestamp: 2026-10-10T18:41:59.032306+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest -v --tb=short tests/unit/test_ui_state.py tests/unit/test_media_processing_lifecycle.py tests/unit/test_media_registry_session_isolation.py
+Exit Code: 0
+Execution Duration: 0.00s
+Status: PASSED
+Test Results: passed=24, failed=0, skipped=0, deselected=0
+
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 24 items
+
+tests/unit/test_ui_state.py::TestUiState::test_init_session_state_defaults PASSED [  4%]
+tests/unit/test_ui_state.py::TestUiState::test_load_and_reset_dataset PASSED [  8%]
+tests/unit/test_ui_state.py::TestUiState::test_selected_evidence_id PASSED [ 12%]
+tests/unit/test_ui_state.py::TestUiState::test_error_message_handling PASSED [ 16%]
+tests/unit/test_ui_state.py::TestUiState::test_real_ingestion_state_multi_conversation PASSED [ 20%]
+tests/unit/test_ui_state.py::TestUiState::test_real_ingestion_auxiliary_only PASSED [ 25%]
+tests/unit/test_ui_state.py::TestUiState::test_multi_conversation_preserves_analysis_results PASSED [ 29%]
+tests/unit/test_ui_state.py::TestUiState::test_failed_ingestion_preserves_previous_dataset PASSED [ 33%]
+tests/unit/test_media_processing_lifecycle.py::test_ocr_success_leads_to_complete_status PASSED [ 37%]
+tests/unit/test_media_processing_lifecycle.py::test_ocr_unavailable_leads_to_failed_status PASSED [ 41%]
+tests/unit/test_media_processing_lifecycle.py::test_mixed_media_one_success_one_fail_leads_to_partial_status PASSED [ 45%]
+tests/unit/test_media_processing_lifecycle.py::test_retry_after_backend_available_reaches_complete_without_duplication PASSED [ 50%]
+tests/unit/test_media_processing_lifecycle.py::test_document_without_media_not_processed PASSED [ 54%]
+tests/unit/test_media_processing_lifecycle.py::test_zip_error_no_fictitious_success PASSED [ 58%]
+tests/unit/test_media_processing_lifecycle.py::test_session_isolation_and_conversation_switching PASSED [ 62%]
+tests/unit/test_media_processing_lifecycle.py::test_no_fake_vision_on_real_data PASSED [ 66%]
+tests/unit/test_media_registry_session_isolation.py::test_session_a_registers_file_session_b_cannot_see_it PASSED [ 70%]
+tests/unit/test_media_registry_session_isolation.py::test_identical_document_ids_in_separate_sessions_no_contamination PASSED [ 75%]
+tests/unit/test_media_registry_session_isolation.py::test_reset_a_only_clears_a_resources PASSED [ 79%]
+tests/unit/test_media_registry_session_isolation.py::test_temp_files_actually_deleted_after_cleanup PASSED [ 83%]
+tests/unit/test_media_registry_session_isolation.py::test_no_global_registry_or_class_methods PASSED [ 87%]
+tests/unit/test_media_registry_session_isolation.py::test_multi_conversation_a_to_b_to_a_in_same_session PASSED [ 91%]
+tests/unit/test_media_registry_session_isolation.py::test_zip_ingestion_preserves_authorized_media_access_after_staging_cleanup PASSED [ 95%]
+tests/unit/test_media_registry_session_isolation.py::test_dataset_replacement_transactional_lifecycle_and_cleanup PASSED [100%]
+
+============================= 24 passed in 3.74s ==============================
+
+
+--- STDERR ---
+(empty)

@@ -307,3 +307,81 @@ class TestSearchTopics:
         assert res.total_hits == 2
         kinds = {h.source_kind for h in res.hits}
         assert kinds == {"TOPIC_DETECTION", "TOPIC_DISCOVERY"}
+
+    def test_search_metadata_preservation(self):
+        """Verifica che Search restituisca e preservi tutti i metadata essenziali (FASE 18, FASE 30)."""
+        sec1 = _make_evidence_section("e1", "Evidenza testo 1")
+        sec2 = _make_evidence_section("e2", "Evidenza testo 2")
+        index = EvidenceIndex([sec1, sec2], document_id="doc::meta")
+
+        t_det = TopicDetectionResult(
+            topic=TopicQuery("T01", "Riciclaggio", "Operazioni finanziarie sospette"),
+            decision=TopicDecision.PRESENT,
+            evidence_ids=("e1",),
+            rationale="Rilevata operazione.",
+            provenance_document_id="doc::meta",
+            metadata={
+                "model": "qwen2.5-7b-instruct",
+                "requested_model": "qwen2.5-7b-instruct",
+                "latency_seconds": 1.45,
+                "prompt_version": "topic_detection_operational_v1",
+                "strategy": "DIRECT_MULTILINGUAL",
+                "run_id": "run_det_999",
+                "origin": "LIVE_LM_STUDIO",
+                "chunk_count": 2,
+                "completed_chunk_count": 2,
+            },
+        )
+        disc = TopicDiscoveryResult(
+            topics=(
+                DiscoveredTopic(
+                    label="Operazioni Bancarie",
+                    short_description="Bonifici esteri",
+                    evidence_ids=("e2",),
+                ),
+            ),
+            provenance_document_id="doc::meta",
+            metadata={
+                "model": "qwen2.5-7b-instruct",
+                "requested_model": "qwen2.5-7b-instruct",
+                "latency_seconds": 2.10,
+                "prompt_version": "topic_discovery_v1",
+                "strategy": "DIRECT_MULTILINGUAL",
+                "run_id": "run_disc_888",
+                "origin": "LIVE_LM_STUDIO",
+                "chunk_count": 2,
+                "completed_chunk_count": 2,
+            },
+        )
+
+        engine = TopicSearchEngine(
+            evidence_index=index,
+            detection_results=[t_det],
+            discovery_results=disc,
+        )
+
+        # Verifica metadata in TopicDetection hit
+        det_res = engine.search_detections(topic_id="T01")
+        assert det_res.total_hits == 1
+        d_hit = det_res.hits[0]
+        assert d_hit.metadata["model"] == "qwen2.5-7b-instruct"
+        assert d_hit.metadata["requested_model"] == "qwen2.5-7b-instruct"
+        assert d_hit.metadata["latency_seconds"] == 1.45
+        assert d_hit.metadata["prompt_version"] == "topic_detection_operational_v1"
+        assert d_hit.metadata["strategy"] == "DIRECT_MULTILINGUAL"
+        assert d_hit.metadata["run_id"] == "run_det_999"
+        assert d_hit.metadata["origin"] == "LIVE_LM_STUDIO"
+        assert d_hit.metadata["chunk_count"] == 2
+        assert d_hit.metadata["completed_chunk_count"] == 2
+
+        # Verifica metadata in TopicDiscovery hit
+        disc_res = engine.search_discoveries(query_text="Bancarie")
+        assert disc_res.total_hits == 1
+        disc_hit = disc_res.hits[0]
+        assert disc_hit.metadata["model"] == "qwen2.5-7b-instruct"
+        assert disc_hit.metadata["latency_seconds"] == 2.10
+        assert disc_hit.metadata["prompt_version"] == "topic_discovery_v1"
+        assert disc_hit.metadata["strategy"] == "DIRECT_MULTILINGUAL"
+        assert disc_hit.metadata["run_id"] == "run_disc_888"
+        assert disc_hit.metadata["origin"] == "LIVE_LM_STUDIO"
+        assert disc_hit.metadata["chunk_count"] == 2

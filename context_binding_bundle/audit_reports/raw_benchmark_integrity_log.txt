@@ -1,0 +1,23 @@
+=== FROZEN_BENCHMARK_INTEGRITY ===
+Timestamp: 2026-10-11T14:33:27.584738+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: git diff HEAD -- ai/experiment.py ai/benchmark.py benchmark
+Exit Code: 0 (Expected: 0)
+Execution Duration: 0.33s
+Status: PASSED
+
+--- STDOUT ---
+Git Diff against HEAD (ai/experiment.py, ai/benchmark.py, benchmark): CLEAN (ZERO DIFF)
+SHA256 ai/experiment.py : 91100c0a84cb4a8b7c2eef34a06cff9ec21aa6e6eec14ffd09ce6fea8bcee845
+SHA256 ai/benchmark.py  : dc57081dbce3463a8017aa26bb4e4a18889af0a3296853fe40968561d6d44d36
+SHA256 run_benchmark.sh : 7f9cae97df2fae1bc3b5964e639b9f80e3ac5a388ec9c3e20305ff64d48044a7
+Bash Syntax Verification (bash -n run_benchmark.sh): PASS
+Git Mode Permissions   : 100755 (EXECUTABLE)
+Line Endings Check      : LF (NO CRLF)
+Explicit Context 8192   : PASS (propagated to experiment.py)
+Frozen Parameters       : Qwen2.5-7B-Instruct, Llama 3.1-8B-Instruct, DeepSeek-R1-Distill-Qwen-7B (Q4_K_M, Context 8192, Timeout 240s, Max tokens 512, Temp 0)
+
+--- STDERR ---
+(empty)

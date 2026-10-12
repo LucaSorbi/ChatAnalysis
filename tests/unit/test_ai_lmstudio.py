@@ -256,7 +256,7 @@ class TestLmStudioClient:
             "choices": [{"message": {"content": "ok"}}],
         }
         self._mock_chat_response(monkeypatch, resp)
-        client = LmStudioClient(model_id="requested-model-id")
+        client = LmStudioClient(model_id="qwen2.5-1.5b-instruct")
         res = client.chat_completion(messages=[{"role": "user", "content": "hi"}])
         assert res.model == "qwen2.5-1.5b-instruct@q4_k_m"
 
@@ -422,17 +422,36 @@ class TestLmStudioClient:
 
         def mock_urlopen(req, timeout):
             calls.append(req.full_url)
-            assert "/api/v1/models/load" in req.full_url
-            assert req.get_method() == "POST"
-            body = json.loads(req.data.decode("utf-8"))
-            assert body["model"] == "qwen2.5-7b-instruct"
-            assert body["context_length"] == 8192
-            assert body["echo_load_config"] is True
-            assert "identifier" not in body
-            assert "contextLength" not in body
-            assert "gpu_offload" not in body
-            assert "gpuOffload" not in body
-            return LoadResp()
+            if "/api/v1/models/load" in req.full_url:
+                assert req.get_method() == "POST"
+                body = json.loads(req.data.decode("utf-8"))
+                assert body["model"] == "qwen2.5-7b-instruct"
+                assert body["context_length"] == 8192
+                assert body["echo_load_config"] is True
+                assert "identifier" not in body
+                assert "contextLength" not in body
+                assert "gpu_offload" not in body
+                assert "gpuOffload" not in body
+                return LoadResp()
+            if "/api/v1/models" in req.full_url:
+                class NativeListResp:
+                    def __init__(self):
+                        self.status = 200
+                    def read(self):
+                        return json.dumps({
+                            "data": [
+                                {
+                                    "key": "qwen2.5-7b-instruct",
+                                    "loaded_instances": [{"id": "qwen2.5-7b-instruct"}]
+                                }
+                            ]
+                        }).encode("utf-8")
+                    def __enter__(self):
+                        return self
+                    def __exit__(self, *args):
+                        pass
+                return NativeListResp()
+            raise ValueError(f"URL imprevisto: {req.full_url}")
 
         monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
         client = LmStudioClient()
@@ -462,7 +481,7 @@ class TestLmStudioClient:
         monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
         client = LmStudioClient()
         res = client.load_model("qwen2.5-7b-instruct")
-        assert res["status"] == "jit_ready"
+        assert res["status"] == "jit_unverified"
 
     def test_load_model_timeout_mapped_to_ai_backend_timeout_error(self, monkeypatch):
         import socket

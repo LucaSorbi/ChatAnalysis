@@ -1,0 +1,64 @@
+=== GIT_DIFF_STAT ===
+Timestamp: 2026-10-11T09:03:15.893817+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: git diff --stat
+Exit Code: 0
+Execution Duration: 0.60s
+Status: PASSED
+
+--- STDOUT ---
+ ai/chunking.py                                     |  91 ++-
+ ai/lmstudio.py                                     | 860 ++++++++++++++++++---
+ ai/topics.py                                       |  53 +-
+ docs/agent-report.md                               |  92 +++
+ entity_resolution/resolver.py                      | 237 +++---
+ importer/whatsapp_export.py                        | 155 +++-
+ multimodal/__init__.py                             |  21 +-
+ pyproject.toml                                     |  24 +-
+ run_benchmark.sh                                   |   2 +-
+ search/topics.py                                   |  33 +-
+ tests/integration/test_full_pipeline_e2e.py        |  21 +-
+ .../test_ai_detection_multimodal_diagnostics.py    |   8 +
+ tests/unit/test_ai_lmstudio.py                     |  45 +-
+ tests/unit/test_large_file_upload.py               |  16 +
+ tests/unit/test_operational_model_management.py    |   6 +-
+ tests/unit/test_search_topics.py                   |  78 ++
+ tests/unit/test_ui_manual_topic_detection.py       | 118 ++-
+ tests/unit/test_ui_smoke.py                        |  13 +-
+ tests/unit/test_ui_state.py                        | 162 +++-
+ ui/application.py                                  | 309 ++++++--
+ ui/demo.py                                         |  13 +-
+ ui/ingestion.py                                    | 342 ++++----
+ ui/models.py                                       |   1 +
+ ui/presentation.py                                 | 356 +++++----
+ ui/state.py                                        | 591 +++++++++++---
+ 25 files changed, 2814 insertions(+), 833 deletions(-)
+
+
+--- STDERR ---
+warning: in the working copy of 'ai/chunking.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ai/lmstudio.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ai/topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/agent-report.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'entity_resolution/resolver.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'importer/whatsapp_export.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'multimodal/__init__.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'pyproject.toml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'search/topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/integration/test_full_pipeline_e2e.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ai_detection_multimodal_diagnostics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ai_lmstudio.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_large_file_upload.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_operational_model_management.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_search_topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_manual_topic_detection.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_smoke.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_state.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/application.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/demo.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/ingestion.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/models.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/presentation.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/state.py', LF will be replaced by CRLF the next time Git touches it

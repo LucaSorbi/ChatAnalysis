@@ -1,0 +1,267 @@
+.gitattributes
+.gitignore
+.streamlit/config.toml
+MANIFEST.in
+README.md
+UBUNTU_FINAL_SMOKE_RUNBOOK.md
+ai/__init__.py
+ai/backend.py
+ai/benchmark.py
+ai/chunking.py
+ai/cloud_experiment.py
+ai/cloud_test.py
+ai/discovery.py
+ai/experiment.py
+ai/hardware.py
+ai/lmstudio.py
+ai/models.py
+ai/serializer.py
+ai/structured.py
+ai/topics.py
+ai/translation.py
+analisi_tecnica.md
+analysis/__init__.py
+analysis/consistency.py
+analysis/models.py
+analysis/service.py
+app.py
+core/__init__.py
+core/config.py
+core/immutability.py
+docs/agent-report.md
+docs/ai-design.md
+docs/cloud-e2e-design.md
+docs/data-analysis.md
+docs/data-mapping.json
+docs/e2e-acceptance.md
+docs/entity-resolution-design.md
+docs/importer-design.md
+docs/lmstudio-benchmark-runbook.md
+docs/multimodal-design.md
+docs/normalization-design.md
+docs/real-ingestion-design.md
+docs/search-design.md
+docs/streamlit-design.md
+docs/unified-model-design.md
+docs/validation-design.md
+docs_analysis_content.txt
+entity_resolution/__init__.py
+entity_resolution/base.py
+entity_resolution/models.py
+entity_resolution/resolver.py
+importer/__init__.py
+importer/base.py
+importer/cellebrite_csv.py
+importer/cellebrite_json.py
+importer/cellebrite_xml.py
+importer/models.py
+importer/whatsapp_export.py
+importer/whatsapp_msgstore.py
+importer/whatsapp_wa.py
+multimodal/__init__.py
+multimodal/asset_access.py
+multimodal/evidence.py
+multimodal/models.py
+multimodal/ocr.py
+multimodal/pipeline.py
+multimodal/resolver.py
+multimodal/transcriber.py
+multimodal/vision.py
+normalization/__init__.py
+normalization/base.py
+normalization/models.py
+normalization/normalizer.py
+normalization/phone.py
+output/.gitkeep
+profiler/__init__.py
+profiler/__main__.py
+profiler/analyzers/__init__.py
+profiler/analyzers/csv_analyzer.py
+profiler/analyzers/file_scanner.py
+profiler/analyzers/json_analyzer.py
+profiler/analyzers/media_analyzer.py
+profiler/analyzers/sqlite_analyzer.py
+profiler/analyzers/text_analyzer.py
+profiler/analyzers/xml_analyzer.py
+profiler/config.py
+profiler/profiler.py
+profiler/report_writer.py
+pyproject.toml
+run_benchmark.sh
+scripts/__init__.py
+scripts/benchmark_large_ingestion.py
+scripts/sanitize_synthetic_dataset.py
+scripts/smoke_operational_ai.py
+search/__init__.py
+search/engine.py
+search/index.py
+search/models.py
+search/normalization.py
+search/service.py
+search/topics.py
+search/views.py
+test_data/README.md
+test_data/cellebrite_export/messages.csv
+test_data/cellebrite_export/messages.json
+test_data/cellebrite_export/report.xml
+test_data/cloud_e2e/ground_truth.json
+test_data/cloud_e2e/messages.json
+test_data/fixtures/lmstudio/get_models_multi_instance.json
+test_data/fixtures/lmstudio/get_models_official_qwen.json
+test_data/fixtures/lmstudio/get_models_unloaded.json
+test_data/fixtures/lmstudio/post_load_official_response.json
+test_data/synthetic_smoke/synthetic_whatsapp_chat.txt
+test_data/synthetic_smoke/synthetic_whatsapp_chat.zip
+test_data/whatsapp_export/WhatsApp Audio/AUD_00000.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00001.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00002.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00003.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00004.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00005.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00006.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00007.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00008.opus
+test_data/whatsapp_export/WhatsApp Audio/AUD_00009.opus
+test_data/whatsapp_export/WhatsApp Images/IMG_00000.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00001.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00002.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00003.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00004.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00005.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00006.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00007.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00008.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00009.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00010.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00011.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00012.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00013.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00014.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00015.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00016.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00017.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00018.jpg
+test_data/whatsapp_export/WhatsApp Images/IMG_00019.jpg
+test_data/whatsapp_export/WhatsApp Video/VID_00000.mp4
+test_data/whatsapp_export/WhatsApp Video/VID_00001.mp4
+test_data/whatsapp_export/WhatsApp Video/VID_00002.mp4
+test_data/whatsapp_export/WhatsApp Video/VID_00003.mp4
+test_data/whatsapp_export/WhatsApp Video/VID_00004.mp4
+test_data/whatsapp_export/msgstore.db
+test_data/whatsapp_export/wa.db
+tests/__init__.py
+tests/fixtures/__init__.py
+tests/fixtures/sample_records.py
+tests/integration/__init__.py
+tests/integration/test_ai_lmstudio_smoke.py
+tests/integration/test_cellebrite_csv_integration.py
+tests/integration/test_cellebrite_json_integration.py
+tests/integration/test_cellebrite_xml_integration.py
+tests/integration/test_cloud_e2e_dataset.py
+tests/integration/test_entity_resolution_integration.py
+tests/integration/test_full_pipeline_e2e.py
+tests/integration/test_multimodal_pipeline_integration.py
+tests/integration/test_normalization_integration.py
+tests/integration/test_ocr_pipeline_integration.py
+tests/integration/test_real_ingestion.py
+tests/integration/test_search_integration.py
+tests/integration/test_unified_pipeline_integration.py
+tests/integration/test_validation_integration.py
+tests/integration/test_whatsapp_msgstore_integration.py
+tests/integration/test_whatsapp_wa_integration.py
+tests/smoke/__init__.py
+tests/smoke/test_whisper_smoke.py
+tests/unit/__init__.py
+tests/unit/test_ai_benchmark.py
+tests/unit/test_ai_chunking.py
+tests/unit/test_ai_cloud_experiment.py
+tests/unit/test_ai_cloud_test.py
+tests/unit/test_ai_detection_multimodal_diagnostics.py
+tests/unit/test_ai_experiment.py
+tests/unit/test_ai_hardware.py
+tests/unit/test_ai_lmstudio.py
+tests/unit/test_ai_models.py
+tests/unit/test_ai_prompt_injection.py
+tests/unit/test_ai_serializer.py
+tests/unit/test_ai_structured.py
+tests/unit/test_ai_topic_detection.py
+tests/unit/test_ai_topic_discovery.py
+tests/unit/test_ai_translation.py
+tests/unit/test_analysis_service.py
+tests/unit/test_apptest_flows.py
+tests/unit/test_architecture_guard.py
+tests/unit/test_audio_transcriber.py
+tests/unit/test_base_importer.py
+tests/unit/test_cellebrite_csv_importer.py
+tests/unit/test_cellebrite_json_importer.py
+tests/unit/test_cellebrite_xml_importer.py
+tests/unit/test_deep_immutability.py
+tests/unit/test_discovery_detection_invariants.py
+tests/unit/test_discovery_provenance_hardening.py
+tests/unit/test_discovery_provenance_service.py
+tests/unit/test_entity_resolution_models.py
+tests/unit/test_entity_resolver.py
+tests/unit/test_image_ocr_models.py
+tests/unit/test_image_text_extractor.py
+tests/unit/test_image_vision.py
+tests/unit/test_large_file_upload.py
+tests/unit/test_large_pipeline_bounded.py
+tests/unit/test_lmstudio_binding_lifecycle.py
+tests/unit/test_lmstudio_model_loading.py
+tests/unit/test_lmstudio_native_integration.py
+tests/unit/test_media_asset_access.py
+tests/unit/test_media_processing_lifecycle.py
+tests/unit/test_media_registry_session_isolation.py
+tests/unit/test_media_resolver.py
+tests/unit/test_model_resolution_audit.py
+tests/unit/test_multimodal_evidence.py
+tests/unit/test_normalization_models.py
+tests/unit/test_normalizer.py
+tests/unit/test_operational_model_management.py
+tests/unit/test_packaging_release.py
+tests/unit/test_phone_canonicalization.py
+tests/unit/test_raw_record.py
+tests/unit/test_sanitize_dataset.py
+tests/unit/test_search_engine.py
+tests/unit/test_search_index.py
+tests/unit/test_search_models.py
+tests/unit/test_search_normalization.py
+tests/unit/test_search_service.py
+tests/unit/test_search_topics.py
+tests/unit/test_search_views.py
+tests/unit/test_smoke.py
+tests/unit/test_smoke_operational_ai.py
+tests/unit/test_staging_and_large_file.py
+tests/unit/test_ui_application.py
+tests/unit/test_ui_demo.py
+tests/unit/test_ui_ingestion.py
+tests/unit/test_ui_manual_topic_detection.py
+tests/unit/test_ui_models.py
+tests/unit/test_ui_privacy_hardening.py
+tests/unit/test_ui_smoke.py
+tests/unit/test_ui_state.py
+tests/unit/test_unified_builder.py
+tests/unit/test_unified_models.py
+tests/unit/test_validation_models.py
+tests/unit/test_validator.py
+tests/unit/test_whatsapp_export_importer.py
+tests/unit/test_whatsapp_msgstore_importer.py
+tests/unit/test_whatsapp_strict_encoding.py
+tests/unit/test_whatsapp_wa_importer.py
+tests/unit/test_zip_security_hardening.py
+ui/__init__.py
+ui/application.py
+ui/demo.py
+ui/ingestion.py
+ui/models.py
+ui/presentation.py
+ui/staging.py
+ui/state.py
+unified/__init__.py
+unified/builder.py
+unified/context.py
+unified/models.py
+validation/__init__.py
+validation/base.py
+validation/models.py
+validation/validator.py

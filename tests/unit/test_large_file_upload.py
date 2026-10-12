@@ -245,6 +245,22 @@ class TestStreamingAndChunking:
                 execute_real_ingestion(req_err)
             assert not created_dirs[-1].exists(), "La directory temporanea non e' stata rimossa dopo l'eccezione!"
 
+    def test_whatsapp_importer_streams_transcript_without_read_bytes(self, tmp_path):
+        """Verifica che WhatsAppExportImporter non effettui read_bytes() dell'intero transcript in RAM."""
+        chat_path = tmp_path / "_chat.txt"
+        chat_path.write_text(
+            "10/05/2024, 10:00 - Alice: Messaggio riga 1\n"
+            "10/05/2024, 10:01 - Bob: Messaggio riga 2\n",
+            encoding="utf-8",
+        )
+
+        importer = WhatsAppExportImporter()
+        with patch.object(Path, "read_bytes", side_effect=AssertionError("read_bytes() non deve essere chiamato per il transcript!")):
+            records = list(importer.import_records(chat_path))
+            assert len(records) == 2
+            assert records[0].source_record_id == "msg_1"
+            assert records[1].source_record_id == "msg_2"
+
 
 @pytest.mark.unit
 class TestLargeWhatsAppZipArchiveSecurity:

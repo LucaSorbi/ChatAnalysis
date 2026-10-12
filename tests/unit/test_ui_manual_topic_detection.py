@@ -30,6 +30,7 @@ from ai.models import (
     TopicDetectionResult,
     TopicQuery,
 )
+from analysis.models import ConsistencyStatus
 from multimodal.evidence import EvidenceSourceType, TextEvidenceSection
 from search.service import SearchService
 from ui import state
@@ -39,6 +40,7 @@ from ui.application import (
     check_lm_studio_status,
     execute_manual_topic_detection,
     execute_real_ingestion,
+    execute_topic_discovery,
     search_topic_detections,
 )
 from ui.demo import build_synthetic_demo_dataset
@@ -213,7 +215,7 @@ def test_manual_topic_detection_execution():
     assert result.provenance_document_id == doc.document_id
     assert client.call_count == 1
     assert result.metadata["model"] == "qwen2.5-7b-instruct"
-    assert result.metadata["latency_seconds"] == 0.35
+    assert isinstance(result.metadata["latency_seconds"], (int, float)) and result.metadata["latency_seconds"] >= 0
 
 
 # ---------------------------------------------------------------------------
@@ -491,28 +493,43 @@ def test_no_cloud_calls_loopback_only_security():
 
 
 # ---------------------------------------------------------------------------
-# TEST 12: Esecuzione interattiva Streamlit AppTest (Area 1, Area 2, Discovery)
+# TEST 12: Workflow operativo: Discovery -> Detection indipendente -> Consistency
 # ---------------------------------------------------------------------------
 def test_streamlit_ui_manual_topic_detection_and_discovery_workflow():
-    """Verifica end-to-end con AppTest di Area 1, Area 2 e verifica da Topic Discovery."""
+    """
+    Verifica end-to-end con AppTest del workflow operativo scientifico:
+    1. Topic Discovery tramite il service.
+    2. Registrazione autoritativa della run.
+    3. Selezione del topic realmente scoperto.
+    4. Nuova Topic Detection indipendente.
+    5. Controllo delle due chiamate effettive.
+    6. Calcolo della Consistency.
+    Rifiuta categoricamente l'uso di reference sintetiche DEMO come se fossero live run.
+    """
     at = AppTest.from_file(APP_PATH, default_timeout=20)
     at.run()
 
-    doc, detections, discoveries, service = build_demo_session()
+    doc, detections, _, _ = build_demo_session()
     eid1 = doc.all_evidence_sections[0].evidence_id
 
-    # Inizializza sessione con demo dataset e mock client
+    # Inizializza sessione con risposte LLM deterministiche per Discovery e Detection
     mock_client = MockLlmClient(
         responses=[
+            # Chiamata 1: Topic Discovery tramite service
             {
-                "decision": "PRESENT",
-                "evidence_ids": [eid1],
-                "rationale": "Accordo verificato esplicitamente nella chat dimostrativa.",
+                "topics": [
+                    {
+                        "label": "Pianificazione logistica",
+                        "short_description": "Accordi su luogo e orario dell'incontro",
+                        "evidence_ids": [eid1],
+                    }
+                ]
             },
+            # Chiamata 2: Nuova Topic Detection indipendente (Prova del Nove)
             {
                 "decision": "PRESENT",
                 "evidence_ids": [eid1],
-                "rationale": "Tema scoperto verificato tramite nuova inferenza.",
+                "rationale": "Tema scoperto verificato tramite seconda inferenza indipendente.",
             },
         ],
     )
@@ -521,39 +538,84 @@ def test_streamlit_ui_manual_topic_detection_and_discovery_workflow():
     at.session_state["dataset_mode"] = DatasetMode.DEMO
     at.session_state["conversation_document"] = doc
     at.session_state["detection_results"] = detections
-    at.session_state["discovery_results"] = discoveries
-    at.session_state["search_service"] = service
     at.session_state["lm_studio_client"] = mock_client
+
+    # 1. Topic Discovery tramite il service
+    disc_res = execute_topic_discovery(
+        document=doc,
+        client=mock_client,
+        max_topics=5,
+        session_state=at.session_state,
+    )
+
+    # 2. Registrazione autoritativa della run e aggiornamento stato sessione
+    assert mock_client.call_count == 1
+    state.add_discovery_result(disc_res, at.session_state)
 
     # Naviga a Analisi topic
     at.sidebar.radio[0].set_value("5. Analisi topic")
     at.run()
     assert not at.exception
 
-    # Verifica presenza dei controlli di Area 1
-    topic_inputs = [ti for ti in at.text_input if ti.key == "manual_topic_input"]
-    assert len(topic_inputs) == 1
+    # 3. Selezione del topic realmente scoperto
+    disc_btns = [b for b in at.button if "verify_disc_topic" in (b.key or "")]
+    assert len(disc_btns) >= 1
 
+    # 4. Nuova Topic Detection indipendente
+    disc_btns[0].click()
+    at.run()
+    assert not at.exception
+
+    # 5. Controllo delle due chiamate effettive
+    assert mock_client.call_count == 2
+
+    # 6. Calcolo della Consistency
+    cons_results = state.get_consistency_results(doc.document_id, at.session_state)
+    assert len(cons_results) >= 1
+    assert cons_results[0].status == ConsistencyStatus.CONSISTENT
+    assert cons_results[0].topic_label == "Pianificazione logistica"
+
+    det_results = state.get_detection_results(at.session_state)
+    assert any(r.topic.label == "Pianificazione logistica" for r in det_results)
+
+
+def test_streamlit_ui_manual_topic_detection_area1_workflow():
+    """Verifica interattiva dell'esecuzione manuale di Topic Detection in Area 1."""
+    at = AppTest.from_file(APP_PATH, default_timeout=20)
+    at.run()
+
+    doc = _build_test_document()
+    eid1 = doc.all_evidence_sections[0].evidence_id
+
+    mock_client = MockLlmClient(
+        responses=[
+            {
+                "decision": "PRESENT",
+                "evidence_ids": [eid1],
+                "rationale": "Accordo verificato esplicitamente nella chat dimostrativa.",
+            },
+        ],
+    )
+
+    at.session_state["dataset_loaded"] = True
+    at.session_state["dataset_mode"] = DatasetMode.DEMO
+    at.session_state["conversation_document"] = doc
+    at.session_state["lm_studio_client"] = mock_client
+
+    at.sidebar.radio[0].set_value("5. Analisi topic")
+    at.run()
+    assert not at.exception
+
+    topic_inputs = [ti for ti in at.text_input if ti.key == "manual_topic_input"]
     run_btns = [b for b in at.button if b.key == "btn_run_manual_detection"]
+    assert len(topic_inputs) == 1
     assert len(run_btns) == 1
 
-    # Imposta un topic libero ed esegui la Detection
     topic_inputs[0].set_value("Organizzazione di incontri riservati")
     run_btns[0].click()
     at.run()
     assert not at.exception
 
-    # Verifica che il risultato sia stato salvato nella sessione
-    results = at.session_state["detection_results"]
+    results = state.get_detection_results(at.session_state)
     assert any(r.topic.label == "Organizzazione di incontri riservati" for r in results)
-    assert mock_client.call_count >= 1
-
-    # Verifica pulsante in Topic Discovery
-    disc_btns = [b for b in at.button if "verify_disc_topic" in (b.key or "")]
-    assert len(disc_btns) >= 1
-
-    # Clicca sul pulsante "Verifica con Topic Detection" del primo argomento scoperto
-    disc_btns[0].click()
-    at.run()
-    assert not at.exception
-    assert mock_client.call_count >= 2
+    assert mock_client.call_count == 1

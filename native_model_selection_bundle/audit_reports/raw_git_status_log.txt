@@ -1,0 +1,134 @@
+=== GIT_STATUS ===
+Timestamp: 2026-10-11T16:41:42.017694+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: git status
+Exit Code: 0 (Expected: 0)
+Execution Duration: 0.27s
+Status: PASSED
+--- STDOUT ---
+On branch main
+Your branch is up to date with 'origin/main'.
+
+Changes to be committed:
+  (use "git restore --staged <file>..." to unstage)
+	modified:   run_benchmark.sh
+
+Changes not staged for commit:
+  (use "git add <file>..." to update what will be committed)
+  (use "git restore <file>..." to discard changes in working directory)
+	modified:   ai/chunking.py
+	modified:   ai/lmstudio.py
+	modified:   ai/topics.py
+	modified:   docs/agent-report.md
+	modified:   entity_resolution/resolver.py
+	modified:   importer/whatsapp_export.py
+	modified:   multimodal/__init__.py
+	modified:   pyproject.toml
+	modified:   search/topics.py
+	modified:   tests/integration/test_full_pipeline_e2e.py
+	modified:   tests/unit/test_ai_detection_multimodal_diagnostics.py
+	modified:   tests/unit/test_ai_lmstudio.py
+	modified:   tests/unit/test_large_file_upload.py
+	modified:   tests/unit/test_operational_model_management.py
+	modified:   tests/unit/test_search_topics.py
+	modified:   tests/unit/test_ui_manual_topic_detection.py
+	modified:   tests/unit/test_ui_smoke.py
+	modified:   tests/unit/test_ui_state.py
+	modified:   ui/application.py
+	modified:   ui/demo.py
+	modified:   ui/ingestion.py
+	modified:   ui/models.py
+	modified:   ui/presentation.py
+	modified:   ui/state.py
+
+Untracked files:
+  (use "git add <file>..." to include in what will be committed)
+	.gitattributes
+	CONTEXT_BINDING_FINAL_REPORT.md
+	DISCOVERY_RUN_IMMUTABILITY_REPORT.md
+	FINAL_GATE_VALIDATION_REPORT.md
+	LAST_BLOCKERS_VERIFICATION_REPORT.md
+	LMSTUDIO_NATIVE_API_COMPATIBILITY_REPORT.md
+	MANIFEST.in
+	PRE_FREEZE_HARDENING_REPORT.md
+	PRE_UBUNTU_SMOKE_REPORT.md
+	README.md
+	RELEASE_GATE_CORRECTIVE_REPORT.md
+	RELEASE_GATE_REAUDIT.md
+	UBUNTU_FINAL_SMOKE_RUNBOOK.md
+	UBUNTU_LIVE_GATE_READINESS_REPORT.md
+	UBUNTU_SMOKE_GATE_REPORT.md
+	UBUNTU_SMOKE_INSTRUCTIONS.md
+	analysis/
+	audit_bundle/
+	blocker_repair_audit/
+	chatAnalysis_context_binding_final_audit_20261011.zip
+	chatAnalysis_current_state_audit_20261009.zip
+	chatAnalysis_discovery_run_immutability_audit_20261011.zip
+	chatAnalysis_final_blocker_repair_audit.zip
+	chatAnalysis_final_gate_validation_20261010.zip
+	chatAnalysis_final_release_candidate_audit.zip
+	chatAnalysis_last_blockers_verification_20261010.zip
+	chatAnalysis_lmstudio_native_api_compatibility_audit_20261011.zip
+	chatAnalysis_post_repair_verification.zip
+	chatAnalysis_pre_freeze_hardening_audit_20261010.zip
+	chatAnalysis_pre_ubuntu_smoke_audit_20261011.zip
+	chatAnalysis_release_gate_corrective_audit_20261010.zip
+	chatAnalysis_release_gate_reaudit_20261010.zip
+	chatAnalysis_ubuntu_live_gate_readiness_audit_20261011.zip
+	chatAnalysis_ubuntu_smoke_gate_audit_20261011.zip
+	context_binding_bundle/
+	corrective_audit_bundle/
+	discovery_run_immutability_bundle/
+	final_audit/
+	large_file_benchmark_results.json
+	last_blockers_bundle/
+	lmstudio_compatibility_bundle/
+	multimodal/asset_access.py
+	pre_ubuntu_smoke_bundle/
+	release_gate_reaudit_bundle/
+	repair_bundle/
+	scripts/benchmark_large_ingestion.py
+	scripts/build_context_binding_bundle.py
+	scripts/build_discovery_run_immutability_bundle.py
+	scripts/build_final_blocker_repair_bundle.py
+	scripts/build_final_gate_validation_bundle.py
+	scripts/build_final_release_bundle.py
+	scripts/build_last_blockers_verification_bundle.py
+	scripts/build_lmstudio_compatibility_bundle.py
+	scripts/build_native_model_selection_bundle.py
+	scripts/build_pre_freeze_hardening_bundle.py
+	scripts/build_pre_ubuntu_smoke_bundle.py
+	scripts/build_release_gate_corrective_bundle.py
+	scripts/build_release_gate_reaudit_bundle.py
+	scripts/build_repair_bundle.py
+	scripts/build_ubuntu_live_gate_bundle.py
+	scripts/build_ubuntu_smoke_gate_bundle.py
+	scripts/smoke_operational_ai.py
+	test_data/fixtures/
+	test_data/synthetic_smoke/
+	tests/unit/test_analysis_service.py
+	tests/unit/test_apptest_flows.py
+	tests/unit/test_architecture_guard.py
+	tests/unit/test_discovery_detection_invariants.py
+	tests/unit/test_discovery_provenance_hardening.py
+	tests/unit/test_discovery_provenance_service.py
+	tests/unit/test_large_pipeline_bounded.py
+	tests/unit/test_lmstudio_binding_lifecycle.py
+	tests/unit/test_lmstudio_model_loading.py
+	tests/unit/test_lmstudio_native_integration.py
+	tests/unit/test_media_asset_access.py
+	tests/unit/test_media_processing_lifecycle.py
+	tests/unit/test_media_registry_session_isolation.py
+	tests/unit/test_model_resolution_audit.py
+	tests/unit/test_packaging_release.py
+	tests/unit/test_smoke_operational_ai.py
+	tests/unit/test_staging_and_large_file.py
+	tests/unit/test_whatsapp_strict_encoding.py
+	tests/unit/test_zip_security_hardening.py
+	ubuntu_live_gate_readiness_bundle/
+	ubuntu_smoke_gate_bundle/
+	ui/staging.py
+============================================================

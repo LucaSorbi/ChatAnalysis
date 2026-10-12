@@ -1,0 +1,10 @@
+Execution Cwd: C:\Users\lucas\AppData\Local\Temp\tmpnq6l0k0j\isolated_site_packages
+PYTHONPATH: C:\Users\lucas\AppData\Local\Temp\tmpnq6l0k0j\isolated_site_packages
+RETURN_CODE: 0
+
+STDOUT:
+PYTHONPATH: ['', 'C:\\Users\\lucas\\AppData\\Local\\Temp\\tmpnq6l0k0j\\isolated_site_packages', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.zip', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64\\DLLs', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64', 'C:\\Users\\lucas\\Desktop\\Tesi\\.venv', 'C:\\Users\\lucas\\Desktop\\Tesi\\.venv\\Lib\\site-packages']
+SUCCESS: All audited packages and modules imported cleanly in isolated environment!
+
+
+STDERR:

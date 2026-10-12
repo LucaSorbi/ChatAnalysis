@@ -1,0 +1,116 @@
+=== LMSTUDIO_ISOLATION_TESTS ===
+Timestamp: 2026-10-11T09:32:19.840613+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest tests/unit/test_ai_lmstudio.py tests/unit/test_lmstudio_binding_lifecycle.py tests/unit/test_lmstudio_model_loading.py -v
+Exit Code: 0 (Expected: 0)
+Execution Duration: 12.50s
+Status: PASSED
+Test Results: passed=90, failed=0, skipped=0, deselected=0
+
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 90 items
+
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_loopback_security_accepts_valid_hosts PASSED [  1%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_loopback_security_rejects_remote_hosts PASSED [  2%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_loopback_security_rejects_invalid_scheme PASSED [  3%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_model_id_mandatory_no_auto_selection PASSED [  4%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_server_unavailable_graceful_handling PASSED [  5%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_is_available_propagates_programming_error PASSED [  6%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_list_models_protocol_error_on_invalid_json PASSED [  7%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_http_error_mapped_to_request_error PASSED [  8%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_empty_choices PASSED [ 10%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_auth_headers_with_and_without_token PASSED [ 11%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_mocked_success_and_raw_privacy PASSED [ 12%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_missing_model PASSED [ 13%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_null_model PASSED [ 14%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_non_string_model PASSED [ 15%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_empty_model PASSED [ 16%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_model_strictly_from_backend PASSED [ 17%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_non_dict_top_level PASSED [ 18%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_non_dict_choice PASSED [ 20%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_non_dict_message PASSED [ 21%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_non_string_content PASSED [ 22%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_invalid_finish_reason PASSED [ 23%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_invalid_usage_type PASSED [ 24%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_protocol_error_on_negative_or_boolean_tokens PASSED [ 25%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_get_models_detailed_malformed_json_raises_protocol_error_no_fallback PASSED [ 26%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_get_models_detailed_fallback_on_404_only PASSED [ 27%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_chat_completion_timeout_raises_ai_backend_timeout_error PASSED [ 28%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_load_model_post_endpoint_success PASSED [ 30%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_load_model_fallback_on_404_jit PASSED [ 31%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_load_model_timeout_mapped_to_ai_backend_timeout_error PASSED [ 32%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_ensure_model_loaded_skips_when_already_loaded PASSED [ 33%]
+tests/unit/test_ai_lmstudio.py::TestLmStudioClient::test_ensure_model_loaded_raises_when_not_installed PASSED [ 34%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_binding_registered_and_unload_success PASSED [ 35%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_binding_registered_and_unload_failure PASSED [ 36%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_two_independent_clients_isolated_bindings PASSED [ 37%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_two_different_instances_distinct_bindings PASSED [ 38%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_same_instance_id_reused_subsequently PASSED [ 40%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_response_missing_or_empty_choices PASSED [ 41%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_response_missing_message PASSED [ 42%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_malformed_json PASSED [ 43%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_completion_wrong_response_model PASSED [ 44%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_unknown_status_rejected PASSED [ 45%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_loading_status PASSED [ 46%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_loaded_valid PASSED [ 47%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_load_model_jit_unverified_preserves_unverified PASSED [ 48%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_provisional_binding_promoted_only_after_full_completion PASSED [ 50%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_no_cross_model_contamination PASSED [ 51%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioModelBindingLifecycle::test_no_premature_metadata_update_on_failure PASSED [ 52%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_client_registration_isolated_from_other_clients PASSED [ 53%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_two_clients_same_model_different_instance_ids PASSED [ 54%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_two_clients_different_model_keys PASSED [ 55%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_unload_client_a_does_not_contaminate_or_clear_client_b PASSED [ 56%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_binding_invalidation_local_only PASSED [ 57%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_model_switch_without_residue PASSED [ 58%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_reuse_of_old_instance_id_rejected_if_different_model PASSED [ 60%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_equivalent_model_id_only_with_local_verified_binding PASSED [ 61%]
+tests/unit/test_lmstudio_binding_lifecycle.py::TestLmStudioClientIsolationAudit::test_completion_via_opaque_id_succeeds_only_on_owning_client PASSED [ 62%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_success PASSED [ 63%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_failure_payload_raises_error PASSED [ 64%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_malformed_json_raises_protocol_error PASSED [ 65%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_empty_body_raises_protocol_error PASSED [ 66%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_400_raises_model_load_error PASSED [ 67%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_404_returns_jit_unverified_without_loaded_state PASSED [ 68%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_405_returns_jit_unverified PASSED [ 70%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_500_raises_model_load_error PASSED [ 71%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_timeout_raises_timeout_error PASSED [ 72%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_connection_refused_raises_unavailable_error PASSED [ 73%]
+tests/unit/test_lmstudio_model_loading.py::test_jit_completion_verifies_model_binding PASSED [ 74%]
+tests/unit/test_lmstudio_model_loading.py::test_jit_completion_wrong_model_raises_model_mismatch PASSED [ 75%]
+tests/unit/test_lmstudio_model_loading.py::test_deepseek_and_qwen_strict_separation PASSED [ 76%]
+tests/unit/test_lmstudio_model_loading.py::test_qwen3_and_qwen25_strict_separation PASSED [ 77%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_arbitrary_payload_raises_protocol_error PASSED [ 78%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_still_loading_status_returns_loading_lifecycle PASSED [ 80%]
+tests/unit/test_lmstudio_model_loading.py::test_load_model_http_200_empty_dict_raises_protocol_error PASSED [ 81%]
+tests/unit/test_lmstudio_model_loading.py::test_ensure_model_loaded_still_loading_raises_error PASSED [ 82%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_generic_status_no_identity_returns_jit_unverified_and_no_last_loaded_model PASSED [ 83%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_wrong_model_key_raises_model_mismatch PASSED [ 84%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_ambiguous_conflicting_instance_id_raises_model_mismatch PASSED [ 85%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_qwen3_identity_when_qwen25_requested_raises_mismatch PASSED [ 86%]
+tests/unit/test_lmstudio_model_loading.py::test_loaded_with_deepseek_identity_when_qwen25_requested_raises_mismatch PASSED [ 87%]
+tests/unit/test_lmstudio_model_loading.py::test_chat_completion_response_model_mismatch_raises_error PASSED [ 88%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_1_http_200_opaque_instance_id_only_is_jit_unverified PASSED [ 90%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_2_http_200_status_loaded_and_opaque_instance_id_is_jit_unverified PASSED [ 91%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_3_http_200_valid_model_key_and_opaque_instance_id_is_loaded PASSED [ 92%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_4_http_200_different_model_raises_mismatch_error PASSED [ 93%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_5_completion_with_opaque_target_and_bound_canonical_response_succeeds PASSED [ 94%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_6_completion_with_opaque_target_and_foreign_response_model_raises_mismatch PASSED [ 95%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_7_qwen25_strictly_distinct_from_qwen3 PASSED [ 96%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_8_deepseek_r1_distill_strictly_distinct_from_qwen25 PASSED [ 97%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_9_jit_unverified_never_falsely_confirms_loaded PASSED [ 98%]
+tests/unit/test_lmstudio_model_loading.py::test_audit_10_no_premature_update_of_last_loaded_model PASSED [100%]
+
+============================= 90 passed in 8.17s ==============================
+
+
+--- STDERR ---
+(empty)

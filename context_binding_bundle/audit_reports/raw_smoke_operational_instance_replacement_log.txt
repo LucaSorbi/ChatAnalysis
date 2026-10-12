@@ -1,0 +1,31 @@
+=== SMOKE_OPERATIONAL_INSTANCE_REPLACEMENT_NEGATIVE ===
+Timestamp: 2026-10-11T14:28:33.162170+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe scripts/smoke_operational_ai.py --fake --fake-mode instance_replacement
+Exit Code: 1 (Expected: 1)
+Execution Duration: 3.32s
+Status: PASSED
+
+--- STDOUT ---
+===========================================================================
+SMOKE TEST OPERATIVO AI � CHATANALYSIS RELEASE GATE (UBUNTU READY)
+===========================================================================
+[MODE] Utilizzo FakeSmokeClient deterministico per diagnostica ambiente CI/Mock.
+
+--- 1. ESECUZIONE TOPIC DISCOVERY LIVE (DEMO) ---
+Document ID      : doc::demo_forensic_chat
+Discovery Run ID : run_disc_349bb27faa
+Discovery Origin : MOCK_INSPECTION
+Status Discovery : COMPLETE
+Topic scoperti   : 1
+
+--- 2. PROVA DEL NOVE: SECONDA DETECTION LIVE INDIPENDENTE ---
+
+ERRORE OPERATIVO DURANTE LO SMOKE TEST: AiModelMismatchError: Model mismatch in Topic Detection: richiesto model_id 'qwen2.5-7b-instruct', ma il backend ha restituito 'unexpected-model-replacement-family-conflict'.
+ESITO SMOKE TEST OPERATIVO: FALLITO
+
+
+--- STDERR ---
+(empty)

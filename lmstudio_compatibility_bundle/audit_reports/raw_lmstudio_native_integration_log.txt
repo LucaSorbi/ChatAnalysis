@@ -1,0 +1,27 @@
+=== LMSTUDIO_NATIVE_SIMULATED_INTEGRATION ===
+Timestamp: 2026-10-11T15:31:05.929139+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest tests/unit/test_lmstudio_native_integration.py -v
+Exit Code: 0 (Expected: 0)
+Execution Duration: 3.71s
+Status: PASSED
+Test Results: passed=1, failed=0, skipped=0, deselected=0
+
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 1 item
+
+tests/unit/test_lmstudio_native_integration.py::test_full_simulated_native_integration_sequence PASSED [100%]
+
+============================== 1 passed in 0.86s ==============================
+
+
+--- STDERR ---
+(empty)

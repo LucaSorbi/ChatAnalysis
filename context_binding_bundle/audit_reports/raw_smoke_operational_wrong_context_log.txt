@@ -1,0 +1,23 @@
+=== SMOKE_OPERATIONAL_WRONG_CONTEXT_4096_NEGATIVE ===
+Timestamp: 2026-10-11T14:28:26.084805+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe scripts/smoke_operational_ai.py --fake --fake-mode wrong_context
+Exit Code: 1 (Expected: 1)
+Execution Duration: 2.82s
+Status: PASSED
+
+--- STDOUT ---
+===========================================================================
+SMOKE TEST OPERATIVO AI � CHATANALYSIS RELEASE GATE (UBUNTU READY)
+===========================================================================
+[MODE] Utilizzo FakeSmokeClient deterministico per diagnostica ambiente CI/Mock.
+
+ARRESTO PRELIMINARE SMOKE TEST: Prerequisiti di modello o contesto non soddisfatti:
+  - [FAILED] CHECK_CONFIRMED_CONTEXT_LENGTH: Context confermato (4096) diverso da 8192 richiesto (Confirmed context length mismatch: expected 8192, got 4096)
+ESITO SMOKE TEST OPERATIVO: FALLITO
+
+
+--- STDERR ---
+(empty)

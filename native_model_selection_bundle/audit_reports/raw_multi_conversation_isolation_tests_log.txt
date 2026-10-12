@@ -1,0 +1,23 @@
+=== MULTI_CONVERSATION_ISOLATION_TESTS ===
+Timestamp: 2026-10-11T16:36:56.875771+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\Desktop\Tesi
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -m pytest tests/unit/test_apptest_flows.py -k multi_conversation
+Exit Code: 0 (Expected: 0)
+Execution Duration: 11.86s
+Status: PASSED
+Test Results: passed=1, failed=0, skipped=0, deselected=6
+--- STDOUT ---
+============================= test session starts =============================
+platform win32 -- Python 3.14.7, pytest-9.1.1, pluggy-1.6.0 -- C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe
+cachedir: .pytest_cache
+rootdir: C:\Users\lucas\Desktop\Tesi
+configfile: pyproject.toml
+plugins: anyio-4.15.1, cov-7.1.0
+collecting ... collected 7 items / 6 deselected / 1 selected
+
+tests/unit/test_apptest_flows.py::test_apptest_g_multi_conversation_preserves_results_across_switches PASSED [100%]
+
+======================= 1 passed, 6 deselected in 6.74s =======================
+============================================================

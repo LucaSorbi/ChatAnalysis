@@ -48,10 +48,26 @@ dev = [
 # ---------------------------------------------------------------------------
 # Setuptools: scoperta automatica dei package
 # ---------------------------------------------------------------------------
-[tool.setuptools.packages.find]
-where = ["."]
-include = ["core*", "profiler*", "importer*", "validation*", "normalization*", "entity_resolution*", "unified*", "multimodal*", "ai*", "search*", "ui*"]
-exclude = ["tests*", "test_data*"]
+[tool.setuptools]
+packages = [
+    "ai",
+    "analysis",
+    "core",
+    "entity_resolution",
+    "importer",
+    "multimodal",
+    "normalization",
+    "profiler",
+    "profiler.analyzers",
+    "search",
+    "ui",
+    "unified",
+    "validation",
+]
+include-package-data = false
+
+[tool.setuptools.exclude-package-data]
+"*" = ["*.pyc", "*.pyo", "*.pyd", "__pycache__/*", "**/__pycache__/*", "*__pycache__*", "*.tmp"]
 
 # ---------------------------------------------------------------------------
 # pytest

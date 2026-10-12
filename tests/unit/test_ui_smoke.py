@@ -154,20 +154,27 @@ class TestUiSmoke:
         assert "Selezionare un file primario" in at.warning[0].value
 
     def test_topics_page_in_real_file_mode_without_ai(self):
-        """Verifica che la pagina topic gestisca correttamente l'assenza di risultati AI in modalità REAL FILE."""
+        """Verifica che la pagina topic in REAL FILE mode senza risultati AI mostri i controlli operativi senza banner obsoleti."""
+        from ui.demo import build_synthetic_demo_dataset
+
+        doc, _, _ = build_synthetic_demo_dataset()
         at = AppTest.from_file(APP_PATH, default_timeout=15)
         at.run()
 
         at.session_state["dataset_loaded"] = True
         at.session_state["dataset_mode"] = DatasetMode.FILE
+        at.session_state["conversation_document"] = doc
         at.session_state["detection_results"] = ()
         at.session_state["discovery_results"] = ()
 
         at.sidebar.radio[0].set_value("5. Analisi topic")
         at.run()
         assert not at.exception
-        assert len(at.info) >= 1
-        assert "differito alla fase sperimentale finale" in at.info[0].value
+        # Verifica che non compaiano vecchi banner di differimento
+        for info_item in at.info:
+            assert "differito alla fase sperimentale finale" not in info_item.value
+        # Verifica che i tab di Topic Detection e Discovery siano attivi e operativi
+        assert len(at.tabs) >= 2
 
     def test_real_file_rendering_success_with_conversations_selection(self):
         """Verifica rendering REAL FILE con IngestionResult SUCCESS, 2 conversazioni e selectbox attiva (Gate G.2)."""

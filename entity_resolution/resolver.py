@@ -40,43 +40,89 @@ from normalization.models import CanonicalMessageType, NormalizedRecord, Timesta
 from normalization.phone import canonicalize_phone_syntax
 
 
+class _CandidateRecordSummary:
+    """Rappresentazione leggera di record messaggio per deduplicazione bounded-memory."""
+    __slots__ = ("source_name", "source_record_id", "text_content", "actor_from", "message_type")
+
+    def __init__(
+        self,
+        source_name: str,
+        source_record_id: str,
+        text_content: str,
+        actor_from: Any,
+        message_type: CanonicalMessageType,
+    ) -> None:
+        self.source_name = source_name
+        self.source_record_id = source_record_id
+        self.text_content = text_content
+        self.actor_from = actor_from
+        self.message_type = message_type
+
+
 class DeterministicEntityResolver(BaseEntityResolver):
     """
     Resolver deterministico basato su regole di evidenza forense verificabile.
+    Garantisce bounded working memory durante l'ingestion senza materializzazioni integrali dei record.
     """
 
-    def resolve(self, records: Iterable[NormalizedRecord]) -> ResolutionResult:
+    def resolve(self, records: Iterable[NormalizedRecord] | Any) -> ResolutionResult:
         """
-        Esegue la risoluzione deterministica su una sequenza di NormalizedRecord.
+        Esegue la risoluzione deterministica su uno stream di NormalizedRecord
+        senza materializzare l'intero dataset in RAM.
+        Supporta nativamente sia iterabili standard sia IngestionStagingStore su SQLite.
         """
-        # Materializzazione dei record per consentire indicizzazione bidirezionale
-        record_list = list(records)
-        total_records = len(record_list)
+        # Verifica se l'input è uno store SQLite con supporto a query indicizzate per duplicati
+        staging_store = records if hasattr(records, "find_duplicate_candidate_records") else None
+        record_stream = records.iter_all_records() if hasattr(records, "iter_all_records") else records
 
-        # 1. Estrazione di tutti i riferimenti ad attori (EntityReference)
-        all_refs: list[EntityReference] = []
-        # Mapping record_key -> NormalizedRecord per correlazioni successive
-        record_map: dict[tuple[str, str], NormalizedRecord] = {}
+        total_records = 0
 
-        for rec in record_list:
-            rec_key = (rec.source_name, rec.source_record_id)
-            record_map[rec_key] = rec
+        # Partizionamento deterministico dei riferimenti
+        jid_groups: dict[str, list[EntityReference]] = defaultdict(list)
+        phone_groups: dict[str, list[EntityReference]] = defaultdict(list)
+        local_user_refs: list[EntityReference] = []
+        unresolved_refs: list[EntityReference] = []
 
-            # Non estrarre riferimenti entità persona da record di tipo chat o media_ref
-            if rec.record_type in ("chat", "media_ref"):
-                continue
+        # Mappa dei display name da wa.db contatti
+        display_names_by_jid: dict[str, set[str]] = defaultdict(set)
+        display_names_by_phone: dict[str, set[str]] = defaultdict(set)
 
-            # Attore mittente o contatto
-            if rec.actor_from is not None:
-                if rec.record_type == "contact":
-                    role = "contact"
-                elif rec.actor_from.actor_type == "local_user":
-                    role = "local_user"
-                else:
-                    role = "sender"
-                norm_val = self._compute_normalized_value(rec.actor_from)
-                all_refs.append(
-                    EntityReference(
+        # Mappa duplicati per stream in-memory (utilizzata solo se non è attivo staging SQLite)
+        streaming_dup_map: dict[tuple[str, tuple[str, str]], list[Any]] = (
+            defaultdict(list) if staging_store is None else {}
+        )
+
+        for rec in record_stream:
+            total_records += 1
+
+            # 1. Estrazione display names da contatti wa_db
+            if rec.source_name == "wa_db" and rec.record_type == "contact":
+                if hasattr(rec, "raw_record") and hasattr(rec.raw_record, "raw_fields"):
+                    raw_f = rec.raw_record.raw_fields
+                    d_name = raw_f.get("display_name")
+                    raw_phone = raw_f.get("phone_number")
+                    raw_jid = raw_f.get("jid")
+
+                    if d_name and str(d_name).strip():
+                        name_str = str(d_name).strip()
+                        if raw_jid:
+                            display_names_by_jid[str(raw_jid).strip()].add(name_str)
+                        if raw_phone:
+                            clean_p = canonicalize_phone_syntax(str(raw_phone))
+                            if clean_p is not None:
+                                display_names_by_phone[clean_p].add(name_str)
+
+            # 2. Estrazione e instradamento diretto riferimenti entità (EntityReference)
+            if rec.record_type not in ("chat", "media_ref"):
+                if rec.actor_from is not None:
+                    if rec.record_type == "contact":
+                        role = "contact"
+                    elif rec.actor_from.actor_type == "local_user":
+                        role = "local_user"
+                    else:
+                        role = "sender"
+                    norm_val = self._compute_normalized_value(rec.actor_from)
+                    ref = EntityReference(
                         source_name=rec.source_name,
                         source_record_id=rec.source_record_id,
                         actor_role=role,
@@ -84,14 +130,19 @@ class DeterministicEntityResolver(BaseEntityResolver):
                         actor_type=rec.actor_from.actor_type,
                         normalized_value=norm_val,
                     )
-                )
+                    if ref.actor_type == "local_user":
+                        local_user_refs.append(ref)
+                    elif ref.actor_type == "jid" and ref.normalized_value:
+                        jid_groups[ref.normalized_value].append(ref)
+                    elif ref.actor_type == "phone" and ref.normalized_value:
+                        phone_groups[ref.normalized_value].append(ref)
+                    else:
+                        unresolved_refs.append(ref)
 
-            # Eventuale attore destinatario (es. To in Cellebrite CSV o msgstore_db)
-            if rec.actor_to is not None:
-                role = "local_user" if rec.actor_to.actor_type == "local_user" else "recipient"
-                norm_val = self._compute_normalized_value(rec.actor_to)
-                all_refs.append(
-                    EntityReference(
+                if rec.actor_to is not None:
+                    role = "local_user" if rec.actor_to.actor_type == "local_user" else "recipient"
+                    norm_val = self._compute_normalized_value(rec.actor_to)
+                    ref = EntityReference(
                         source_name=rec.source_name,
                         source_record_id=rec.source_record_id,
                         actor_role=role,
@@ -99,44 +150,35 @@ class DeterministicEntityResolver(BaseEntityResolver):
                         actor_type=rec.actor_to.actor_type,
                         normalized_value=norm_val,
                     )
-                )
+                    if ref.actor_type == "local_user":
+                        local_user_refs.append(ref)
+                    elif ref.actor_type == "jid" and ref.normalized_value:
+                        jid_groups[ref.normalized_value].append(ref)
+                    elif ref.actor_type == "phone" and ref.normalized_value:
+                        phone_groups[ref.normalized_value].append(ref)
+                    else:
+                        unresolved_refs.append(ref)
 
-        # 2. Partizionamento: riferimenti risolvibili vs non risolvibili
-        jid_groups: dict[str, list[EntityReference]] = defaultdict(list)
-        phone_groups: dict[str, list[EntityReference]] = defaultdict(list)
-        local_user_refs: list[EntityReference] = []
-        unresolved_refs: list[EntityReference] = []
+            # 3. Raccolta duplicati streaming leggera (solo se non gestita nativamente da SQLite)
+            if staging_store is None and rec.record_type == "message" and rec.text_content:
+                clean_text = rec.text_content.strip()
+                if clean_text and rec.timestamp and rec.timestamp.status != TimestampTzStatus.ABSENT:
+                    timeline_key = None
+                    if rec.timestamp.status == TimestampTzStatus.KNOWN_UTC and rec.timestamp.utc_datetime:
+                        timeline_key = ("KNOWN_UTC", rec.timestamp.utc_datetime.isoformat())
+                    elif rec.timestamp.status == TimestampTzStatus.NAIVE_UNKNOWN and rec.timestamp.naive_datetime:
+                        timeline_key = ("NAIVE_UNKNOWN", rec.timestamp.naive_datetime.isoformat())
 
-        for ref in all_refs:
-            if ref.actor_type == "local_user":
-                local_user_refs.append(ref)
-            elif ref.actor_type == "jid" and ref.normalized_value:
-                jid_groups[ref.normalized_value].append(ref)
-            elif ref.actor_type == "phone" and ref.normalized_value:
-                phone_groups[ref.normalized_value].append(ref)
-            else:
-                # Alias ('group_participant_A'), Chat ID ('chat_1'), Unknown
-                unresolved_refs.append(ref)
-
-        # Mappa dei display name da wa.db contatti (jid -> display_name, phone -> display_name)
-        display_names_by_jid: dict[str, set[str]] = defaultdict(set)
-        display_names_by_phone: dict[str, set[str]] = defaultdict(set)
-
-        for rec in record_list:
-            if rec.source_name == "wa_db" and rec.record_type == "contact":
-                raw_f = rec.raw_record.raw_fields
-                d_name = raw_f.get("display_name")
-                raw_phone = raw_f.get("phone_number")
-                raw_jid = raw_f.get("jid")
-
-                if d_name and str(d_name).strip():
-                    name_str = str(d_name).strip()
-                    if raw_jid:
-                        display_names_by_jid[str(raw_jid).strip()].add(name_str)
-                    if raw_phone:
-                        clean_p = canonicalize_phone_syntax(str(raw_phone))
-                        if clean_p is not None:
-                            display_names_by_phone[clean_p].add(name_str)
+                    if timeline_key is not None:
+                        streaming_dup_map[(clean_text, timeline_key)].append(
+                            _CandidateRecordSummary(
+                                source_name=rec.source_name,
+                                source_record_id=rec.source_record_id,
+                                text_content=clean_text,
+                                actor_from=rec.actor_from,
+                                message_type=rec.message_type,
+                            )
+                        )
 
         # 3. Costruzione delle CandidateEntity
         candidate_entities: list[CandidateEntity] = []
@@ -308,7 +350,11 @@ class DeterministicEntityResolver(BaseEntityResolver):
             entity_counter += 1
 
         # 4. Rilevamento non-distruttivo di DuplicateCandidate (B8)
-        duplicate_candidates = self._detect_duplicate_candidates(record_list)
+        if staging_store is not None:
+            dup_groups = staging_store.find_duplicate_candidate_records()
+            duplicate_candidates = self._detect_duplicate_candidates_from_groups(dup_groups)
+        else:
+            duplicate_candidates = self._detect_duplicate_candidates_from_groups(streaming_dup_map)
 
         # Metadati sullo stato in memoria
         metadata: dict[str, Any] = {
@@ -319,10 +365,16 @@ class DeterministicEntityResolver(BaseEntityResolver):
             "unresolved_ref_count": len(unresolved_refs),
             "candidate_entity_count": len(candidate_entities),
             "duplicate_candidate_count": len(duplicate_candidates),
+            "total_entity_references_count": (
+                sum(len(e.references) for e in candidate_entities) + len(unresolved_refs)
+            ),
             "memory_state_description": (
-                "Indici mantenuti in memoria: dizionari di EntityReference indicizzati per "
-                "JID completo esatto e per numero telefonico canonicalizzato. "
-                "Crescita O(U) dove U e il numero di identificatori unici distinti."
+                "Modello di complessità di memoria: "
+                "(1) Buffer di lavoro durante ingestion/staging: bounded O(B) con batch_size=1000 su SQLite; "
+                "(2) Indice delle entità uniche: O(E) dove E è il numero di entità univoche (JID/telefoni); "
+                "(3) Tracciamento della provenance forense: O(N) riferimenti (EntityReference immutabili) "
+                "per conservare la catena di custodia e il link a ciascun record mittente/destinatario; "
+                "(4) Materializzazione finale dei documenti: O(N) in memoria per i bundle e sezioni di evidenza."
             ),
         }
 
@@ -347,38 +399,21 @@ class DeterministicEntityResolver(BaseEntityResolver):
         return actor.raw_value.strip() if actor.raw_value else None
 
     def _detect_duplicate_candidates(
-        self, records: list[NormalizedRecord]
+        self, records: Iterable[NormalizedRecord]
     ) -> list[DuplicateCandidate]:
         """
         Rileva candidati duplicati su base di testo identico, timestamp comparabile
         sulla stessa timeline e compatibilità strutturale di mittente e message type.
-
-        Principi:
-        1. DuplicateCandidate rimane NON distruttivo (nessun record eliminato o fuso).
-        2. Nessun DuplicateCandidate è automaticamente un duplicate confirmed.
-        3. Stesso testo + stesso timestamp da soli NON sono EXACT.
-        4. Timestamp ABSENT: text-only duplicate detection è disabilitata.
-        5. KNOWN_UTC e NAIVE_UNKNOWN NON vengono confrontati come se appartenessero alla stessa timeline.
-        6. Compatibilità mittente e tipo messaggio verificata.
-        7. Livelli di confidenza prudenti: STRONG o WEAK, mai EXACT.
         """
-        # Raggruppa per (testo_pulito, timeline_key)
-        # timeline_key separa rigorosamente KNOWN_UTC da NAIVE_UNKNOWN ed esclude ABSENT
-        text_time_map: dict[tuple[str, tuple[str, str]], list[NormalizedRecord]] = defaultdict(list)
-
+        text_time_map: dict[tuple[str, tuple[str, str]], list[Any]] = defaultdict(list)
         for rec in records:
             if rec.record_type != "message" or not rec.text_content:
                 continue
-
             clean_text = rec.text_content.strip()
             if not clean_text:
                 continue
-
-            # C4: Se il timestamp è ABSENT, non creare candidati duplicati sulla sola base del testo
             if rec.timestamp.status == TimestampTzStatus.ABSENT:
                 continue
-
-            # C3: Comparabilità temporale rigorosa - KNOWN_UTC e NAIVE_UNKNOWN su timeline distinte
             if rec.timestamp.status == TimestampTzStatus.KNOWN_UTC:
                 if rec.timestamp.utc_datetime is None:
                     continue
@@ -389,9 +424,17 @@ class DeterministicEntityResolver(BaseEntityResolver):
                 timeline_key = ("NAIVE_UNKNOWN", rec.timestamp.naive_datetime.isoformat())
             else:
                 continue
-
             text_time_map[(clean_text, timeline_key)].append(rec)
 
+        return self._detect_duplicate_candidates_from_groups(text_time_map)
+
+    def _detect_duplicate_candidates_from_groups(
+        self, text_time_map: Mapping[tuple[str, tuple[str, str]], Sequence[Any]]
+    ) -> list[DuplicateCandidate]:
+        """
+        Raggruppa ed emette i DuplicateCandidate a partire dai gruppi di record
+        già indicizzati per (testo_pulito, timeline_key).
+        """
         duplicates: list[DuplicateCandidate] = []
         dup_counter = 1
 
@@ -400,7 +443,7 @@ class DeterministicEntityResolver(BaseEntityResolver):
                 continue
 
             # Raggruppa in cluster reciprocamente compatibili (mittente e tipo messaggio)
-            clusters: list[list[NormalizedRecord]] = []
+            clusters: list[list[Any]] = []
             for rec in group:
                 placed = False
                 for cluster in clusters:
@@ -571,7 +614,7 @@ class DeterministicEntityResolver(BaseEntityResolver):
         return "UNKNOWN"
 
     @classmethod
-    def _records_are_compatible(cls, r1: NormalizedRecord, r2: NormalizedRecord) -> bool:
+    def _records_are_compatible(cls, r1: Any, r2: Any) -> bool:
         """
         Verifica compatibilità semantica tra due record candidati duplicati:
         mittente compatibile e message type compatibile.

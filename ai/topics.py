@@ -51,8 +51,19 @@ PROMPT_VERSION_DISCOVERY = "topic_discovery_v1"
 
 OPERATIONAL_MULTIMODAL_DIRECTIVE = """
 MULTIMODAL SEMANTIC DIRECTIVE:
-The topic may be supported semantically by any evidence source, including original text (ORIGINAL_TEXT), audio transcription (STT_TRANSCRIPTION), OCR (OCR_TEXT), vision description (VISION_DESCRIPTION), or vision observations (VISION_OBSERVATION).
-Do not require literal lexical overlap with the topic label. Evaluate semantic equivalence and presence of described objects, actions, scenes, or concepts.
+The requested topic may be expressed semantically rather than through literal keyword overlap.
+
+Evaluate the meaning of ALL evidence sources, including:
+- original message text,
+- speech-to-text transcriptions,
+- OCR text,
+- image vision descriptions,
+- image vision observations.
+
+If the evidence clearly describes the concept represented by the topic, return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
+
+PRESENT still requires at least one valid evidence_id.
+Do not infer beyond the supplied evidence.
 """
 
 
@@ -161,10 +172,16 @@ OUTPUT RULES:
 
         # Verifica Model Mismatch
         if target_model and response.model != target_model:
-            raise AiModelMismatchError(
-                f"Model mismatch in Topic Detection: richiesto model_id '{target_model}', "
-                f"ma il backend ha restituito '{response.model}'."
-            )
+            is_match = False
+            if operational_mode:
+                from ai.lmstudio import is_equivalent_operational_model
+                is_match = is_equivalent_operational_model(target_model, response.model, client=self.client)
+
+            if not is_match:
+                raise AiModelMismatchError(
+                    f"Model mismatch in Topic Detection: richiesto model_id '{target_model}', "
+                    f"ma il backend ha restituito '{response.model}'."
+                )
 
         decision, evidence_ids, rationale = validate_topic_detection_payload(
             raw_text=response.content,
@@ -202,9 +219,15 @@ class TopicDiscoveryAnalyzer:
     Analizzatore per l'Open Topic Discovery su un ConversationEvidenceDocument.
     """
 
-    def __init__(self, client: BaseLlmClient, default_model_id: str | None = None) -> None:
+    def __init__(
+        self,
+        client: BaseLlmClient,
+        default_model_id: str | None = None,
+        operational_mode: bool = False,
+    ) -> None:
         self.client = client
         self.default_model_id = default_model_id
+        self.operational_mode = operational_mode
 
     def discover_topics(
         self,
@@ -217,6 +240,7 @@ class TopicDiscoveryAnalyzer:
         seed: int | None = 42,
         timeout_seconds: float = 30.0,
         max_tokens: int | None = None,
+        operational_mode: bool | None = None,
     ) -> TopicDiscoveryResult:
         """
         Esegue la scoperta non supervisionata di temi emergenti nel documento.
@@ -277,11 +301,18 @@ OUTPUT RULES:
             max_tokens=max_tokens,
         )
 
+        is_op = self.operational_mode if operational_mode is None else operational_mode
         if target_model and response.model != target_model:
-            raise AiModelMismatchError(
-                f"Model mismatch in Topic Discovery: richiesto model_id '{target_model}', "
-                f"ma il backend ha restituito '{response.model}'."
-            )
+            is_match = False
+            if is_op:
+                from ai.lmstudio import is_equivalent_operational_model
+                is_match = is_equivalent_operational_model(target_model, response.model, client=self.client)
+
+            if not is_match:
+                raise AiModelMismatchError(
+                    f"Model mismatch in Topic Discovery: richiesto model_id '{target_model}', "
+                    f"ma il backend ha restituito '{response.model}'."
+                )
 
         discovered = validate_topic_discovery_payload(
             raw_text=response.content,

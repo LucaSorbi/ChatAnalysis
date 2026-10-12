@@ -554,6 +554,7 @@ python ai/experiment.py \
     --family "$FAMILY" \
     --quantization "$QUANTIZATION" \
     --parameter-size "$PARAMETER_SIZE" \
+    --context-length "$CONTEXT_LENGTH" \
     --base-url "$BASE_URL" \
     --timeout "$TIMEOUT" \
     --max-tokens "$MAX_TOKENS" \

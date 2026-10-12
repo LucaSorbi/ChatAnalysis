@@ -1,0 +1,108 @@
+=== ISOLATED_WHEEL_IMPORT ===
+Timestamp: 2026-10-11T19:07:43.820119+00:00
+OS: Windows 11
+Python Version: 3.14.7
+Working Directory: C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_run_sandbox
+Command: C:\Users\lucas\Desktop\Tesi\.venv\Scripts\python.exe -c import sys
+from pathlib import Path
+print('ISOLATED_SYS_PATH:', sys.path)
+import analysis
+from analysis.service import LocalTopicAnalysisService
+from analysis.models import OperationalAnalysisConfig
+import ai.lmstudio
+from ai.lmstudio import (
+    LmStudioClient,
+    extract_quantization_name,
+    resolve_operational_model_from_metadata,
+    AiModelNotInstalledError,
+    AiModelMismatchError,
+    LocalModelMetadata,
+)
+import ui.application
+from ui.application import execute_discovery_verification
+import importer.whatsapp_export
+import multimodal.asset_access
+from multimodal.asset_access import MediaAssetAccessService, MediaAssetRegistry
+import entity_resolution.resolver
+import search.service
+import validation.validator
+import normalization.normalizer
+
+# 1. Verifica parsing quantizzazione e provenance
+assert extract_quantization_name({'name': 'Q4_K_M', 'bits_per_weight': 4}) == 'Q4_K_M'
+assert extract_quantization_name('Q4_K_M') == 'Q4_K_M'
+assert extract_quantization_name(None) is None
+
+# 2. Verifica strict quantization enforcement dal wheel
+q8_models = [
+    LocalModelMetadata(
+        key='lmstudio-community/Qwen2.5-7B-Instruct-GGUF',
+        display_name='Qwen2.5-7B-Instruct',
+        quantization='Q8_0',
+        loaded_instances=[{'id': 'q8-inst', 'config': {'context_length': 8192}}],
+    )
+]
+try:
+    resolve_operational_model_from_metadata(
+        q8_models, 'qwen2.5-7b-instruct', required_quantization='Q4_K_M', allow_fallback_quantization=False
+    )
+    assert False, 'Should have raised AiModelNotInstalledError under strict mode'
+except AiModelNotInstalledError:
+    pass
+
+fallback_res = resolve_operational_model_from_metadata(
+    q8_models, 'qwen2.5-7b-instruct', required_quantization='Q4_K_M', allow_fallback_quantization=True
+)
+assert fallback_res.selected_quantization == 'Q8_0'
+assert fallback_res.requested_quantization == 'Q4_K_M'
+
+# 3. Verifica moduli e __file__ isolation
+imported_modules = {
+    'analysis': analysis,
+    'ai.lmstudio': ai.lmstudio,
+    'ui.application': ui.application,
+    'importer.whatsapp_export': importer.whatsapp_export,
+    'multimodal.asset_access': multimodal.asset_access,
+    'entity_resolution.resolver': entity_resolution.resolver,
+    'search.service': search.service,
+    'validation.validator': validation.validator,
+    'normalization.normalizer': normalization.normalizer,
+}
+print('--- VERIFIED MODULE __FILE__ PATHS ---')
+for mod_name, mod_obj in imported_modules.items():
+    mod_file = getattr(mod_obj, '__file__', None)
+    print(f'MODULE [{mod_name}] -> {mod_file}')
+    assert mod_file is not None, f'Missing __file__ for {mod_name}'
+    mod_path = Path(mod_file).resolve()
+    target_root = Path(r'C:/Users/lucas/AppData/Local/Temp/chatanalysis_whl_test_qlwgrn2n/isolated_site_packages').resolve()
+    assert target_root in mod_path.parents or mod_path.parent == target_root, f'Module {mod_name} loaded from outside wheel: {mod_path}'
+    repo_root = Path(r'C:/Users/lucas/Desktop/Tesi').resolve()
+    assert not (repo_root in mod_path.parents and '.venv' not in str(mod_path)), f'Module loaded from working directory: {mod_path}'
+
+# 4. Verifica configurazione operativa e client
+cfg = OperationalAnalysisConfig()
+assert cfg.context_length == 8192
+assert cfg.timeout_seconds == 240.0
+svc = LocalTopicAnalysisService(config=cfg)
+assert svc.default_model == 'qwen2.5-7b-instruct'
+client = LmStudioClient(model_id='qwen2.5-7b-instruct')
+assert hasattr(client, 'get_active_binding')
+print('ISOLATED_WHEEL_IMPORT_SMOKE_SUCCESS')
+
+Exit Code: 0 (Expected: 0)
+Execution Duration: 1.51s
+Status: PASSED
+--- STDOUT ---
+ISOLATED_SYS_PATH: ['', 'C:\\Users\\lucas\\AppData\\Local\\Temp\\chatanalysis_whl_test_qlwgrn2n\\isolated_site_packages', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64\\python314.zip', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64\\DLLs', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64\\Lib', 'C:\\Users\\lucas\\AppData\\Local\\Python\\pythoncore-3.14-64', 'C:\\Users\\lucas\\Desktop\\Tesi\\.venv', 'C:\\Users\\lucas\\Desktop\\Tesi\\.venv\\Lib\\site-packages']
+--- VERIFIED MODULE __FILE__ PATHS ---
+MODULE [analysis] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\analysis\__init__.py
+MODULE [ai.lmstudio] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\ai\lmstudio.py
+MODULE [ui.application] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\ui\application.py
+MODULE [importer.whatsapp_export] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\importer\whatsapp_export.py
+MODULE [multimodal.asset_access] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\multimodal\asset_access.py
+MODULE [entity_resolution.resolver] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\entity_resolution\resolver.py
+MODULE [search.service] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\search\service.py
+MODULE [validation.validator] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\validation\validator.py
+MODULE [normalization.normalizer] -> C:\Users\lucas\AppData\Local\Temp\chatanalysis_whl_test_qlwgrn2n\isolated_site_packages\normalization\normalizer.py
+ISOLATED_WHEEL_IMPORT_SMOKE_SUCCESS
+============================================================

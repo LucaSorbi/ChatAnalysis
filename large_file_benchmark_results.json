@@ -1,0 +1,32 @@
+[
+  {
+    "target_mb": 10,
+    "input_bytes": 10486064,
+    "record_count": 18963,
+    "parsing_time_sec": 16.65,
+    "entity_resolution_sec": 3.47,
+    "doc_construction_sec": 7.71,
+    "total_time_sec": 27.83,
+    "peak_rss_mb": 181.83,
+    "message_count": 18963,
+    "evidence_count": 18963,
+    "source_hash": "c6bdc6d202d6c1d9123b66f5cb6dc27e7614e4b33f9ab75693555f6f4bd0c6ed",
+    "document_integrity": "VALID",
+    "reference_correctness": "MATCH_REFERENCE"
+  },
+  {
+    "target_mb": 25,
+    "input_bytes": 26214488,
+    "record_count": 47405,
+    "parsing_time_sec": 42.12,
+    "entity_resolution_sec": 8.47,
+    "doc_construction_sec": 19.85,
+    "total_time_sec": 70.45,
+    "peak_rss_mb": 383.06,
+    "message_count": 47405,
+    "evidence_count": 47405,
+    "source_hash": "112f20da7804bc6ab01c793b97ce6b2e095165ab0787cafbc1a2796e16682d2f",
+    "document_integrity": "VALID",
+    "reference_correctness": "MATCH_REFERENCE"
+  }
+]

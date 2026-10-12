@@ -1,0 +1,686 @@
+=== MANIFEST FILE MODIFICATI E CREATI PER IL RELEASE GATE ===
+
+1. File tracciati modificati (git diff --name-only):
+ai/chunking.py
+ai/lmstudio.py
+ai/topics.py
+docs/agent-report.md
+importer/whatsapp_export.py
+multimodal/__init__.py
+pyproject.toml
+run_benchmark.sh
+search/topics.py
+tests/integration/test_full_pipeline_e2e.py
+tests/unit/test_ai_detection_multimodal_diagnostics.py
+tests/unit/test_ai_lmstudio.py
+tests/unit/test_large_file_upload.py
+tests/unit/test_operational_model_management.py
+tests/unit/test_search_topics.py
+tests/unit/test_ui_manual_topic_detection.py
+tests/unit/test_ui_smoke.py
+tests/unit/test_ui_state.py
+ui/application.py
+ui/demo.py
+ui/ingestion.py
+ui/presentation.py
+ui/state.py
+
+warning: in the working copy of 'ai/chunking.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ai/lmstudio.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ai/topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/agent-report.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'importer/whatsapp_export.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'multimodal/__init__.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'pyproject.toml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'search/topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/integration/test_full_pipeline_e2e.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ai_detection_multimodal_diagnostics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ai_lmstudio.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_large_file_upload.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_operational_model_management.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_search_topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_manual_topic_detection.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_smoke.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_state.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/application.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/demo.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/ingestion.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/presentation.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/state.py', LF will be replaced by CRLF the next time Git touches it
+
+2. File untracked (nuovi moduli e test aggiunti per l'audit):
+.gitattributes
+MANIFEST.in
+analysis/__init__.py
+analysis/consistency.py
+analysis/models.py
+analysis/service.py
+audit_bundle/.gitignore
+audit_bundle/.streamlit/config.toml
+audit_bundle/00_git_state.txt
+audit_bundle/01_repository_manifest.txt
+audit_bundle/02_obsolete_guards_search.txt
+audit_bundle/03_file_mode_topic_flow.md
+audit_bundle/04_discovery_detection_flow.md
+audit_bundle/05_demo_case_analysis.md
+audit_bundle/06_serializer_audit.md
+audit_bundle/06b_topic_detection_audit.md
+audit_bundle/06c_topic_discovery_audit.md
+audit_bundle/07_lmstudio_audit.md
+audit_bundle/08_large_file_audit.md
+audit_bundle/09_real_ingestion_audit.md
+audit_bundle/10_multiconversation_state.md
+audit_bundle/10b_session_state_audit.md
+audit_bundle/11_context_chunking_audit.md
+audit_bundle/12_pytest_full.txt
+audit_bundle/13_targeted_tests.txt
+audit_bundle/14_apptest_inventory.md
+audit_bundle/15_live_lmstudio_status.txt
+audit_bundle/16_benchmark_integrity.md
+audit_bundle/17_architectural_debt.md
+audit_bundle/AUDIT_CURRENT_STATE.md
+audit_bundle/MANIFEST_SHA256.txt
+audit_bundle/agent-report.md
+audit_bundle/ai/__init__.py
+audit_bundle/ai/backend.py
+audit_bundle/ai/benchmark.py
+audit_bundle/ai/chunking.py
+audit_bundle/ai/cloud_experiment.py
+audit_bundle/ai/cloud_test.py
+audit_bundle/ai/discovery.py
+audit_bundle/ai/experiment.py
+audit_bundle/ai/hardware.py
+audit_bundle/ai/lmstudio.py
+audit_bundle/ai/models.py
+audit_bundle/ai/serializer.py
+audit_bundle/ai/structured.py
+audit_bundle/ai/topics.py
+audit_bundle/ai/translation.py
+audit_bundle/app.py
+audit_bundle/docs/agent-report.md
+audit_bundle/entity_resolution/__init__.py
+audit_bundle/entity_resolution/base.py
+audit_bundle/entity_resolution/models.py
+audit_bundle/entity_resolution/resolver.py
+audit_bundle/importer/__init__.py
+audit_bundle/importer/base.py
+audit_bundle/importer/cellebrite_csv.py
+audit_bundle/importer/cellebrite_json.py
+audit_bundle/importer/cellebrite_xml.py
+audit_bundle/importer/models.py
+audit_bundle/importer/whatsapp_export.py
+audit_bundle/importer/whatsapp_msgstore.py
+audit_bundle/importer/whatsapp_wa.py
+audit_bundle/multimodal/__init__.py
+audit_bundle/multimodal/evidence.py
+audit_bundle/multimodal/models.py
+audit_bundle/multimodal/ocr.py
+audit_bundle/multimodal/pipeline.py
+audit_bundle/multimodal/resolver.py
+audit_bundle/multimodal/transcriber.py
+audit_bundle/multimodal/vision.py
+audit_bundle/normalization/__init__.py
+audit_bundle/normalization/base.py
+audit_bundle/normalization/models.py
+audit_bundle/normalization/normalizer.py
+audit_bundle/normalization/phone.py
+audit_bundle/pyproject.toml
+audit_bundle/run_benchmark.sh
+audit_bundle/search/__init__.py
+audit_bundle/search/engine.py
+audit_bundle/search/index.py
+audit_bundle/search/models.py
+audit_bundle/search/normalization.py
+audit_bundle/search/service.py
+audit_bundle/search/topics.py
+audit_bundle/search/views.py
+audit_bundle/test_data/README.md
+audit_bundle/test_data/cellebrite_export/messages.csv
+audit_bundle/test_data/cellebrite_export/messages.json
+audit_bundle/test_data/cellebrite_export/report.xml
+audit_bundle/test_data/cloud_e2e/ground_truth.json
+audit_bundle/test_data/cloud_e2e/messages.json
+audit_bundle/test_data/whatsapp_export/msgstore.db
+audit_bundle/test_data/whatsapp_export/wa.db
+audit_bundle/tests/__init__.py
+audit_bundle/tests/fixtures/__init__.py
+audit_bundle/tests/fixtures/sample_records.py
+audit_bundle/tests/integration/__init__.py
+audit_bundle/tests/integration/test_ai_lmstudio_smoke.py
+audit_bundle/tests/integration/test_cellebrite_csv_integration.py
+audit_bundle/tests/integration/test_cellebrite_json_integration.py
+audit_bundle/tests/integration/test_cellebrite_xml_integration.py
+audit_bundle/tests/integration/test_cloud_e2e_dataset.py
+audit_bundle/tests/integration/test_entity_resolution_integration.py
+audit_bundle/tests/integration/test_full_pipeline_e2e.py
+audit_bundle/tests/integration/test_multimodal_pipeline_integration.py
+audit_bundle/tests/integration/test_normalization_integration.py
+audit_bundle/tests/integration/test_ocr_pipeline_integration.py
+audit_bundle/tests/integration/test_real_ingestion.py
+audit_bundle/tests/integration/test_search_integration.py
+audit_bundle/tests/integration/test_unified_pipeline_integration.py
+audit_bundle/tests/integration/test_validation_integration.py
+audit_bundle/tests/integration/test_whatsapp_msgstore_integration.py
+audit_bundle/tests/integration/test_whatsapp_wa_integration.py
+audit_bundle/tests/smoke/__init__.py
+audit_bundle/tests/smoke/test_whisper_smoke.py
+audit_bundle/tests/unit/__init__.py
+audit_bundle/tests/unit/test_ai_benchmark.py
+audit_bundle/tests/unit/test_ai_chunking.py
+audit_bundle/tests/unit/test_ai_cloud_experiment.py
+audit_bundle/tests/unit/test_ai_cloud_test.py
+audit_bundle/tests/unit/test_ai_detection_multimodal_diagnostics.py
+audit_bundle/tests/unit/test_ai_experiment.py
+audit_bundle/tests/unit/test_ai_hardware.py
+audit_bundle/tests/unit/test_ai_lmstudio.py
+audit_bundle/tests/unit/test_ai_models.py
+audit_bundle/tests/unit/test_ai_prompt_injection.py
+audit_bundle/tests/unit/test_ai_serializer.py
+audit_bundle/tests/unit/test_ai_structured.py
+audit_bundle/tests/unit/test_ai_topic_detection.py
+audit_bundle/tests/unit/test_ai_topic_discovery.py
+audit_bundle/tests/unit/test_ai_translation.py
+audit_bundle/tests/unit/test_audio_transcriber.py
+audit_bundle/tests/unit/test_base_importer.py
+audit_bundle/tests/unit/test_cellebrite_csv_importer.py
+audit_bundle/tests/unit/test_cellebrite_json_importer.py
+audit_bundle/tests/unit/test_cellebrite_xml_importer.py
+audit_bundle/tests/unit/test_deep_immutability.py
+audit_bundle/tests/unit/test_entity_resolution_models.py
+audit_bundle/tests/unit/test_entity_resolver.py
+audit_bundle/tests/unit/test_image_ocr_models.py
+audit_bundle/tests/unit/test_image_text_extractor.py
+audit_bundle/tests/unit/test_image_vision.py
+audit_bundle/tests/unit/test_large_file_upload.py
+audit_bundle/tests/unit/test_media_resolver.py
+audit_bundle/tests/unit/test_multimodal_evidence.py
+audit_bundle/tests/unit/test_normalization_models.py
+audit_bundle/tests/unit/test_normalizer.py
+audit_bundle/tests/unit/test_operational_model_management.py
+audit_bundle/tests/unit/test_phone_canonicalization.py
+audit_bundle/tests/unit/test_raw_record.py
+audit_bundle/tests/unit/test_sanitize_dataset.py
+audit_bundle/tests/unit/test_search_engine.py
+audit_bundle/tests/unit/test_search_index.py
+audit_bundle/tests/unit/test_search_models.py
+audit_bundle/tests/unit/test_search_normalization.py
+audit_bundle/tests/unit/test_search_service.py
+audit_bundle/tests/unit/test_search_topics.py
+audit_bundle/tests/unit/test_search_views.py
+audit_bundle/tests/unit/test_smoke.py
+audit_bundle/tests/unit/test_ui_application.py
+audit_bundle/tests/unit/test_ui_demo.py
+audit_bundle/tests/unit/test_ui_ingestion.py
+audit_bundle/tests/unit/test_ui_manual_topic_detection.py
+audit_bundle/tests/unit/test_ui_models.py
+audit_bundle/tests/unit/test_ui_privacy_hardening.py
+audit_bundle/tests/unit/test_ui_smoke.py
+audit_bundle/tests/unit/test_ui_state.py
+audit_bundle/tests/unit/test_unified_builder.py
+audit_bundle/tests/unit/test_unified_models.py
+audit_bundle/tests/unit/test_validation_models.py
+audit_bundle/tests/unit/test_validator.py
+audit_bundle/tests/unit/test_whatsapp_export_importer.py
+audit_bundle/tests/unit/test_whatsapp_msgstore_importer.py
+audit_bundle/tests/unit/test_whatsapp_wa_importer.py
+audit_bundle/ui/__init__.py
+audit_bundle/ui/application.py
+audit_bundle/ui/demo.py
+audit_bundle/ui/ingestion.py
+audit_bundle/ui/models.py
+audit_bundle/ui/presentation.py
+audit_bundle/ui/state.py
+audit_bundle/unified/__init__.py
+audit_bundle/unified/builder.py
+audit_bundle/unified/context.py
+audit_bundle/unified/models.py
+audit_bundle/validation/__init__.py
+audit_bundle/validation/base.py
+audit_bundle/validation/models.py
+audit_bundle/validation/validator.py
+blocker_repair_audit/00_git_state.txt
+blocker_repair_audit/01_blocker1_lmstudio_model_loading.md
+blocker_repair_audit/02_blocker2_discovery_provenance_consistency.md
+blocker_repair_audit/03_blocker3_large_file_bounded_ingestion.md
+blocker_repair_audit/04_blocker4_media_zip_multimodality.md
+blocker_repair_audit/05_frozen_benchmark_integrity.md
+blocker_repair_audit/RELEASE_GATE.md
+chatAnalysis_current_state_audit_20261009.zip
+chatAnalysis_final_release_candidate_audit.zip
+chatAnalysis_post_repair_verification.zip
+final_audit/.gitattributes
+final_audit/.streamlit/config.toml
+final_audit/00_git_state.txt
+final_audit/01_architecture_final.md
+final_audit/02_issue_resolution_matrix.md
+final_audit/03_pytest_full.txt
+final_audit/04_apptest_results.txt
+final_audit/05_packaging_verification.txt
+final_audit/06_wheel_contents.txt
+final_audit/07_isolated_import_test.txt
+final_audit/08_chunking_verification.md
+final_audit/09_model_resolution_verification.md
+final_audit/10_lmstudio_verification.md
+final_audit/11_large_file_verification.md
+final_audit/12_multiconversation_verification.md
+final_audit/13_media_capabilities.md
+final_audit/14_benchmark_integrity.md
+final_audit/15_dead_code_search.txt
+final_audit/16_release_gate.md
+final_audit/MANIFEST_SHA256.txt
+final_audit/ai/__init__.py
+final_audit/ai/backend.py
+final_audit/ai/benchmark.py
+final_audit/ai/chunking.py
+final_audit/ai/cloud_experiment.py
+final_audit/ai/cloud_test.py
+final_audit/ai/discovery.py
+final_audit/ai/experiment.py
+final_audit/ai/hardware.py
+final_audit/ai/lmstudio.py
+final_audit/ai/models.py
+final_audit/ai/serializer.py
+final_audit/ai/structured.py
+final_audit/ai/topics.py
+final_audit/ai/translation.py
+final_audit/analysis/__init__.py
+final_audit/analysis/consistency.py
+final_audit/analysis/models.py
+final_audit/analysis/service.py
+final_audit/core/__init__.py
+final_audit/core/config.py
+final_audit/core/immutability.py
+final_audit/entity_resolution/__init__.py
+final_audit/entity_resolution/base.py
+final_audit/entity_resolution/models.py
+final_audit/entity_resolution/resolver.py
+final_audit/importer/__init__.py
+final_audit/importer/base.py
+final_audit/importer/cellebrite_csv.py
+final_audit/importer/cellebrite_json.py
+final_audit/importer/cellebrite_xml.py
+final_audit/importer/models.py
+final_audit/importer/whatsapp_export.py
+final_audit/importer/whatsapp_msgstore.py
+final_audit/importer/whatsapp_wa.py
+final_audit/multimodal/__init__.py
+final_audit/multimodal/evidence.py
+final_audit/multimodal/models.py
+final_audit/multimodal/ocr.py
+final_audit/multimodal/pipeline.py
+final_audit/multimodal/resolver.py
+final_audit/multimodal/transcriber.py
+final_audit/multimodal/vision.py
+final_audit/normalization/__init__.py
+final_audit/normalization/base.py
+final_audit/normalization/models.py
+final_audit/normalization/normalizer.py
+final_audit/normalization/phone.py
+final_audit/pyproject.toml
+final_audit/run_benchmark.sh
+final_audit/scripts/__init__.py
+final_audit/scripts/build_final_release_bundle.py
+final_audit/scripts/build_repair_bundle.py
+final_audit/scripts/sanitize_synthetic_dataset.py
+final_audit/scripts/smoke_operational_ai.py
+final_audit/search/__init__.py
+final_audit/search/engine.py
+final_audit/search/index.py
+final_audit/search/models.py
+final_audit/search/normalization.py
+final_audit/search/service.py
+final_audit/search/topics.py
+final_audit/search/views.py
+final_audit/tests/__init__.py
+final_audit/tests/fixtures/__init__.py
+final_audit/tests/fixtures/sample_records.py
+final_audit/tests/integration/__init__.py
+final_audit/tests/integration/test_ai_lmstudio_smoke.py
+final_audit/tests/integration/test_cellebrite_csv_integration.py
+final_audit/tests/integration/test_cellebrite_json_integration.py
+final_audit/tests/integration/test_cellebrite_xml_integration.py
+final_audit/tests/integration/test_cloud_e2e_dataset.py
+final_audit/tests/integration/test_entity_resolution_integration.py
+final_audit/tests/integration/test_full_pipeline_e2e.py
+final_audit/tests/integration/test_multimodal_pipeline_integration.py
+final_audit/tests/integration/test_normalization_integration.py
+final_audit/tests/integration/test_ocr_pipeline_integration.py
+final_audit/tests/integration/test_real_ingestion.py
+final_audit/tests/integration/test_search_integration.py
+final_audit/tests/integration/test_unified_pipeline_integration.py
+final_audit/tests/integration/test_validation_integration.py
+final_audit/tests/integration/test_whatsapp_msgstore_integration.py
+final_audit/tests/integration/test_whatsapp_wa_integration.py
+final_audit/tests/smoke/__init__.py
+final_audit/tests/smoke/test_whisper_smoke.py
+final_audit/tests/unit/__init__.py
+final_audit/tests/unit/test_ai_benchmark.py
+final_audit/tests/unit/test_ai_chunking.py
+final_audit/tests/unit/test_ai_cloud_experiment.py
+final_audit/tests/unit/test_ai_cloud_test.py
+final_audit/tests/unit/test_ai_detection_multimodal_diagnostics.py
+final_audit/tests/unit/test_ai_experiment.py
+final_audit/tests/unit/test_ai_hardware.py
+final_audit/tests/unit/test_ai_lmstudio.py
+final_audit/tests/unit/test_ai_models.py
+final_audit/tests/unit/test_ai_prompt_injection.py
+final_audit/tests/unit/test_ai_serializer.py
+final_audit/tests/unit/test_ai_structured.py
+final_audit/tests/unit/test_ai_topic_detection.py
+final_audit/tests/unit/test_ai_topic_discovery.py
+final_audit/tests/unit/test_ai_translation.py
+final_audit/tests/unit/test_analysis_service.py
+final_audit/tests/unit/test_apptest_flows.py
+final_audit/tests/unit/test_architecture_guard.py
+final_audit/tests/unit/test_audio_transcriber.py
+final_audit/tests/unit/test_base_importer.py
+final_audit/tests/unit/test_cellebrite_csv_importer.py
+final_audit/tests/unit/test_cellebrite_json_importer.py
+final_audit/tests/unit/test_cellebrite_xml_importer.py
+final_audit/tests/unit/test_deep_immutability.py
+final_audit/tests/unit/test_discovery_detection_invariants.py
+final_audit/tests/unit/test_entity_resolution_models.py
+final_audit/tests/unit/test_entity_resolver.py
+final_audit/tests/unit/test_image_ocr_models.py
+final_audit/tests/unit/test_image_text_extractor.py
+final_audit/tests/unit/test_image_vision.py
+final_audit/tests/unit/test_large_file_upload.py
+final_audit/tests/unit/test_large_pipeline_bounded.py
+final_audit/tests/unit/test_media_resolver.py
+final_audit/tests/unit/test_model_resolution_audit.py
+final_audit/tests/unit/test_multimodal_evidence.py
+final_audit/tests/unit/test_normalization_models.py
+final_audit/tests/unit/test_normalizer.py
+final_audit/tests/unit/test_operational_model_management.py
+final_audit/tests/unit/test_packaging_release.py
+final_audit/tests/unit/test_phone_canonicalization.py
+final_audit/tests/unit/test_raw_record.py
+final_audit/tests/unit/test_sanitize_dataset.py
+final_audit/tests/unit/test_search_engine.py
+final_audit/tests/unit/test_search_index.py
+final_audit/tests/unit/test_search_models.py
+final_audit/tests/unit/test_search_normalization.py
+final_audit/tests/unit/test_search_service.py
+final_audit/tests/unit/test_search_topics.py
+final_audit/tests/unit/test_search_views.py
+final_audit/tests/unit/test_smoke.py
+final_audit/tests/unit/test_ui_application.py
+final_audit/tests/unit/test_ui_demo.py
+final_audit/tests/unit/test_ui_ingestion.py
+final_audit/tests/unit/test_ui_manual_topic_detection.py
+final_audit/tests/unit/test_ui_models.py
+final_audit/tests/unit/test_ui_privacy_hardening.py
+final_audit/tests/unit/test_ui_smoke.py
+final_audit/tests/unit/test_ui_state.py
+final_audit/tests/unit/test_unified_builder.py
+final_audit/tests/unit/test_unified_models.py
+final_audit/tests/unit/test_validation_models.py
+final_audit/tests/unit/test_validator.py
+final_audit/tests/unit/test_whatsapp_export_importer.py
+final_audit/tests/unit/test_whatsapp_msgstore_importer.py
+final_audit/tests/unit/test_whatsapp_strict_encoding.py
+final_audit/tests/unit/test_whatsapp_wa_importer.py
+final_audit/tests/unit/test_zip_security_hardening.py
+final_audit/ui/__init__.py
+final_audit/ui/application.py
+final_audit/ui/demo.py
+final_audit/ui/ingestion.py
+final_audit/ui/models.py
+final_audit/ui/presentation.py
+final_audit/ui/state.py
+final_audit/unified/__init__.py
+final_audit/unified/builder.py
+final_audit/unified/context.py
+final_audit/unified/models.py
+final_audit/validation/__init__.py
+final_audit/validation/base.py
+final_audit/validation/models.py
+final_audit/validation/validator.py
+multimodal/asset_access.py
+repair_bundle/.gitattributes
+repair_bundle/.streamlit/config.toml
+repair_bundle/00_git_state.txt
+repair_bundle/01_architecture_after.md
+repair_bundle/02_issue_resolution_matrix.md
+repair_bundle/03_pytest_full.txt
+repair_bundle/04_apptest_results.txt
+repair_bundle/05_chunking_verification.md
+repair_bundle/06_large_file_verification.md
+repair_bundle/07_lmstudio_verification.md
+repair_bundle/08_demo_live_workflow.md
+repair_bundle/09_file_workflow.md
+repair_bundle/10_benchmark_integrity.md
+repair_bundle/11_obsolete_code_search.txt
+repair_bundle/12_executable_check.txt
+repair_bundle/MANIFEST_SHA256.txt
+repair_bundle/ai/__init__.py
+repair_bundle/ai/backend.py
+repair_bundle/ai/benchmark.py
+repair_bundle/ai/chunking.py
+repair_bundle/ai/cloud_experiment.py
+repair_bundle/ai/cloud_test.py
+repair_bundle/ai/discovery.py
+repair_bundle/ai/experiment.py
+repair_bundle/ai/hardware.py
+repair_bundle/ai/lmstudio.py
+repair_bundle/ai/models.py
+repair_bundle/ai/serializer.py
+repair_bundle/ai/structured.py
+repair_bundle/ai/topics.py
+repair_bundle/ai/translation.py
+repair_bundle/analysis/__init__.py
+repair_bundle/analysis/consistency.py
+repair_bundle/analysis/models.py
+repair_bundle/analysis/service.py
+repair_bundle/app.py
+repair_bundle/core/__init__.py
+repair_bundle/core/config.py
+repair_bundle/core/immutability.py
+repair_bundle/entity_resolution/__init__.py
+repair_bundle/entity_resolution/base.py
+repair_bundle/entity_resolution/models.py
+repair_bundle/entity_resolution/resolver.py
+repair_bundle/importer/__init__.py
+repair_bundle/importer/base.py
+repair_bundle/importer/cellebrite_csv.py
+repair_bundle/importer/cellebrite_json.py
+repair_bundle/importer/cellebrite_xml.py
+repair_bundle/importer/models.py
+repair_bundle/importer/whatsapp_export.py
+repair_bundle/importer/whatsapp_msgstore.py
+repair_bundle/importer/whatsapp_wa.py
+repair_bundle/multimodal/__init__.py
+repair_bundle/multimodal/evidence.py
+repair_bundle/multimodal/models.py
+repair_bundle/multimodal/ocr.py
+repair_bundle/multimodal/pipeline.py
+repair_bundle/multimodal/resolver.py
+repair_bundle/multimodal/transcriber.py
+repair_bundle/multimodal/vision.py
+repair_bundle/normalization/__init__.py
+repair_bundle/normalization/base.py
+repair_bundle/normalization/models.py
+repair_bundle/normalization/normalizer.py
+repair_bundle/normalization/phone.py
+repair_bundle/pyproject.toml
+repair_bundle/run_benchmark.sh
+repair_bundle/scripts/__init__.py
+repair_bundle/scripts/build_repair_bundle.py
+repair_bundle/scripts/sanitize_synthetic_dataset.py
+repair_bundle/scripts/smoke_operational_ai.py
+repair_bundle/search/__init__.py
+repair_bundle/search/engine.py
+repair_bundle/search/index.py
+repair_bundle/search/models.py
+repair_bundle/search/normalization.py
+repair_bundle/search/service.py
+repair_bundle/search/topics.py
+repair_bundle/search/views.py
+repair_bundle/tests/__init__.py
+repair_bundle/tests/fixtures/__init__.py
+repair_bundle/tests/fixtures/sample_records.py
+repair_bundle/tests/integration/__init__.py
+repair_bundle/tests/integration/test_ai_lmstudio_smoke.py
+repair_bundle/tests/integration/test_cellebrite_csv_integration.py
+repair_bundle/tests/integration/test_cellebrite_json_integration.py
+repair_bundle/tests/integration/test_cellebrite_xml_integration.py
+repair_bundle/tests/integration/test_cloud_e2e_dataset.py
+repair_bundle/tests/integration/test_entity_resolution_integration.py
+repair_bundle/tests/integration/test_full_pipeline_e2e.py
+repair_bundle/tests/integration/test_multimodal_pipeline_integration.py
+repair_bundle/tests/integration/test_normalization_integration.py
+repair_bundle/tests/integration/test_ocr_pipeline_integration.py
+repair_bundle/tests/integration/test_real_ingestion.py
+repair_bundle/tests/integration/test_search_integration.py
+repair_bundle/tests/integration/test_unified_pipeline_integration.py
+repair_bundle/tests/integration/test_validation_integration.py
+repair_bundle/tests/integration/test_whatsapp_msgstore_integration.py
+repair_bundle/tests/integration/test_whatsapp_wa_integration.py
+repair_bundle/tests/smoke/__init__.py
+repair_bundle/tests/smoke/test_whisper_smoke.py
+repair_bundle/tests/unit/__init__.py
+repair_bundle/tests/unit/test_ai_benchmark.py
+repair_bundle/tests/unit/test_ai_chunking.py
+repair_bundle/tests/unit/test_ai_cloud_experiment.py
+repair_bundle/tests/unit/test_ai_cloud_test.py
+repair_bundle/tests/unit/test_ai_detection_multimodal_diagnostics.py
+repair_bundle/tests/unit/test_ai_experiment.py
+repair_bundle/tests/unit/test_ai_hardware.py
+repair_bundle/tests/unit/test_ai_lmstudio.py
+repair_bundle/tests/unit/test_ai_models.py
+repair_bundle/tests/unit/test_ai_prompt_injection.py
+repair_bundle/tests/unit/test_ai_serializer.py
+repair_bundle/tests/unit/test_ai_structured.py
+repair_bundle/tests/unit/test_ai_topic_detection.py
+repair_bundle/tests/unit/test_ai_topic_discovery.py
+repair_bundle/tests/unit/test_ai_translation.py
+repair_bundle/tests/unit/test_analysis_service.py
+repair_bundle/tests/unit/test_apptest_flows.py
+repair_bundle/tests/unit/test_architecture_guard.py
+repair_bundle/tests/unit/test_audio_transcriber.py
+repair_bundle/tests/unit/test_base_importer.py
+repair_bundle/tests/unit/test_cellebrite_csv_importer.py
+repair_bundle/tests/unit/test_cellebrite_json_importer.py
+repair_bundle/tests/unit/test_cellebrite_xml_importer.py
+repair_bundle/tests/unit/test_deep_immutability.py
+repair_bundle/tests/unit/test_entity_resolution_models.py
+repair_bundle/tests/unit/test_entity_resolver.py
+repair_bundle/tests/unit/test_image_ocr_models.py
+repair_bundle/tests/unit/test_image_text_extractor.py
+repair_bundle/tests/unit/test_image_vision.py
+repair_bundle/tests/unit/test_large_file_upload.py
+repair_bundle/tests/unit/test_media_resolver.py
+repair_bundle/tests/unit/test_multimodal_evidence.py
+repair_bundle/tests/unit/test_normalization_models.py
+repair_bundle/tests/unit/test_normalizer.py
+repair_bundle/tests/unit/test_operational_model_management.py
+repair_bundle/tests/unit/test_phone_canonicalization.py
+repair_bundle/tests/unit/test_raw_record.py
+repair_bundle/tests/unit/test_sanitize_dataset.py
+repair_bundle/tests/unit/test_search_engine.py
+repair_bundle/tests/unit/test_search_index.py
+repair_bundle/tests/unit/test_search_models.py
+repair_bundle/tests/unit/test_search_normalization.py
+repair_bundle/tests/unit/test_search_service.py
+repair_bundle/tests/unit/test_search_topics.py
+repair_bundle/tests/unit/test_search_views.py
+repair_bundle/tests/unit/test_smoke.py
+repair_bundle/tests/unit/test_ui_application.py
+repair_bundle/tests/unit/test_ui_demo.py
+repair_bundle/tests/unit/test_ui_ingestion.py
+repair_bundle/tests/unit/test_ui_manual_topic_detection.py
+repair_bundle/tests/unit/test_ui_models.py
+repair_bundle/tests/unit/test_ui_privacy_hardening.py
+repair_bundle/tests/unit/test_ui_smoke.py
+repair_bundle/tests/unit/test_ui_state.py
+repair_bundle/tests/unit/test_unified_builder.py
+repair_bundle/tests/unit/test_unified_models.py
+repair_bundle/tests/unit/test_validation_models.py
+repair_bundle/tests/unit/test_validator.py
+repair_bundle/tests/unit/test_whatsapp_export_importer.py
+repair_bundle/tests/unit/test_whatsapp_msgstore_importer.py
+repair_bundle/tests/unit/test_whatsapp_wa_importer.py
+repair_bundle/tests/unit/test_zip_security_hardening.py
+repair_bundle/ui/__init__.py
+repair_bundle/ui/application.py
+repair_bundle/ui/demo.py
+repair_bundle/ui/ingestion.py
+repair_bundle/ui/models.py
+repair_bundle/ui/presentation.py
+repair_bundle/ui/state.py
+repair_bundle/unified/__init__.py
+repair_bundle/unified/builder.py
+repair_bundle/unified/context.py
+repair_bundle/unified/models.py
+repair_bundle/validation/__init__.py
+repair_bundle/validation/base.py
+repair_bundle/validation/models.py
+repair_bundle/validation/validator.py
+scripts/benchmark_large_ingestion.py
+scripts/build_final_blocker_repair_bundle.py
+scripts/build_final_release_bundle.py
+scripts/build_repair_bundle.py
+scripts/smoke_operational_ai.py
+tests/unit/test_analysis_service.py
+tests/unit/test_apptest_flows.py
+tests/unit/test_architecture_guard.py
+tests/unit/test_discovery_detection_invariants.py
+tests/unit/test_discovery_provenance_service.py
+tests/unit/test_large_pipeline_bounded.py
+tests/unit/test_lmstudio_model_loading.py
+tests/unit/test_media_asset_access.py
+tests/unit/test_model_resolution_audit.py
+tests/unit/test_packaging_release.py
+tests/unit/test_staging_and_large_file.py
+tests/unit/test_whatsapp_strict_encoding.py
+tests/unit/test_zip_security_hardening.py
+ui/staging.py
+
+3. Dettaglio modifiche strutturali (git diff --stat):
+ai/chunking.py                                     |  91 +++-
+ ai/lmstudio.py                                     | 506 ++++++++++++++++-----
+ ai/topics.py                                       |  53 ++-
+ docs/agent-report.md                               |  92 ++++
+ importer/whatsapp_export.py                        |  96 +++-
+ multimodal/__init__.py                             |  19 +-
+ pyproject.toml                                     |  24 +-
+ run_benchmark.sh                                   |   2 +-
+ search/topics.py                                   |  33 +-
+ tests/integration/test_full_pipeline_e2e.py        |  19 +-
+ .../test_ai_detection_multimodal_diagnostics.py    |   8 +
+ tests/unit/test_ai_lmstudio.py                     |  43 +-
+ tests/unit/test_large_file_upload.py               |  16 +
+ tests/unit/test_operational_model_management.py    |   1 -
+ tests/unit/test_search_topics.py                   |  78 ++++
+ tests/unit/test_ui_manual_topic_detection.py       |   4 +-
+ tests/unit/test_ui_smoke.py                        |  13 +-
+ tests/unit/test_ui_state.py                        |  97 +++-
+ ui/application.py                                  | 160 ++++---
+ ui/demo.py                                         |  11 +-
+ ui/ingestion.py                                    | 334 ++++++++------
+ ui/presentation.py                                 | 250 +++++-----
+ ui/state.py                                        | 395 +++++++++++-----
+ 23 files changed, 1671 insertions(+), 674 deletions(-)
+
+warning: in the working copy of 'ai/chunking.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ai/lmstudio.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ai/topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'docs/agent-report.md', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'importer/whatsapp_export.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'multimodal/__init__.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'pyproject.toml', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'search/topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/integration/test_full_pipeline_e2e.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ai_detection_multimodal_diagnostics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ai_lmstudio.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_large_file_upload.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_operational_model_management.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_search_topics.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_manual_topic_detection.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_smoke.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'tests/unit/test_ui_state.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/application.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/demo.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/ingestion.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/presentation.py', LF will be replaced by CRLF the next time Git touches it
+warning: in the working copy of 'ui/state.py', LF will be replaced by CRLF the next time Git touches it

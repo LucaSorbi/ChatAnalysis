@@ -1,0 +1,23 @@
+{
+  "models": [
+    {
+      "model_key": "qwen2.5-7b-instruct",
+      "display_name": "Qwen 2.5 7B Instruct",
+      "format": "gguf",
+      "size_bytes": 4680000000,
+      "architecture": "qwen2",
+      "quantization": "Q4_K_M",
+      "max_context_length": 32768,
+      "loaded_instances": [
+        {
+          "instance_id": "instance-qwen-001",
+          "status": "loaded",
+          "config": {
+            "context_length": 8192,
+            "gpu_offload": "max"
+          }
+        }
+      ]
+    }
+  ]
+}
