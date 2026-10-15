@@ -156,6 +156,7 @@ class TopicQuery:
     topic_id: str
     label: str
     description: str
+    is_label_only: bool = False
 
     def __post_init__(self) -> None:
         if not isinstance(self.topic_id, str) or not self.topic_id.strip():

@@ -1,0 +1,96 @@
+[
+  {
+    "scale": 100,
+    "environment": {
+      "os": "Windows 11",
+      "machine": "AMD64",
+      "python_version": "3.14.7",
+      "benchmark_scope": "I/O persistenza checkpoint sintetici (non misura inferenza LLM su GTX TITAN X)"
+    },
+    "sqlite": {
+      "status": "MEASURED",
+      "measured": true,
+      "time_sec": 2.1353,
+      "throughput_cps": 46.8,
+      "mem_peak_mb": 0.01,
+      "file_size_kb": 104.0,
+      "load_time_sec": 0.0145
+    },
+    "legacy_json": {
+      "status": "MEASURED",
+      "measured": true,
+      "time_sec": 3.8371,
+      "throughput_cps": 26.1,
+      "mem_peak_mb": 0.24,
+      "io_written_mb": 1.35,
+      "load_time_sec": 0.0272,
+      "speedup_sqlite": 1.8
+    }
+  },
+  {
+    "scale": 1000,
+    "environment": {
+      "os": "Windows 11",
+      "machine": "AMD64",
+      "python_version": "3.14.7",
+      "benchmark_scope": "I/O persistenza checkpoint sintetici (non misura inferenza LLM su GTX TITAN X)"
+    },
+    "sqlite": {
+      "status": "MEASURED",
+      "measured": true,
+      "time_sec": 22.8584,
+      "throughput_cps": 43.7,
+      "mem_peak_mb": 0.03,
+      "file_size_kb": 772.0,
+      "load_time_sec": 0.0428
+    },
+    "legacy_json": {
+      "status": "MEASURED",
+      "measured": true,
+      "time_sec": 107.6603,
+      "throughput_cps": 9.3,
+      "mem_peak_mb": 1.36,
+      "io_written_mb": 131.84,
+      "load_time_sec": 0.0298,
+      "speedup_sqlite": 4.7
+    }
+  },
+  {
+    "scale": 10000,
+    "environment": {
+      "os": "Windows 11",
+      "machine": "AMD64",
+      "python_version": "3.14.7",
+      "benchmark_scope": "I/O persistenza checkpoint sintetici (non misura inferenza LLM su GTX TITAN X)"
+    },
+    "sqlite": {
+      "status": "MEASURED",
+      "measured": true,
+      "time_sec": 300.0013,
+      "throughput_cps": 33.3,
+      "mem_peak_mb": 0.01,
+      "file_size_kb": 7456.0,
+      "load_time_sec": 0.3309
+    },
+    "legacy_json": {
+      "status": "NOT_MEASURED_PROHIBITIVE_IO",
+      "measured": false,
+      "time_sec": null,
+      "throughput_cps": null,
+      "mem_peak_mb": null,
+      "io_written_mb": null,
+      "load_time_sec": null,
+      "speedup_sqlite": null,
+      "mathematical_projection": {
+        "projected_time_sec": 10766.0,
+        "projected_io_written_mb": 13184.0,
+        "projected_throughput_cps": 0.93,
+        "projected_speedup_sqlite_vs_legacy": 35.9,
+        "scaling_formula": "T(10,000) = T(1000) * (10000/1000)^2 = 107.66s * 100 = 10,766.0s",
+        "baseline_1000_measured_time_sec": 107.6603,
+        "baseline_1000_measured_io_mb": 131.84
+      },
+      "note": "NON MISURATO: l'esecuzione effettiva comporterebbe la riscrittura integrale del file 10,000 volte per ~13,184.0 MB (~12.88 GB) di I/O disco cumulativo e oltre 10,766 secondi (~3.0 ore). Riportato formalmente come non misurato per rigore sperimentale, con proiezione O(N^2) coerente."
+    }
+  }
+]

@@ -43,6 +43,18 @@ from ui.models import (
 APP_PATH = str(Path(__file__).resolve().parents[2] / "app.py")
 
 
+@pytest.fixture(autouse=True)
+def clean_checkpoints():
+    chk_dir = Path(".checkpoints")
+    if chk_dir.exists():
+        import shutil
+        shutil.rmtree(chk_dir, ignore_errors=True)
+    yield
+    if chk_dir.exists():
+        import shutil
+        shutil.rmtree(chk_dir, ignore_errors=True)
+
+
 class MockAppLlmClient(BaseLlmClient):
     """Client di test per Streamlit AppTest con risposte preconfigurate."""
 

@@ -14,8 +14,10 @@ from analysis.models import (
     DiscoveredTopicRef,
     DiscoveryChunkOutcome,
     DocumentAnalysisState,
+    InsufficientContextHeadroomError,
     OperationalAnalysisConfig,
     OperationalAnalysisFailedError,
+    OperationalProfile,
     TopicAnalysisRunMetadata,
     TopicProvenanceError,
 )
@@ -30,9 +32,11 @@ __all__ = [
     "DiscoveredTopicRef",
     "DiscoveryChunkOutcome",
     "DocumentAnalysisState",
+    "InsufficientContextHeadroomError",
     "LocalTopicAnalysisService",
     "OperationalAnalysisConfig",
     "OperationalAnalysisFailedError",
+    "OperationalProfile",
     "TopicAnalysisRunMetadata",
     "TopicProvenanceError",
 ]

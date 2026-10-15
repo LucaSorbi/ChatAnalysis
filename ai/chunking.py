@@ -61,27 +61,140 @@ class ChunkAnalysisOutcome:
     error_message: str | None = None
 
 
+@dataclass(frozen=True)
+class DocumentAnalysisProfile:
+    """
+    Profilo statico e forense del documento calcolato prima dell'inferenza.
+    Distingue testo analizzabile e conteggi strutturali senza invocare l'AI.
+    """
+    document_id: str
+    total_messages: int
+    total_evidence_sections: int
+    total_text_characters: int
+    estimated_text_tokens: int
+    estimated_chunks: int
+    source_name: str
+    has_multimodal_evidence: bool
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "document_id": self.document_id,
+            "total_messages": self.total_messages,
+            "total_evidence_sections": self.total_evidence_sections,
+            "total_text_characters": self.total_text_characters,
+            "estimated_text_tokens": self.estimated_text_tokens,
+            "estimated_chunks": self.estimated_chunks,
+            "source_name": self.source_name,
+            "has_multimodal_evidence": self.has_multimodal_evidence,
+        }
+
+
+def estimate_evidence_framing_tokens(section: Any, default_floor: int = 85) -> int:
+    """
+    Stima conservativa e verificabile dell'overhead di serializzazione JSON per una sezione di evidenza.
+    Tiene conto di identificativi complessi, metadati e delimitatori JSON (~85 token floor).
+    """
+    ev_id = getattr(section, "evidence_id", "")
+    s_type = getattr(getattr(section, "source_type", None), "value", "text")
+    msg_id = getattr(section, "message_id", "")
+    s_name = getattr(section, "source_name", "") or ""
+    s_rec = getattr(section, "source_record_id", "") or ""
+    s_lang = getattr(section, "language", "") or ""
+    meta_chars = len(ev_id) + len(s_type) + len(msg_id) + len(s_name) + len(s_rec) + len(s_lang) + 110
+    import math
+    return max(default_floor, math.ceil(meta_chars / 2.5))
+
+
+def profile_document_for_analysis(
+    document: ConversationEvidenceDocument,
+    max_characters: int = 12000,
+    max_bundles: int = 100,
+    max_tokens: int | None = 2500,
+    service: Any = None,
+    analysis_type: str = "detection",
+    max_topics: int | None = None,
+    profile: Any = None,
+) -> DocumentAnalysisProfile:
+    """
+    Esegue la profilazione preventiva del documento prima di iniziare l'analisi AI.
+    Se viene fornita un'istanza del servizio, ne utilizza la configurazione effettiva
+    per garantire coerenza al 100% tra stima preventiva e run operativa.
+    """
+    if service is not None and hasattr(service, "profile_document"):
+        return service.profile_document(
+            document=document,
+            analysis_type=analysis_type,
+            max_topics=max_topics,
+            profile=profile,
+        )
+
+    total_chars = 0
+    sec_count = 0
+    has_multimodal = False
+
+    for b in document.bundles:
+        if b.audio_transcription or b.image_ocr or b.image_vision:
+            has_multimodal = True
+        for sec in b.text_evidence_sections:
+            sec_count += 1
+            total_chars += len(sec.text)
+
+    # Stima prudenziale dei token (~2.8 caratteri per token in italiano/multilingue)
+    import math
+    est_tokens = max(math.ceil(total_chars / 2.8), 0)
+
+    # Calcolo dei chunk effettivi tramite split_document_into_chunks
+    chunks = split_document_into_chunks(
+        document,
+        max_characters=max_characters,
+        max_bundles=max_bundles,
+        max_tokens=max_tokens,
+    )
+
+    return DocumentAnalysisProfile(
+        document_id=document.document_id,
+        total_messages=document.message_count,
+        total_evidence_sections=sec_count,
+        total_text_characters=total_chars,
+        estimated_text_tokens=est_tokens,
+        estimated_chunks=len(chunks),
+        source_name=document.source_name or "unknown",
+        has_multimodal_evidence=has_multimodal,
+    )
+
+
 def split_document_into_chunks(
     document: ConversationEvidenceDocument,
     max_characters: int = 8000,
     max_bundles: int = 25,
+    max_tokens: int | None = None,
 ) -> tuple[ConversationEvidenceDocument, ...]:
     """
     Suddivide deterministicamente un ConversationEvidenceDocument in una sequenza di sotto-documenti
-    preservando l'atomicità dei bundle di evidenza.
+    preservando l'atomicità dei bundle di evidenza e la cronologia.
 
-    Nota metodologica: max_characters rappresenta una stima prudenziale del budget di caratteri,
-    non un calcolo token-perfect.
+    Supporta budget congiunto di caratteri, numero di bundle e token stimati:
+    - max_characters: limite massimo prudenziale di caratteri testuali per chunk;
+    - max_bundles: numero massimo di bundle atomici per chunk;
+    - max_tokens: limite opzionale sul budget stimato di token di evidenza.
     """
     if not document.bundles:
         return (document,)
 
+    import math
+
     chunks: list[list[MessageEvidenceBundle]] = []
     current_chunk: list[MessageEvidenceBundle] = []
     current_chars = 0
+    current_tokens = 0
 
     for bundle in document.bundles:
         bundle_chars = sum(len(sec.text) for sec in bundle.text_evidence_sections)
+        # Stima token realistica che include il testo e il framing JSON serializzato della sezione (~85 token floor o dinamico)
+        bundle_framing_tokens = sum(
+            estimate_evidence_framing_tokens(sec) for sec in bundle.text_evidence_sections
+        )
+        bundle_tokens = math.ceil(bundle_chars / 2.8) + bundle_framing_tokens
 
         # H1: Controllo singola evidenza oversize
         for sec in bundle.text_evidence_sections:
@@ -90,6 +203,10 @@ def split_document_into_chunks(
                     f"La sezione di evidenza '{sec.evidence_id}' ({len(sec.text)} caratteri) "
                     f"supera il limite massimo consentito per chunk ({max_characters} caratteri)."
                 )
+            if max_tokens is not None and math.ceil(len(sec.text) / 2.8) > max_tokens:
+                raise AnalysisInputTooLargeError(
+                    f"La sezione di evidenza '{sec.evidence_id}' supera il limite token consentito per chunk ({max_tokens} token)."
+                )
 
         # H2: Controllo bundle atomico oversize
         if bundle_chars > max_characters:
@@ -97,18 +214,26 @@ def split_document_into_chunks(
                 f"Il bundle atomico per il messaggio '{bundle.message.message_id}' ({bundle_chars} caratteri) "
                 f"supera da solo il limite massimo consentito per chunk ({max_characters} caratteri)."
             )
+        if max_tokens is not None and bundle_tokens > max_tokens:
+            raise AnalysisInputTooLargeError(
+                f"Il bundle atomico per il messaggio '{bundle.message.message_id}' ({bundle_tokens} token stimati) "
+                f"supera da solo il limite massimo token consentito per chunk ({max_tokens} token)."
+            )
 
         # Se l'aggiunta supera i limiti e il chunk corrente non è vuoto, chiude il chunk
-        if current_chunk and (
-            current_chars + bundle_chars > max_characters
-            or len(current_chunk) >= max_bundles
-        ):
+        exceeds_chars = (current_chars + bundle_chars > max_characters)
+        exceeds_bundles = (len(current_chunk) >= max_bundles)
+        exceeds_tokens = (max_tokens is not None and (current_tokens + bundle_tokens > max_tokens))
+
+        if current_chunk and (exceeds_chars or exceeds_bundles or exceeds_tokens):
             chunks.append(current_chunk)
             current_chunk = []
             current_chars = 0
+            current_tokens = 0
 
         current_chunk.append(bundle)
         current_chars += bundle_chars
+        current_tokens += bundle_tokens
 
     if current_chunk:
         chunks.append(current_chunk)
@@ -304,6 +429,57 @@ def aggregate_topic_detection(
     )
 
 
+ITALIAN_STOP_WORDS: frozenset[str] = frozenset({
+    "di", "a", "da", "in", "con", "su", "per", "tra", "fra",
+    "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
+    "del", "dello", "della", "dei", "degli", "delle",
+    "al", "allo", "alla", "ai", "agli", "alle",
+    "dal", "dallo", "dalla", "dai", "dagli", "dalle",
+    "nel", "nello", "nella", "nei", "negli", "nelle",
+    "sul", "sullo", "sulla", "sui", "sugli", "sulle",
+    "d", "l", "ed", "ad",
+})
+
+
+def stem_italian_word(word: str) -> str:
+    """Semplice e deterministico normalizzatore morfologico per sostantivi e aggettivi italiani."""
+    w = word.strip().casefold()
+    if len(w) <= 3:
+        return w
+    if w.endswith("i"):
+        return w[:-1]
+    if w.endswith("e") and len(w) > 4:
+        return w[:-1]
+    if w.endswith(("o", "a")) and len(w) > 4:
+        return w[:-1]
+    return w
+
+
+def canonicalize_topic_label(label: str) -> str:
+    """
+    Normalizza la label a livello morfologico/sintattico (senza falsi claim di embedding neurale):
+    1. Normalizzazione testuale NFKC, rimozione punteggiatura;
+    2. Rimozione stop words e preposizioni italiane;
+    3. Stemming morfologico deterministico (singolari/plurali e flessioni);
+    4. Conservazione rigorosa dell'ordine sintattico dei lemmi per evitare fusioni
+       semanticamente improprie (es. 'Cessione di armi a privati' != 'Cessione di privati ad armi').
+    Esempi:
+    - 'Traffico di armi' e 'Traffico d'armi' -> 'traffic arm'
+    - 'Incontri riservati' e 'Incontro riservato' -> 'incontr riservat'
+    - 'Spaccio di stupefacenti' e 'Spaccio stupefacenti' -> 'spacci stupefacent'
+    """
+    raw_norm = normalize_topic_label(label)
+    if not raw_norm:
+        return ""
+    words = raw_norm.split()
+    content_words = [w for w in words if w not in ITALIAN_STOP_WORDS]
+    if not content_words:
+        content_words = words
+    stems = [stem_italian_word(w) for w in content_words]
+    return " ".join(stems)
+
+
+
 def normalize_topic_label(label: str) -> str:
     """
     Normalizza deterministicamente una label tematica per il consolidamento:
@@ -326,7 +502,7 @@ def aggregate_topic_discovery(
 ) -> TopicDiscoveryResult:
     """
     Aggrega deterministicamente i risultati di Topic Discovery provenienti da più chunk.
-    Fonde topic semanticamente/sintatticamente equivalenti (NFKC, casefold, punteggiatura)
+    Fonde topic semanticamente/sintatticamente equivalenti (NFKC, casefold, punteggiatura, stem morfologici)
     preservando tutti gli evidence_ids e tracciando il supporto dei chunk.
     Se il numero di topic consolidati supera max_topics, applica Deterministic Support Ranking:
     1. Supporto dei chunk indipendenti (quanti chunk hanno rilevato il tema);
@@ -349,19 +525,21 @@ def aggregate_topic_discovery(
         chunk_id = getattr(cr, "metadata", {}).get("chunk_id") or f"{getattr(cr, 'provenance_document_id', 'doc')}::chunk_{chunk_idx}"
         for t in cr.topics:
             raw_topics_count += 1
-            norm_key = normalize_topic_label(t.label) or t.label.strip().casefold()
-            if norm_key in consolidated:
-                item = consolidated[norm_key]
+            canonical_key = canonicalize_topic_label(t.label) or normalize_topic_label(t.label) or t.label.strip().casefold()
+            if canonical_key in consolidated:
+                item = consolidated[canonical_key]
                 item["supporting_chunks"].add(chunk_id)
                 for eid in t.evidence_ids:
                     if eid not in item["evidence_ids"]:
                         item["evidence_ids"].append(eid)
                 if len(t.short_description.strip()) > len(item["short_description"]):
                     item["short_description"] = t.short_description.strip()
+                if len(t.label.strip()) > len(item["label"]):
+                    item["label"] = t.label.strip()
             else:
-                consolidated[norm_key] = {
+                consolidated[canonical_key] = {
                     "label": t.label.strip(),
-                    "norm_key": norm_key,
+                    "norm_key": canonical_key,
                     "short_description": t.short_description.strip(),
                     "evidence_ids": list(t.evidence_ids),
                     "supporting_chunks": {chunk_id},
@@ -407,5 +585,7 @@ def aggregate_topic_discovery(
             "consolidated_topic_count": consolidated_count,
             "selected_topic_count": len(topics),
             "reduction_strategy": reduction_strategy,
+            "consolidation_mode": "stem_canonical_deduplication",
+            "semantic_deduplication": False,
         },
     )

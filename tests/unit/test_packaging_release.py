@@ -42,13 +42,14 @@ def test_packaging_wheel_contains_analysis_and_core_packages():
         dist_dir = Path(tmp_dir) / "dist"
         dist_dir.mkdir(parents=True, exist_ok=True)
 
-        # 1. Costruzione wheel tramite pip wheel --no-deps
+        # 1. Costruzione wheel tramite pip wheel --no-deps --no-build-isolation
         cmd = [
             sys.executable,
             "-m",
             "pip",
             "wheel",
             "--no-deps",
+            "--no-build-isolation",
             "--wheel-dir",
             str(dist_dir),
             str(REPO_ROOT),
@@ -70,6 +71,8 @@ def test_packaging_wheel_contains_analysis_and_core_packages():
                 "analysis/models.py",
                 "analysis/consistency.py",
                 "analysis/service.py",
+                "analysis/checkpoint.py",
+                "analysis/progress.py",
             ]
             for req_file in required_analysis_files:
                 assert req_file in namelist, f"File obbligatorio mancante nella wheel: {req_file}"

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import hashlib
+import json
 import re
 import time
 import uuid
@@ -31,6 +32,7 @@ from ai.backend import (
     AiModelMismatchError,
     AiModelNotInstalledError,
     AiModelNotSpecifiedError,
+    AnalysisInputTooLargeError,
     BaseLlmClient,
     BaseLocalLlmClient,
     LmStudioUnavailableError,
@@ -39,7 +41,33 @@ from ai.chunking import (
     ChunkAnalysisOutcome,
     aggregate_topic_detection,
     aggregate_topic_discovery,
+    profile_document_for_analysis,
     split_document_into_chunks,
+)
+from ai.structured import (
+    TOPIC_DETECTION_SCHEMA,
+    TOPIC_DISCOVERY_SCHEMA,
+)
+from ai.token_budget import (
+    DEFAULT_SAFETY_MARGIN_TOKENS,
+    calculate_dynamic_output_budget,
+    calculate_token_budget_plan,
+    estimate_request_input_tokens,
+    estimate_schema_tokens,
+)
+from analysis.progress import (
+    AnalysisProgressCallback,
+    AnalysisProgressEvent,
+    AnalysisProgressTracker,
+)
+from analysis.checkpoint import (
+    AnalysisCheckpointStore,
+    CheckpointSaveError,
+    compute_document_fingerprint,
+    compute_run_config_hash,
+    deserialize_detection_result_from_checkpoint,
+    deserialize_discovery_result_from_checkpoint,
+    validate_checkpoint_evidence_references,
 )
 from ai.lmstudio import (
     DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
@@ -70,13 +98,16 @@ from analysis.consistency import ConsistencyService
 from analysis.models import (
     AnalysisNoEvidenceError,
     AnalysisOrigin,
+    AnalysisPlan,
     ConsistencyResult,
     DiscoveredTopicRef,
     DiscoveryChunkOutcome,
     OperationalAnalysisConfig,
     OperationalAnalysisFailedError,
+    OperationalProfile,
     TopicAnalysisRunMetadata,
     TopicProvenanceError,
+    resolve_operational_profile,
 )
 
 FATAL_BACKEND_ERRORS = (
@@ -88,7 +119,37 @@ FATAL_BACKEND_ERRORS = (
     AiBackendProtocolError,
     AiBackendTimeoutError,
     AiBackendRequestError,
+    AnalysisInputTooLargeError,
 )
+
+
+def calculate_discovery_max_tokens(
+    max_topics: int,
+    user_max_tokens: int | None = None,
+    context_length: int = 8192,
+    estimated_prompt_tokens: int | None = None,
+    safety_margin: int = DEFAULT_SAFETY_MARGIN_TOKENS,
+) -> int:
+    """
+    Calcola un budget dinamico di token di completamento per Topic Discovery operativa,
+    proporzionato al numero di topic richiesti e vincolato all'occupazione effettiva del prompt
+    e alla context window del modello.
+    Garantisce tassativamente di non superare mai l'headroom disponibile.
+    """
+    needed = max_topics * 120 + 256
+    if estimated_prompt_tokens is not None:
+        available_headroom = max(0, context_length - estimated_prompt_tokens - safety_margin)
+        if available_headroom <= 0:
+            return 0
+        if user_max_tokens is not None and user_max_tokens > 256:
+            return min(user_max_tokens, available_headroom)
+        safe_target = min(needed, available_headroom)
+        return min(available_headroom, max(min(1024, available_headroom), safe_target))
+    else:
+        max_safe = max(1024, context_length - 4096)
+        if user_max_tokens is not None and user_max_tokens > 512:
+            return min(user_max_tokens, max_safe)
+        return max(1024, min(needed, max_safe))
 
 
 class LocalTopicAnalysisService:
@@ -106,18 +167,47 @@ class LocalTopicAnalysisService:
         timeout_seconds: float | None = None,
         max_chunk_characters: int | None = None,
         max_chunk_bundles: int | None = None,
+        max_chunk_tokens: int | None = None,
+        profile: OperationalProfile | str | None = None,
         client: BaseLlmClient | None = None,
         discovery_run_store: MutableMapping[str, dict[str, TopicDiscoveryResult]] | None = None,
         authoritative_live_run_ids: MutableSet[str] | None = None,
+        checkpoint_store: AnalysisCheckpointStore | None = None,
+        enable_checkpointing: bool = False,
     ) -> None:
         cfg = config or OperationalAnalysisConfig()
+        if profile is not None:
+            cfg = cfg.with_profile(profile)
+        if (
+            context_length is not None
+            or timeout_seconds is not None
+            or max_chunk_characters is not None
+            or max_chunk_bundles is not None
+            or max_chunk_tokens is not None
+            or default_model is not None
+        ):
+            cfg = OperationalAnalysisConfig(
+                model_spec=default_model or cfg.model_spec,
+                context_length=context_length or cfg.context_length,
+                timeout_seconds=timeout_seconds or cfg.timeout_seconds,
+                max_tokens=cfg.max_tokens,
+                temperature=cfg.temperature,
+                seed=cfg.seed,
+                max_topics=cfg.max_topics,
+                profile=cfg.profile,
+                chunk_character_budget=max_chunk_characters or cfg.chunk_character_budget,
+                max_chunk_bundles=max_chunk_bundles if max_chunk_bundles is not None else cfg.max_chunk_bundles,
+                max_chunk_tokens=max_chunk_tokens if max_chunk_tokens is not None else cfg.max_chunk_tokens,
+            )
         self.config = cfg
+        self.profile = cfg.profile
         self.base_url = base_url
-        self.default_model = default_model or cfg.model_spec
-        self.context_length = context_length or cfg.context_length
-        self.timeout_seconds = timeout_seconds or cfg.timeout_seconds
-        self.max_chunk_characters = max_chunk_characters or cfg.chunk_character_budget
-        self.max_chunk_bundles = max_chunk_bundles or cfg.max_chunk_bundles
+        self.default_model = cfg.model_spec
+        self.context_length = cfg.context_length
+        self.timeout_seconds = cfg.timeout_seconds
+        self.max_chunk_characters = cfg.chunk_character_budget
+        self.max_chunk_bundles = cfg.max_chunk_bundles
+        self.max_chunk_tokens = cfg.max_chunk_tokens
         self.default_max_tokens = cfg.max_tokens
         self._injected_client = client
         # Registro document-scoped delle discovery run per validazione formale di provenance
@@ -127,6 +217,160 @@ class LocalTopicAnalysisService:
         # Insieme dei run_id autoritativi generati internamente da run_topic_discovery()
         self._authoritative_live_run_ids: MutableSet[str] = (
             authoritative_live_run_ids if authoritative_live_run_ids is not None else set()
+        )
+        # Gestore di checkpoint e ripresa: attivo se checkpoint_store è fornito o enable_checkpointing è True
+        self.checkpoint_store = checkpoint_store
+        self.enable_checkpointing = enable_checkpointing or (checkpoint_store is not None)
+        # Cache per piani di analisi invariati a parità di documento e parametri
+        self._analysis_plan_cache: dict[str, AnalysisPlan] = {}
+
+    def _calculate_effective_chunk_token_budget(
+        self,
+        context_length: int,
+        reserved_output_tokens: int,
+        schema: Mapping[str, Any] | None = None,
+        system_prompt_overhead: int = 400,
+        safety_margin: int = DEFAULT_SAFETY_MARGIN_TOKENS,
+        raise_on_insufficient: bool = False,
+    ) -> int:
+        """
+        Calcola dinamicamente il budget prudenziale di token per singolo chunk documentale,
+        considerando l'intero prompt (system + frame), lo schema JSON, il budget di output
+        e il safety margin rispetto alla context window reale del modello.
+        Non dichiara MAI disponibile uno spazio che non esiste (headroom reale senza clamp arbitrario).
+        """
+        schema_tokens = estimate_schema_tokens(schema) if schema else 128
+        total_overhead = reserved_output_tokens + safety_margin + system_prompt_overhead + schema_tokens + 32
+        available_headroom = max(0, context_length - total_overhead)
+        if available_headroom < 256:
+            if raise_on_insufficient or available_headroom <= 0:
+                raise AnalysisInputTooLargeError(
+                    f"Spazio di contesto disponibile ({available_headroom} token) insufficiente "
+                    f"per un blocco documentale rispetto a context_length={context_length} "
+                    f"e total_overhead={total_overhead} token."
+                )
+            return available_headroom
+        configured = self.max_chunk_tokens if self.max_chunk_tokens is not None else 2500
+        return min(configured, available_headroom)
+
+    def create_analysis_plan(
+        self,
+        document: ConversationEvidenceDocument,
+        analysis_type: str = "detection",
+        max_topics: int | None = None,
+        user_max_tokens: int | None = None,
+        context_length: int | None = None,
+        profile: OperationalProfile | str | None = None,
+        topic_query: TopicQuery | None = None,
+    ) -> AnalysisPlan:
+        """
+        Unica funzione autoritativa di pianificazione delle analisi (Topic Detection e Discovery).
+        Garantisce che la profilazione preventiva della UI e l'esecuzione effettiva del servizio
+        utilizzino esattamente lo stesso piano immutabile di chunking e budget di token.
+        Per Discovery, calcola la riserva di output proporzionata a max_topics (3, 10, 25 topic).
+        """
+        ctx_len = context_length or self.context_length
+        eff_profile = profile or self.profile
+        cfg = self.config.with_profile(eff_profile) if profile else self.config
+
+        schema = TOPIC_DETECTION_SCHEMA if analysis_type == "detection" else TOPIC_DISCOVERY_SCHEMA
+        eff_max_topics = max_topics if max_topics is not None else cfg.max_topics
+
+        doc_fp = compute_document_fingerprint(document)
+        cache_key = (
+            f"{document.document_id}::{doc_fp}::{analysis_type}::{cfg.profile.value}::"
+            f"{eff_max_topics}::{ctx_len}::{user_max_tokens}::{cfg.chunk_character_budget}::"
+            f"{cfg.max_chunk_bundles}::{cfg.max_chunk_tokens}"
+        )
+        if cache_key in self._analysis_plan_cache:
+            return self._analysis_plan_cache[cache_key]
+
+        if analysis_type == "discovery":
+            out_tokens = calculate_discovery_max_tokens(
+                max_topics=eff_max_topics,
+                user_max_tokens=user_max_tokens,
+                context_length=ctx_len,
+            )
+        else:
+            out_tokens = user_max_tokens or cfg.max_tokens
+
+        eff_tokens = self._calculate_effective_chunk_token_budget(
+            context_length=ctx_len,
+            reserved_output_tokens=out_tokens,
+            schema=schema,
+        )
+
+        chunks = split_document_into_chunks(
+            document=document,
+            max_characters=cfg.chunk_character_budget,
+            max_bundles=cfg.max_chunk_bundles,
+            max_tokens=eff_tokens,
+        )
+
+        schema_tokens = estimate_schema_tokens(schema) if schema else 128
+        safety_margin = DEFAULT_SAFETY_MARGIN_TOKENS
+        overhead = out_tokens + safety_margin + 400 + schema_tokens + 32
+        headroom = max(0, ctx_len - overhead)
+
+        plan_hash_payload = {
+            "doc_id": document.document_id,
+            "type": analysis_type,
+            "chunks_count": len(chunks),
+            "chunk_tokens": eff_tokens,
+            "out_tokens": out_tokens,
+            "ctx_len": ctx_len,
+            "profile": cfg.profile.value if hasattr(cfg.profile, "value") else str(cfg.profile),
+            "max_topics": eff_max_topics if analysis_type == "discovery" else None,
+        }
+        plan_hash = hashlib.sha256(json.dumps(plan_hash_payload, sort_keys=True).encode("utf-8")).hexdigest()
+
+        plan = AnalysisPlan(
+            document_id=document.document_id,
+            analysis_type=analysis_type,
+            planned_chunks_count=len(chunks),
+            chunk_token_budget=eff_tokens,
+            chunk_character_budget=cfg.chunk_character_budget,
+            input_token_budget=eff_tokens,
+            output_token_budget=out_tokens,
+            schema=schema,
+            safety_margin=safety_margin,
+            headroom_tokens=headroom,
+            profile=cfg.profile,
+            max_topics=eff_max_topics if analysis_type == "discovery" else None,
+            effective_config=cfg,
+            chunks=tuple(chunks),
+            plan_hash=plan_hash,
+            requires_dynamic_splitting=False,
+        )
+        self._analysis_plan_cache[cache_key] = plan
+        return plan
+
+    def profile_document(
+        self,
+        document: ConversationEvidenceDocument,
+        analysis_type: str = "detection",
+        reserved_output_tokens: int | None = None,
+        context_length: int | None = None,
+        max_topics: int | None = None,
+        profile: OperationalProfile | str | None = None,
+    ) -> DocumentAnalysisProfile:
+        """
+        Esegue la profilazione preventiva del documento basandosi sul piano immutabile unificato.
+        Risolve qualsiasi discrepanza di budget o chunking tra anteprima ed esecuzione reale.
+        """
+        plan = self.create_analysis_plan(
+            document=document,
+            analysis_type=analysis_type,
+            max_topics=max_topics,
+            user_max_tokens=reserved_output_tokens,
+            context_length=context_length,
+            profile=profile,
+        )
+        return profile_document_for_analysis(
+            document=document,
+            max_characters=plan.chunk_character_budget,
+            max_bundles=plan.effective_config.max_chunk_bundles,
+            max_tokens=plan.chunk_token_budget,
         )
 
     def _are_discovery_results_identical(
@@ -394,6 +638,136 @@ class LocalTopicAnalysisService:
             return True
         return False
 
+    def _process_subchunks_detection(
+        self,
+        chunk: ConversationEvidenceDocument,
+        analyzer: TopicDetectionAnalyzer,
+        topic: TopicQuery,
+        strategy: AnalysisLanguageStrategy,
+        resolved_model: str,
+        eff_temp: float,
+        eff_seed: int | None,
+        eff_max_tokens: int,
+        operational_mode: bool,
+        tracker: AnalysisProgressTracker,
+        chunk_idx_1based: int,
+    ) -> list[ChunkAnalysisOutcome]:
+        """Esegue suddivisione controllata di un blocco che supera la finestra di contesto."""
+        mid = len(chunk.bundles) // 2
+        sub1 = ConversationEvidenceDocument(
+            document_id=f"{chunk.document_id}::sub::0",
+            bundles=chunk.bundles[:mid],
+            chat_id=chunk.chat_id,
+            source_name=chunk.source_name,
+        )
+        sub2 = ConversationEvidenceDocument(
+            document_id=f"{chunk.document_id}::sub::1",
+            bundles=chunk.bundles[mid:],
+            chat_id=chunk.chat_id,
+            source_name=chunk.source_name,
+        )
+        outcomes: list[ChunkAnalysisOutcome] = []
+        for s_idx, sub in enumerate((sub1, sub2), start=1):
+            sub_display_idx = chunk_idx_1based + (s_idx - 1)
+            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/2", record_request=False)
+            try:
+                res = analyzer.detect_topic(
+                    document=sub,
+                    topic=topic,
+                    strategy=strategy,
+                    model_id=resolved_model,
+                    temperature=eff_temp,
+                    seed=eff_seed,
+                    timeout_seconds=self.timeout_seconds,
+                    max_tokens=eff_max_tokens,
+                    operational_mode=operational_mode,
+                    context_length=self.context_length,
+                )
+                outcomes.append(
+                    ChunkAnalysisOutcome(
+                        chunk_id=sub.document_id,
+                        result=res,
+                        status="SUCCESS",
+                    )
+                )
+                tracker.chunk_success(sub_display_idx, record_request=False)
+            except Exception as s_exc:
+                tracker.chunk_failed(sub_display_idx, str(s_exc))
+                outcomes.append(
+                    ChunkAnalysisOutcome(
+                        chunk_id=sub.document_id,
+                        result=None,
+                        status="FAILED",
+                        error_type=type(s_exc).__name__,
+                        error_message=str(s_exc),
+                    )
+                )
+        return outcomes
+
+    def _process_subchunks_discovery(
+        self,
+        chunk: ConversationEvidenceDocument,
+        analyzer: TopicDiscoveryAnalyzer,
+        resolved_model: str,
+        eff_temp: float,
+        eff_seed: int | None,
+        chunk_target_topics: int,
+        tracker: AnalysisProgressTracker,
+        chunk_idx_1based: int,
+    ) -> tuple[list[DiscoveryChunkOutcome], list[TopicDiscoveryResult]]:
+        """Esegue suddivisione controllata di un blocco di discovery oversize."""
+        mid = len(chunk.bundles) // 2
+        sub1 = ConversationEvidenceDocument(
+            document_id=f"{chunk.document_id}::sub::0",
+            bundles=chunk.bundles[:mid],
+            chat_id=chunk.chat_id,
+            source_name=chunk.source_name,
+        )
+        sub2 = ConversationEvidenceDocument(
+            document_id=f"{chunk.document_id}::sub::1",
+            bundles=chunk.bundles[mid:],
+            chat_id=chunk.chat_id,
+            source_name=chunk.source_name,
+        )
+        outcomes: list[DiscoveryChunkOutcome] = []
+        results: list[TopicDiscoveryResult] = []
+        for s_idx, sub in enumerate((sub1, sub2), start=1):
+            sub_display_idx = chunk_idx_1based + (s_idx - 1)
+            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/2", record_request=False)
+            try:
+                res = analyzer.discover_topics(
+                    document=sub,
+                    model_id=resolved_model,
+                    temperature=eff_temp,
+                    seed=eff_seed,
+                    timeout_seconds=self.timeout_seconds,
+                    max_topics=chunk_target_topics,
+                    operational_mode=True,
+                    context_length=self.context_length,
+                    on_retry_callback=lambda att, r: tracker.chunk_retry(sub_display_idx, f"sub{s_idx}:{r}"),
+                )
+                outcomes.append(
+                    DiscoveryChunkOutcome(
+                        chunk_id=sub.document_id,
+                        status="SUCCESS",
+                        result=res,
+                    )
+                )
+                results.append(res)
+                tracker.chunk_success(sub_display_idx, record_request=False)
+            except Exception as s_exc:
+                tracker.chunk_failed(sub_display_idx, str(s_exc))
+                outcomes.append(
+                    DiscoveryChunkOutcome(
+                        chunk_id=sub.document_id,
+                        status="FAILED",
+                        result=None,
+                        error_type=type(s_exc).__name__,
+                        safe_error_code="SUBCHUNK_DISCOVERY_ERROR",
+                    )
+                )
+        return outcomes, results
+
     def run_topic_detection(
         self,
         document: ConversationEvidenceDocument,
@@ -406,9 +780,10 @@ class LocalTopicAnalysisService:
         max_tokens: int | None = None,
         operational_mode: bool = True,
         preserve_raw_response: bool = False,
+        progress_callback: AnalysisProgressCallback | None = None,
     ) -> TopicDetectionResult:
         """
-        Esegue Topic Detection con supporto trasparente al chunking multi-chunk.
+        Esegue Topic Detection con supporto trasparente al chunking multi-chunk e progress callback.
         """
         # Verifica preventiva: documento privo di evidenze testuali non è analizzabile
         if not document.bundles or not document.all_evidence_sections:
@@ -432,141 +807,372 @@ class LocalTopicAnalysisService:
             operational_mode=operational_mode,
         )
 
-        chunks = split_document_into_chunks(
-            document,
-            max_characters=self.max_chunk_characters,
-            max_bundles=self.max_chunk_bundles,
+        plan = self.create_analysis_plan(
+            document=document,
+            analysis_type="detection",
+            user_max_tokens=eff_max_tokens,
+            context_length=self.context_length,
+            topic_query=topic,
+        )
+        chunks = list(plan.chunks)
+        eff_chunk_tokens = plan.chunk_token_budget
+
+        tracker = AnalysisProgressTracker(
+            total_chunks=len(chunks),
+            callback=progress_callback,
+            initial_phase="Analisi dei messaggi",
         )
 
         is_synthetic = self._is_synthetic_document(document)
         should_preserve_raw = preserve_raw_response or is_synthetic
         classification = "SYNTHETIC_DEMO" if is_synthetic else "REAL_FORENSIC"
 
-        if len(chunks) == 1:
-            try:
-                result = analyzer.detect_topic(
-                    document=chunks[0],
-                    topic=topic,
-                    strategy=strategy,
-                    model_id=resolved_model,
-                    temperature=eff_temp,
-                    seed=eff_seed,
-                    timeout_seconds=self.timeout_seconds,
-                    max_tokens=eff_max_tokens,
-                    operational_mode=operational_mode,
-                )
-            except FATAL_BACKEND_ERRORS:
-                raise
-            except Exception as exc:
-                raise OperationalAnalysisFailedError(
-                    f"Inferenza di Topic Detection fallita sul documento: {exc}"
-                ) from exc
-
-            latency = round(time.perf_counter() - start_time, 3)
-            now_ts = datetime.now(timezone.utc).isoformat()
-            run_meta = TopicAnalysisRunMetadata(
-                run_id=run_id,
-                origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
-                model=resolved_model,
-                requested_model=(model_name or "").strip() or self.default_model,
-                latency_seconds=latency,
-                prompt_version=result.metadata.get("prompt_version", "topic_detection_operational_v1"),
-                strategy=strategy.value,
+        # Checkpoint: caricamento risultati validati pregressi se abilitato
+        chk_store = self.checkpoint_store if self.enable_checkpointing else None
+        doc_fp = ""
+        cfg_fp = ""
+        cached_results: dict[int, TopicDetectionResult] = {}
+        if chk_store is not None:
+            doc_fp = compute_document_fingerprint(document)
+            eff_run_cfg = OperationalAnalysisConfig(
+                model_spec=resolved_model,
+                context_length=self.context_length,
+                timeout_seconds=self.timeout_seconds,
+                max_tokens=eff_max_tokens,
                 temperature=eff_temp,
                 seed=eff_seed,
-                chunk_count=1,
-                completed_chunk_count=1,
-                data_classification=classification,
-                timestamp=now_ts,
-                document_id=document.document_id,
-                analysis_type="DETECTION",
-                resolved_model_key=(
-                    getattr(target_client, "_active_binding", None).resolved_model_key
-                    if getattr(target_client, "_active_binding", None)
-                    else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
-                ),
-                loaded_instance_id=(
-                    getattr(target_client, "_loaded_instance_id", None)
-                    or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
-                    or "UNKNOWN (not provided by LM Studio)"
-                ),
-                api_identifier=getattr(target_client, "model_id", resolved_model),
-                response_model=result.metadata.get("model") or resolved_model,
-                context_length=self.context_length,
-                max_tokens=eff_max_tokens,
-                start_timestamp=start_iso,
-                end_timestamp=now_ts,
-                status="SUCCESS",
-                error_classification=None,
+                profile=self.profile,
+                chunk_character_budget=self.max_chunk_characters,
+                max_chunk_bundles=self.max_chunk_bundles,
+                max_chunk_tokens=eff_chunk_tokens,
             )
-
-            meta = dict(result.metadata)
-            meta.update(run_meta.to_dict())
-            meta["chunk_count"] = 1
-            meta["completed_chunk_count"] = 1
-            if not should_preserve_raw and "raw_response" in meta:
-                del meta["raw_response"]
-
-            return TopicDetectionResult(
-                topic=result.topic,
-                decision=result.decision,
-                evidence_ids=result.evidence_ids,
-                rationale=result.rationale,
-                provenance_document_id=document.document_id,
-                metadata=meta,
+            cfg_fp = compute_run_config_hash(
+                model_id=resolved_model,
+                prompt_version="detection_operational" if operational_mode else "detection",
+                config=eff_run_cfg,
+                topic_query=topic,
+                chunks=chunks,
+                extra_params={
+                    "strategy": strategy.value if hasattr(strategy, "value") else str(strategy),
+                    "operational_mode": operational_mode,
+                    "resolved_model_key": (
+                        getattr(target_client, "_active_binding", None).resolved_model_key
+                        if getattr(target_client, "_active_binding", None)
+                        else getattr(target_client, "_last_loaded_model_key", None)
+                    ),
+                    "quantization": (
+                        getattr(target_client, "_active_binding", None).quantization
+                        if getattr(target_client, "_active_binding", None)
+                        else None
+                    ),
+                },
             )
+            checkpoint = chk_store.load_and_validate_checkpoint(
+                document=document,
+                config_fingerprint=cfg_fp,
+                chunks=chunks,
+                expected_topic_query=topic,
+                expected_analysis_type="detection",
+            )
+            if checkpoint is not None:
+                for s_idx, s_data in checkpoint.serialized_results.items():
+                    try:
+                        cached_results[int(s_idx)] = deserialize_detection_result_from_checkpoint(s_data)
+                    except Exception:
+                        pass
+                rec_count = len(cached_results)
+                rem_count = max(0, len(chunks) - rec_count)
+                if rec_count > 0:
+                    tracker.phase = f"Risultati precedenti recuperati: {rec_count} chunk | Chunk ancora da elaborare: {rem_count}"
 
-        # Multi-chunk: esecuzione chunk-by-chunk con tracking dei fallimenti
-        outcomes: list[ChunkAnalysisOutcome] = []
-        for idx, chunk in enumerate(chunks):
+        old_listener = getattr(target_client, "request_listener", None)
+        try:
             try:
-                res = analyzer.detect_topic(
-                    document=chunk,
-                    topic=topic,
-                    strategy=strategy,
-                    model_id=resolved_model,
+                target_client.request_listener = tracker
+            except Exception:
+                pass
+
+            if len(chunks) == 1:
+                total_units = 1
+                completed_count = 1
+                failed_count = 0
+                det_status = "SUCCESS"
+                if 0 in cached_results:
+                    result = cached_results[0]
+                    tracker.chunk_success(1, record_request=False)
+                    tracker.complete("Topic Detection completata da checkpoint: 1/1 blocchi recuperati.")
+                else:
+                    tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
+                    try:
+                        result = analyzer.detect_topic(
+                            document=chunks[0],
+                            topic=topic,
+                            strategy=strategy,
+                            model_id=resolved_model,
+                            temperature=eff_temp,
+                            seed=eff_seed,
+                            timeout_seconds=self.timeout_seconds,
+                            max_tokens=eff_max_tokens,
+                            operational_mode=operational_mode,
+                            context_length=self.context_length,
+                        )
+                        tracker.chunk_success(1, record_request=False)
+                        tracker.complete("Topic Detection completata.")
+                        if chk_store is not None:
+                            try:
+                                chk_store.save_chunk(
+                                    document_id=document.document_id,
+                                    document_fingerprint=doc_fp,
+                                    config_fingerprint=cfg_fp,
+                                    chunk_idx=0,
+                                    result=result,
+                                    total_planned_chunks=1,
+                                    analysis_type="detection",
+                                    model_id=resolved_model,
+                                    prompt_version="detection_operational" if operational_mode else "detection",
+                                )
+                            except Exception as chk_err:
+                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
+                    except FATAL_BACKEND_ERRORS as fatal_err:
+                        if (
+                            isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
+                            and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
+                            and len(chunks[0].bundles) > 1
+                        ):
+                            tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                            sub_outcomes = self._process_subchunks_detection(
+                                chunk=chunks[0],
+                                analyzer=analyzer,
+                                topic=topic,
+                                strategy=strategy,
+                                resolved_model=resolved_model,
+                                eff_temp=eff_temp,
+                                eff_seed=eff_seed,
+                                eff_max_tokens=eff_max_tokens,
+                                operational_mode=operational_mode,
+                                tracker=tracker,
+                                chunk_idx_1based=1,
+                            )
+                            total_units = len(sub_outcomes)
+                            completed_count = sum(1 for o in sub_outcomes if o.status == "SUCCESS")
+                            failed_count = total_units - completed_count
+                            if completed_count == total_units:
+                                result = aggregate_topic_detection(
+                                    outcomes=sub_outcomes,
+                                    topic=topic,
+                                    parent_document_id=document.document_id,
+                                    expected_chunk_count=total_units,
+                                )
+                                tracker.complete("Topic Detection completata tramite suddivisione sub-chunk.")
+                                det_status = "SUCCESS"
+                            elif completed_count > 0:
+                                result = aggregate_topic_detection(
+                                    outcomes=sub_outcomes,
+                                    topic=topic,
+                                    parent_document_id=document.document_id,
+                                    expected_chunk_count=total_units,
+                                )
+                                tracker.partial(f"Topic Detection parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
+                                det_status = "PARTIAL"
+                            else:
+                                tracker.chunk_failed(1, str(fatal_err))
+                                tracker.fail(str(fatal_err))
+                                raise
+                        else:
+                            tracker.chunk_failed(1, str(fatal_err))
+                            tracker.fail(str(fatal_err))
+                            raise
+                    except Exception as exc:
+                        tracker.chunk_failed(1, str(exc))
+                        tracker.fail(str(exc))
+                        raise OperationalAnalysisFailedError(
+                            f"Inferenza di Topic Detection fallita sul documento: {exc}"
+                        ) from exc
+
+                latency = round(time.perf_counter() - start_time, 3)
+                now_ts = datetime.now(timezone.utc).isoformat()
+                run_meta = TopicAnalysisRunMetadata(
+                    run_id=run_id,
+                    origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
+                    model=resolved_model,
+                    requested_model=(model_name or "").strip() or self.default_model,
+                    latency_seconds=latency,
+                    prompt_version=result.metadata.get("prompt_version", "topic_detection_operational_v1"),
+                    strategy=strategy.value,
                     temperature=eff_temp,
                     seed=eff_seed,
-                    timeout_seconds=self.timeout_seconds,
+                    chunk_count=int(total_units),
+                    completed_chunk_count=int(completed_count),
+                    failed_chunk_count=int(failed_count),
+                    data_classification=classification,
+                    timestamp=now_ts,
+                    document_id=document.document_id,
+                    analysis_type="DETECTION",
+                    resolved_model_key=(
+                        getattr(target_client, "_active_binding", None).resolved_model_key
+                        if getattr(target_client, "_active_binding", None)
+                        else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
+                    ),
+                    loaded_instance_id=(
+                        getattr(target_client, "_loaded_instance_id", None)
+                        or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
+                        or "UNKNOWN (not provided by LM Studio)"
+                    ),
+                    api_identifier=getattr(target_client, "model_id", resolved_model),
+                    response_model=result.metadata.get("model") or resolved_model,
+                    context_length=self.context_length,
                     max_tokens=eff_max_tokens,
-                    operational_mode=operational_mode,
-                )
-                outcomes.append(
-                    ChunkAnalysisOutcome(
-                        chunk_id=chunk.document_id,
-                        result=res,
-                        status="SUCCESS",
-                    )
-                )
-            except FATAL_BACKEND_ERRORS:
-                # Errori sistemici/fatali propagano immediatamente
-                raise
-            except Exception as exc:
-                outcomes.append(
-                    ChunkAnalysisOutcome(
-                        chunk_id=chunk.document_id,
-                        result=None,
-                        status="FAILED",
-                        error_type=type(exc).__name__,
-                        error_message=str(exc),
-                    )
+                    start_timestamp=start_iso,
+                    end_timestamp=now_ts,
+                    status=det_status,
+                    error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
                 )
 
+                meta = dict(result.metadata)
+                meta.update(run_meta.to_dict())
+                meta["chunk_count"] = int(total_units)
+                meta["completed_chunk_count"] = int(completed_count)
+                meta["failed_chunk_count"] = int(failed_count)
+                is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
+                meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
+                meta["is_label_only"] = is_label_only
+                meta["origin_flow"] = meta.get("origin_flow", "MANUAL_DETECTION")
+                meta["input_label"] = topic.label
+                meta["input_description"] = topic.description if not is_label_only else None
+                if not should_preserve_raw and "raw_response" in meta:
+                    del meta["raw_response"]
+
+                return TopicDetectionResult(
+                    topic=result.topic,
+                    decision=result.decision,
+                    evidence_ids=result.evidence_ids,
+                    rationale=result.rationale,
+                    provenance_document_id=document.document_id,
+                    metadata=meta,
+                )
+
+            # Multi-chunk: esecuzione chunk-by-chunk con tracking dei fallimenti e progress
+            outcomes: list[ChunkAnalysisOutcome] = []
+            for idx, chunk in enumerate(chunks):
+                current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
+                if idx in cached_results:
+                    res = cached_results[idx]
+                    outcomes.append(
+                        ChunkAnalysisOutcome(
+                            chunk_id=chunk.document_id,
+                            result=res,
+                            status="SUCCESS",
+                        )
+                    )
+                    tracker.chunk_success(current_tracker_idx, record_request=False)
+                    continue
+
+                tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
+                try:
+                    res = analyzer.detect_topic(
+                        document=chunk,
+                        topic=topic,
+                        strategy=strategy,
+                        model_id=resolved_model,
+                        temperature=eff_temp,
+                        seed=eff_seed,
+                        timeout_seconds=self.timeout_seconds,
+                        max_tokens=eff_max_tokens,
+                        operational_mode=operational_mode,
+                        context_length=self.context_length,
+                    )
+                    outcomes.append(
+                        ChunkAnalysisOutcome(
+                            chunk_id=chunk.document_id,
+                            result=res,
+                            status="SUCCESS",
+                        )
+                    )
+                    tracker.chunk_success(current_tracker_idx, record_request=False)
+                    if chk_store is not None:
+                        try:
+                            chk_store.save_chunk(
+                                document_id=document.document_id,
+                                document_fingerprint=doc_fp,
+                                config_fingerprint=cfg_fp,
+                                chunk_idx=idx,
+                                result=res,
+                                total_planned_chunks=len(chunks),
+                                analysis_type="detection",
+                                model_id=resolved_model,
+                                prompt_version="detection_operational" if operational_mode else "detection",
+                            )
+                        except Exception as chk_err:
+                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
+                except FATAL_BACKEND_ERRORS as fatal_err:
+                    # Se è un CONTEXT_OVERFLOW recuperabile su chunk con più di un bundle, tenta suddivisione
+                    if (
+                        isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
+                        and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
+                        and len(chunk.bundles) > 1
+                    ):
+                        tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                        sub_outcomes = self._process_subchunks_detection(
+                            chunk=chunk,
+                            analyzer=analyzer,
+                            topic=topic,
+                            strategy=strategy,
+                            resolved_model=resolved_model,
+                            eff_temp=eff_temp,
+                            eff_seed=eff_seed,
+                            eff_max_tokens=eff_max_tokens,
+                            operational_mode=operational_mode,
+                            tracker=tracker,
+                            chunk_idx_1based=current_tracker_idx,
+                        )
+                        outcomes.extend(sub_outcomes)
+                    else:
+                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
+                        tracker.fail(str(fatal_err))
+                        raise
+                except Exception as exc:
+                    tracker.chunk_failed(current_tracker_idx, str(exc))
+                    outcomes.append(
+                        ChunkAnalysisOutcome(
+                            chunk_id=chunk.document_id,
+                            result=None,
+                            status="FAILED",
+                            error_type=type(exc).__name__,
+                            error_message=str(exc),
+                        )
+                    )
+        finally:
+            try:
+                target_client.request_listener = old_listener
+            except Exception:
+                pass
+
+        total_units = len(outcomes)
         completed_count = sum(1 for o in outcomes if o.status == "SUCCESS")
+        failed_count = total_units - completed_count
         if completed_count == 0:
+            tracker.fail(f"Tutti i {total_units} blocchi di Topic Detection sono falliti.")
             raise OperationalAnalysisFailedError(
-                f"Tutti i {len(chunks)} chunk di Topic Detection sono falliti durante l'inferenza."
+                f"Tutti i {total_units} chunk di Topic Detection sono falliti durante l'inferenza."
             )
 
+        tracker.start_consolidation()
         aggregated = aggregate_topic_detection(
             outcomes=outcomes,
             topic=topic,
             parent_document_id=document.document_id,
-            expected_chunk_count=len(chunks),
+            expected_chunk_count=total_units,
         )
+        if failed_count == 0:
+            tracker.complete(f"Topic Detection completata: {completed_count}/{total_units} blocchi analizzati.")
+            det_status = "SUCCESS"
+            if chk_store is not None:
+                chk_store.clear_checkpoint(doc_fp, cfg_fp)
+        else:
+            tracker.partial(f"Topic Detection completata parzialmente: {completed_count}/{total_units} blocchi analizzati.")
+            det_status = "PARTIAL"
 
         latency = round(time.perf_counter() - start_time, 3)
-        failed_count = len(chunks) - completed_count
         now_ts = datetime.now(timezone.utc).isoformat()
         run_meta = TopicAnalysisRunMetadata(
             run_id=run_id,
@@ -574,11 +1180,11 @@ class LocalTopicAnalysisService:
             model=resolved_model,
             requested_model=(model_name or "").strip() or self.default_model,
             latency_seconds=latency,
-            prompt_version=aggregated.metadata.get("prompt_version", "topic_detection_operational_v1"),
+            prompt_version=aggregated.metadata.get("prompt_version", "topic_detection_operational_v2"),
             strategy=strategy.value,
             temperature=eff_temp,
             seed=eff_seed,
-            chunk_count=int(len(chunks)),
+            chunk_count=int(total_units),
             completed_chunk_count=int(completed_count),
             failed_chunk_count=int(failed_count),
             data_classification=classification,
@@ -601,15 +1207,21 @@ class LocalTopicAnalysisService:
             max_tokens=eff_max_tokens,
             start_timestamp=start_iso,
             end_timestamp=now_ts,
-            status="PARTIAL" if failed_count > 0 else "SUCCESS",
+            status=det_status,
             error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
         )
 
         meta = dict(aggregated.metadata)
         meta.update(run_meta.to_dict())
-        meta["chunk_count"] = int(len(chunks))
+        meta["chunk_count"] = int(total_units)
         meta["completed_chunk_count"] = int(completed_count)
         meta["failed_chunk_count"] = int(failed_count)
+        is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
+        meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
+        meta["is_label_only"] = is_label_only
+        meta["origin_flow"] = meta.get("origin_flow", "MANUAL_DETECTION")
+        meta["input_label"] = topic.label
+        meta["input_description"] = topic.description if not is_label_only else None
         if not should_preserve_raw and "raw_response" in meta:
             del meta["raw_response"]
 
@@ -632,9 +1244,10 @@ class LocalTopicAnalysisService:
         seed: int | None = None,
         max_tokens: int | None = None,
         preserve_raw_response: bool = False,
+        progress_callback: AnalysisProgressCallback | None = None,
     ) -> TopicDiscoveryResult:
         """
-        Esegue Topic Discovery LIVE con supporto trasparente al chunking multi-chunk.
+        Esegue Topic Discovery LIVE con supporto trasparente al chunking multi-chunk e progress callback.
         """
         if not document.bundles or not document.all_evidence_sections:
             raise AnalysisNoEvidenceError(
@@ -644,7 +1257,6 @@ class LocalTopicAnalysisService:
         eff_max_topics = max_topics if max_topics is not None else self.config.max_topics
         eff_temp = temperature if temperature is not None else self.config.temperature
         eff_seed = seed if seed is not None else self.config.seed
-        eff_max_tokens = max_tokens if max_tokens is not None else self.config.max_tokens
 
         run_id = f"run_disc_{uuid.uuid4().hex[:10]}"
         start_time = time.perf_counter()
@@ -658,142 +1270,378 @@ class LocalTopicAnalysisService:
             operational_mode=True,
         )
 
-        chunks = split_document_into_chunks(
-            document,
-            max_characters=self.max_chunk_characters,
-            max_bundles=self.max_chunk_bundles,
+        eff_max_tokens = calculate_discovery_max_tokens(
+            max_topics=eff_max_topics,
+            user_max_tokens=max_tokens,
+            context_length=self.context_length,
+        )
+
+        plan = self.create_analysis_plan(
+            document=document,
+            analysis_type="discovery",
+            max_topics=eff_max_topics,
+            user_max_tokens=max_tokens,
+            context_length=self.context_length,
+        )
+        chunks = list(plan.chunks)
+        eff_chunk_tokens = plan.chunk_token_budget
+
+        tracker = AnalysisProgressTracker(
+            total_chunks=len(chunks),
+            callback=progress_callback,
+            initial_phase="Analisi dei messaggi",
         )
 
         is_synthetic = self._is_synthetic_document(document)
         should_preserve_raw = preserve_raw_response or is_synthetic
         classification = "SYNTHETIC_DEMO" if is_synthetic else "REAL_FORENSIC"
 
-        if len(chunks) == 1:
-            try:
-                disc_res = analyzer.discover_topics(
-                    document=chunks[0],
-                    model_id=resolved_model,
-                    temperature=eff_temp,
-                    seed=eff_seed,
-                    timeout_seconds=self.timeout_seconds,
-                    max_topics=eff_max_topics,
-                    max_tokens=eff_max_tokens,
-                    operational_mode=True,
-                )
-            except FATAL_BACKEND_ERRORS:
-                raise
-            except Exception as exc:
-                raise OperationalAnalysisFailedError(
-                    f"Inferenza di Topic Discovery fallita sul documento: {exc}"
-                ) from exc
-
-            latency = round(time.perf_counter() - start_time, 3)
-            now_ts = datetime.now(timezone.utc).isoformat()
-            run_meta = TopicAnalysisRunMetadata(
-                run_id=run_id,
-                origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
-                model=resolved_model,
-                requested_model=(model_name or "").strip() or self.default_model,
-                latency_seconds=latency,
-                prompt_version=disc_res.metadata.get("prompt_version", "topic_discovery_v1"),
-                strategy="DIRECT_MULTILINGUAL",
+        # Checkpoint: caricamento risultati validati pregressi se abilitato
+        chk_store = self.checkpoint_store if self.enable_checkpointing else None
+        doc_fp = ""
+        cfg_fp = ""
+        cached_discovery_results: dict[int, TopicDiscoveryResult] = {}
+        if chk_store is not None:
+            doc_fp = compute_document_fingerprint(document)
+            eff_run_cfg = OperationalAnalysisConfig(
+                model_spec=resolved_model,
+                context_length=self.context_length,
+                timeout_seconds=self.timeout_seconds,
+                max_tokens=eff_max_tokens,
                 temperature=eff_temp,
                 seed=eff_seed,
-                chunk_count=1,
-                completed_chunk_count=1,
-                reduction_strategy="none",
-                data_classification=classification,
-                timestamp=now_ts,
-                document_id=document.document_id,
-                analysis_type="DISCOVERY",
-                resolved_model_key=(
-                    getattr(target_client, "_active_binding", None).resolved_model_key
-                    if getattr(target_client, "_active_binding", None)
-                    else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
-                ),
-                loaded_instance_id=(
-                    getattr(target_client, "_loaded_instance_id", None)
-                    or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
-                    or "UNKNOWN (not provided by LM Studio)"
-                ),
-                api_identifier=getattr(target_client, "model_id", resolved_model),
-                response_model=disc_res.metadata.get("model") or resolved_model,
-                context_length=self.context_length,
-                max_tokens=eff_max_tokens,
-                start_timestamp=start_iso,
-                end_timestamp=now_ts,
-                status="COMPLETE",
-                error_classification=None,
+                profile=self.profile,
+                chunk_character_budget=self.max_chunk_characters,
+                max_chunk_bundles=self.max_chunk_bundles,
+                max_chunk_tokens=eff_chunk_tokens,
             )
-
-            meta = dict(disc_res.metadata)
-            meta.update(run_meta.to_dict())
-            meta["chunk_count"] = 1
-            meta["completed_chunk_count"] = 1
-            if not should_preserve_raw and "raw_response" in meta:
-                del meta["raw_response"]
-
-            final_res = TopicDiscoveryResult(
-                topics=disc_res.topics,
-                provenance_document_id=document.document_id,
-                metadata=meta,
+            cfg_fp = compute_run_config_hash(
+                model_id=resolved_model,
+                prompt_version="discovery_operational",
+                config=eff_run_cfg,
+                chunks=chunks,
+                extra_params={
+                    "max_topics": eff_max_topics,
+                    "resolved_model_key": (
+                        getattr(target_client, "_active_binding", None).resolved_model_key
+                        if getattr(target_client, "_active_binding", None)
+                        else getattr(target_client, "_last_loaded_model_key", None)
+                    ),
+                    "quantization": (
+                        getattr(target_client, "_active_binding", None).quantization
+                        if getattr(target_client, "_active_binding", None)
+                        else None
+                    ),
+                },
             )
-            if isinstance(target_client, LmStudioClient):
-                self._authoritative_live_run_ids.add(run_id)
-            self._record_authoritative_discovery_run(document.document_id, final_res)
-            return final_res
+            checkpoint = chk_store.load_and_validate_checkpoint(
+                document=document,
+                config_fingerprint=cfg_fp,
+                chunks=chunks,
+                expected_analysis_type="discovery",
+            )
+            if checkpoint is not None:
+                for s_idx, s_data in checkpoint.serialized_results.items():
+                    try:
+                        cached_discovery_results[int(s_idx)] = deserialize_discovery_result_from_checkpoint(s_data)
+                    except Exception:
+                        pass
+                rec_count = len(cached_discovery_results)
+                rem_count = max(0, len(chunks) - rec_count)
+                if rec_count > 0:
+                    tracker.phase = f"Risultati precedenti recuperati: {rec_count} chunk | Chunk ancora da elaborare: {rem_count}"
 
-        # Multi-chunk discovery con tracking esplicito
-        chunk_outcomes: list[DiscoveryChunkOutcome] = []
-        successful_results: list[TopicDiscoveryResult] = []
-
-        for chunk in chunks:
+        old_listener = getattr(target_client, "request_listener", None)
+        try:
             try:
-                res = analyzer.discover_topics(
-                    document=chunk,
-                    model_id=resolved_model,
+                target_client.request_listener = tracker
+            except Exception:
+                pass
+
+            if len(chunks) == 1:
+                total_units = 1
+                completed_count = 1
+                failed_count = 0
+                disc_status = "COMPLETE"
+                if 0 in cached_discovery_results:
+                    disc_res = cached_discovery_results[0]
+                    tracker.chunk_success(1, record_request=False)
+                    tracker.complete("Topic Discovery completata da checkpoint: 1/1 blocchi recuperati.")
+                else:
+                    tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
+                    try:
+                        disc_res = analyzer.discover_topics(
+                            document=chunks[0],
+                            model_id=resolved_model,
+                            temperature=eff_temp,
+                            seed=eff_seed,
+                            timeout_seconds=self.timeout_seconds,
+                            max_topics=eff_max_topics,
+                            max_tokens=eff_max_tokens,
+                            operational_mode=True,
+                            context_length=self.context_length,
+                            on_retry_callback=lambda att, r: tracker.chunk_retry(1, r),
+                        )
+                        tracker.chunk_success(1, record_request=False)
+                        tracker.complete("Topic Discovery completata.")
+                        if chk_store is not None:
+                            try:
+                                chk_store.save_chunk(
+                                    document_id=document.document_id,
+                                    document_fingerprint=doc_fp,
+                                    config_fingerprint=cfg_fp,
+                                    chunk_idx=0,
+                                    result=disc_res,
+                                    total_planned_chunks=1,
+                                    analysis_type="discovery",
+                                    model_id=resolved_model,
+                                    prompt_version="discovery_operational",
+                                )
+                            except Exception as chk_err:
+                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
+                    except FATAL_BACKEND_ERRORS as fatal_err:
+                        if (
+                            isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
+                            and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
+                            and len(chunks[0].bundles) > 1
+                        ):
+                            tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                            sub_outs, sub_res = self._process_subchunks_discovery(
+                                chunk=chunks[0],
+                                analyzer=analyzer,
+                                resolved_model=resolved_model,
+                                eff_temp=eff_temp,
+                                eff_seed=eff_seed,
+                                chunk_target_topics=eff_max_topics,
+                                tracker=tracker,
+                                chunk_idx_1based=1,
+                            )
+                            total_units = len(sub_outs)
+                            completed_count = len(sub_res)
+                            failed_count = total_units - completed_count
+                            if completed_count == total_units:
+                                disc_res = aggregate_topic_discovery(
+                                    chunk_results=sub_res,
+                                    parent_document_id=document.document_id,
+                                    max_topics=eff_max_topics,
+                                )
+                                tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
+                                disc_status = "COMPLETE"
+                            elif completed_count > 0:
+                                disc_res = aggregate_topic_discovery(
+                                    chunk_results=sub_res,
+                                    parent_document_id=document.document_id,
+                                    max_topics=eff_max_topics,
+                                )
+                                tracker.partial(f"Topic Discovery parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
+                                disc_status = "PARTIAL"
+                            else:
+                                tracker.chunk_failed(1, str(fatal_err))
+                                tracker.fail(str(fatal_err))
+                                raise
+                        else:
+                            tracker.chunk_failed(1, str(fatal_err))
+                            tracker.fail(str(fatal_err))
+                            raise
+                    except Exception as exc:
+                        tracker.chunk_failed(1, str(exc))
+                        tracker.fail(str(exc))
+                        raise OperationalAnalysisFailedError(
+                            f"Inferenza di Topic Discovery fallita sul documento: {exc}"
+                        ) from exc
+
+                latency = round(time.perf_counter() - start_time, 3)
+                now_ts = datetime.now(timezone.utc).isoformat()
+                run_meta = TopicAnalysisRunMetadata(
+                    run_id=run_id,
+                    origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
+                    model=resolved_model,
+                    requested_model=(model_name or "").strip() or self.default_model,
+                    latency_seconds=latency,
+                    prompt_version=disc_res.metadata.get("prompt_version", "topic_discovery_operational_v2"),
+                    strategy="DIRECT_MULTILINGUAL",
                     temperature=eff_temp,
                     seed=eff_seed,
-                    timeout_seconds=self.timeout_seconds,
-                    max_topics=eff_max_topics,
+                    chunk_count=int(total_units),
+                    completed_chunk_count=int(completed_count),
+                    failed_chunk_count=int(failed_count),
+                    reduction_strategy="none",
+                    data_classification=classification,
+                    timestamp=now_ts,
+                    document_id=document.document_id,
+                    analysis_type="DISCOVERY",
+                    resolved_model_key=(
+                        getattr(target_client, "_active_binding", None).resolved_model_key
+                        if getattr(target_client, "_active_binding", None)
+                        else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
+                    ),
+                    loaded_instance_id=(
+                        getattr(target_client, "_loaded_instance_id", None)
+                        or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
+                        or "UNKNOWN (not provided by LM Studio)"
+                    ),
+                    api_identifier=getattr(target_client, "model_id", resolved_model),
+                    response_model=disc_res.metadata.get("model") or resolved_model,
+                    context_length=self.context_length,
                     max_tokens=eff_max_tokens,
-                    operational_mode=True,
-                )
-                chunk_outcomes.append(
-                    DiscoveryChunkOutcome(
-                        chunk_id=chunk.document_id,
-                        status="SUCCESS",
-                        result=res,
-                    )
-                )
-                successful_results.append(res)
-            except FATAL_BACKEND_ERRORS:
-                raise
-            except Exception as exc:
-                chunk_outcomes.append(
-                    DiscoveryChunkOutcome(
-                        chunk_id=chunk.document_id,
-                        status="FAILED",
-                        result=None,
-                        error_type=type(exc).__name__,
-                        safe_error_code="CHUNK_DISCOVERY_ERROR",
-                    )
+                    start_timestamp=start_iso,
+                    end_timestamp=now_ts,
+                    status=disc_status,
+                    error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
                 )
 
-        if not successful_results:
-            raise OperationalAnalysisFailedError(
-                f"Tutti i {len(chunks)} chunk di Topic Discovery sono falliti durante l'inferenza."
+                meta = dict(disc_res.metadata)
+                meta.update(run_meta.to_dict())
+                meta["chunk_count"] = int(total_units)
+                meta["completed_chunk_count"] = int(completed_count)
+                meta["failed_chunk_count"] = int(failed_count)
+                if not should_preserve_raw and "raw_response" in meta:
+                    del meta["raw_response"]
+
+                final_res = TopicDiscoveryResult(
+                    topics=disc_res.topics,
+                    provenance_document_id=document.document_id,
+                    metadata=meta,
+                )
+                if isinstance(target_client, LmStudioClient):
+                    self._authoritative_live_run_ids.add(run_id)
+                self._record_authoritative_discovery_run(document.document_id, final_res)
+                return final_res
+
+            # Multi-chunk discovery con tracking esplicito
+            chunk_outcomes: list[DiscoveryChunkOutcome] = []
+            successful_results: list[TopicDiscoveryResult] = []
+
+            chunk_target_topics = min(eff_max_topics, max(5, min(8, eff_max_topics)))
+
+            for idx, chunk in enumerate(chunks):
+                current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
+                if idx in cached_discovery_results:
+                    res = cached_discovery_results[idx]
+                    chunk_outcomes.append(
+                        DiscoveryChunkOutcome(
+                            chunk_id=chunk.document_id,
+                            status="SUCCESS",
+                            result=res,
+                        )
+                    )
+                    successful_results.append(res)
+                    tracker.chunk_success(current_tracker_idx, record_request=False)
+                    continue
+
+                tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
+                chunk_tokens = calculate_discovery_max_tokens(
+                    max_topics=chunk_target_topics,
+                    user_max_tokens=max_tokens,
+                    context_length=self.context_length,
+                )
+                try:
+                    res = analyzer.discover_topics(
+                        document=chunk,
+                        model_id=resolved_model,
+                        temperature=eff_temp,
+                        seed=eff_seed,
+                        timeout_seconds=self.timeout_seconds,
+                        max_topics=chunk_target_topics,
+                        max_tokens=chunk_tokens,
+                        operational_mode=True,
+                        context_length=self.context_length,
+                        on_retry_callback=lambda att, r: tracker.chunk_retry(current_tracker_idx, r),
+                    )
+                    chunk_outcomes.append(
+                        DiscoveryChunkOutcome(
+                            chunk_id=chunk.document_id,
+                            status="SUCCESS",
+                            result=res,
+                        )
+                    )
+                    successful_results.append(res)
+                    tracker.chunk_success(current_tracker_idx, record_request=False)
+                    if chk_store is not None:
+                        try:
+                            chk_store.save_chunk(
+                                document_id=document.document_id,
+                                document_fingerprint=doc_fp,
+                                config_fingerprint=cfg_fp,
+                                chunk_idx=idx,
+                                result=res,
+                                total_planned_chunks=len(chunks),
+                                analysis_type="discovery",
+                                model_id=resolved_model,
+                                prompt_version="discovery_operational",
+                            )
+                        except Exception as chk_err:
+                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
+                except FATAL_BACKEND_ERRORS as fatal_err:
+                    # Se è un CONTEXT_OVERFLOW recuperabile su chunk con più di un bundle, tenta suddivisione
+                    if (
+                        isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
+                        and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
+                        and len(chunk.bundles) > 1
+                    ):
+                        tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                        sub_outs, sub_res = self._process_subchunks_discovery(
+                            chunk=chunk,
+                            analyzer=analyzer,
+                            resolved_model=resolved_model,
+                            eff_temp=eff_temp,
+                            eff_seed=eff_seed,
+                            chunk_target_topics=chunk_target_topics,
+                            tracker=tracker,
+                            chunk_idx_1based=current_tracker_idx,
+                        )
+                        chunk_outcomes.extend(sub_outs)
+                        successful_results.extend(sub_res)
+                    else:
+                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
+                        tracker.fail(str(fatal_err))
+                        raise
+                except Exception as exc:
+                    tracker.chunk_failed(current_tracker_idx, str(exc))
+                    chunk_outcomes.append(
+                        DiscoveryChunkOutcome(
+                            chunk_id=chunk.document_id,
+                            status="FAILED",
+                            result=None,
+                            error_type=type(exc).__name__,
+                            safe_error_code="CHUNK_DISCOVERY_ERROR",
+                        )
+                    )
+
+            total_units = len(chunk_outcomes)
+            completed_count = len(successful_results)
+            failed_count = total_units - completed_count
+
+            if not successful_results:
+                tracker.fail(f"Tutti i {total_units} blocchi di Topic Discovery sono falliti.")
+                raise OperationalAnalysisFailedError(
+                    f"Tutti i {total_units} chunk di Topic Discovery sono falliti durante l'inferenza."
+                )
+
+            tracker.start_consolidation()
+            aggregated = aggregate_topic_discovery(
+                chunk_results=successful_results,
+                parent_document_id=document.document_id,
+                max_topics=eff_max_topics,
             )
-
-        aggregated = aggregate_topic_discovery(
-            chunk_results=successful_results,
-            parent_document_id=document.document_id,
-            max_topics=eff_max_topics,
-        )
+            if failed_count == 0:
+                tracker.complete(f"Topic Discovery completata: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
+                disc_status = "COMPLETE"
+                if chk_store is not None:
+                    try:
+                        chk_store.clear_checkpoint(doc_fp, cfg_fp)
+                    except Exception:
+                        pass
+            else:
+                tracker.partial(f"Topic Discovery completata parzialmente: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
+                disc_status = "PARTIAL"
+        finally:
+            try:
+                target_client.request_listener = old_listener
+            except Exception:
+                pass
 
         latency = round(time.perf_counter() - start_time, 3)
-        completed_count = len(successful_results)
-        failed_count = len(chunks) - completed_count
         now_ts = datetime.now(timezone.utc).isoformat()
 
         run_meta = TopicAnalysisRunMetadata(
@@ -802,11 +1650,11 @@ class LocalTopicAnalysisService:
             model=resolved_model,
             requested_model=(model_name or "").strip() or self.default_model,
             latency_seconds=latency,
-            prompt_version="topic_discovery_v1",
+            prompt_version="topic_discovery_operational_v2",
             strategy="DIRECT_MULTILINGUAL",
             temperature=eff_temp,
             seed=eff_seed,
-            chunk_count=int(len(chunks)),
+            chunk_count=int(total_units),
             completed_chunk_count=int(completed_count),
             failed_chunk_count=int(failed_count),
             reduction_strategy=aggregated.metadata.get("reduction_strategy", "none"),
@@ -830,20 +1678,17 @@ class LocalTopicAnalysisService:
             max_tokens=eff_max_tokens,
             start_timestamp=start_iso,
             end_timestamp=now_ts,
-            status="PARTIAL" if failed_count > 0 else "COMPLETE",
+            status=disc_status,
             error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
         )
 
         meta = dict(aggregated.metadata)
         meta.update(run_meta.to_dict())
-        meta["chunk_count"] = int(len(chunks))
-        meta["expected_chunk_count"] = int(len(chunks))
+        meta["chunk_count"] = int(total_units)
+        meta["expected_chunk_count"] = int(total_units)
         meta["completed_chunk_count"] = int(completed_count)
         meta["failed_chunk_count"] = int(failed_count)
-        if failed_count > 0:
-            meta["status"] = "PARTIAL"
-        else:
-            meta["status"] = "COMPLETE"
+        meta["status"] = disc_status
 
         if not should_preserve_raw and "raw_response" in meta:
             del meta["raw_response"]
@@ -870,6 +1715,7 @@ class LocalTopicAnalysisService:
         temperature: float | None = None,
         seed: int | None = None,
         preserve_raw_response: bool = False,
+        progress_callback: Any = None,
     ) -> tuple[TopicDetectionResult, ConsistencyResult]:
         """
         Esegue la 'Prova del Nove':
@@ -1048,6 +1894,7 @@ class LocalTopicAnalysisService:
             temperature=temperature,
             seed=seed,
             preserve_raw_response=preserve_raw_response,
+            progress_callback=progress_callback,
         )
 
         # Validazione degli evidence_ids restituiti dalla detection rispetto al documento
@@ -1057,6 +1904,21 @@ class LocalTopicAnalysisService:
                     f"Evidence ID estraneo '{eid}' restituito dalla Topic Detection: "
                     f"non appartiene al documento '{document.document_id}'."
                 )
+
+        det_meta = dict(det_result.metadata)
+        det_meta["origin_flow"] = "DISCOVERY_VERIFICATION"
+        det_meta["query_mode"] = "LABEL_AND_DESCRIPTION"
+        det_meta["verified_discovery_run_id"] = eff_discovery_run_id
+        det_meta["input_label"] = actual_topic.label
+        det_meta["input_description"] = actual_topic.short_description
+        det_result = TopicDetectionResult(
+            topic=det_result.topic,
+            decision=det_result.decision,
+            evidence_ids=det_result.evidence_ids,
+            rationale=det_result.rationale,
+            provenance_document_id=det_result.provenance_document_id,
+            metadata=det_meta,
+        )
 
         det_run_id = (
             det_result.metadata.get("run_id")

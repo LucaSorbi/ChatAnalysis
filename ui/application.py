@@ -14,6 +14,7 @@ Principi architetturali:
 from __future__ import annotations
 
 import hashlib
+from pathlib import Path
 import re
 from typing import Iterable, Mapping, MutableMapping, MutableSet, Optional, Sequence
 
@@ -335,24 +336,31 @@ def build_topic_query(
 ) -> TopicQuery:
     """
     Costruisce un TopicQuery deterministico e validato.
-    Se description è vuota o None, viene utilizzata la label come descrizione.
+    Se description è vuota o None, viene utilizzata la label come descrizione e impostato is_label_only=True.
     Se topic_id non è specificato, viene generato un identificativo deterministico basato su slug e hash.
     """
     if not isinstance(label, str) or not label.strip():
         raise ValueError("L'argomento (label) deve essere una stringa non vuota.")
 
     clean_label = label.strip()
+    is_label_only = False
     if description is not None and isinstance(description, str) and description.strip():
         clean_desc = description.strip()
     else:
         clean_desc = clean_label
+        is_label_only = True
 
     if not topic_id:
         slug = re.sub(r"[^a-zA-Z0-9_]+", "_", clean_label.lower()).strip("_")[:24] or "topic"
         h = hashlib.sha256(f"{clean_label}::{clean_desc}".encode("utf-8")).hexdigest()[:8]
         topic_id = f"custom_{slug}_{h}"
 
-    return TopicQuery(topic_id=topic_id, label=clean_label, description=clean_desc)
+    return TopicQuery(
+        topic_id=topic_id,
+        label=clean_label,
+        description=clean_desc,
+        is_label_only=is_label_only,
+    )
 
 
 def check_lm_studio_status(
@@ -406,13 +414,20 @@ def get_operational_analysis_service(
     timeout_seconds: float = DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
     discovery_run_store: MutableMapping[str, dict[str, Any]] | None = None,
     authoritative_live_run_ids: MutableSet[str] | None = None,
+    profile: Any = None,
+    checkpoint_store: Any = None,
+    enable_checkpointing: bool = True,
+    checkpoint_dir: Path | str | None = None,
 ) -> Any:
     """
     Factory per ottenere l'istanza autoritativa di LocalTopicAnalysisService.
-    Garantisce configurazione coerente tra tutte le operazioni applicative della UI
-    e inietta il run store document-scoped persistente della sessione.
+    Garantisce configurazione coerente tra tutte le operazioni applicative della UI,
+    iniezione del profilo operativo esplicito e abilitazione del checkpointing con persistenza protetta.
     """
     from analysis.service import LocalTopicAnalysisService
+    from analysis.checkpoint import AnalysisCheckpointStore
+    from analysis.models import OperationalProfile
+
     if discovery_run_store is None:
         try:
             from ui import state
@@ -425,12 +440,41 @@ def get_operational_analysis_service(
             authoritative_live_run_ids = state.get_authoritative_live_run_ids()
         except Exception:
             authoritative_live_run_ids = None
+
+    resolved_profile = profile
+    if resolved_profile is None:
+        try:
+            from ui import state
+            resolved_profile = state.get_operational_profile()
+        except Exception:
+            resolved_profile = OperationalProfile.BALANCED
+
+    resolved_checkpoint_store = checkpoint_store
+    if resolved_checkpoint_store is None and enable_checkpointing:
+        try:
+            from ui import state
+            resolved_checkpoint_store = state.get_checkpoint_store()
+        except Exception:
+            resolved_checkpoint_store = None
+        if resolved_checkpoint_store is None:
+            resolved_checkpoint_store = AnalysisCheckpointStore(
+                checkpoint_dir=checkpoint_dir or Path(".checkpoints")
+            )
+            try:
+                from ui import state
+                state.set_checkpoint_store(resolved_checkpoint_store)
+            except Exception:
+                pass
+
     return LocalTopicAnalysisService(
         base_url=base_url,
         default_model=model_id or DEFAULT_OPERATIONAL_MODEL,
         timeout_seconds=timeout_seconds,
         discovery_run_store=discovery_run_store,
         authoritative_live_run_ids=authoritative_live_run_ids,
+        profile=resolved_profile,
+        checkpoint_store=resolved_checkpoint_store,
+        enable_checkpointing=enable_checkpointing and (resolved_checkpoint_store is not None),
     )
 
 
@@ -447,6 +491,11 @@ def execute_manual_topic_detection(
     max_tokens: int | None = DEFAULT_OPERATIONAL_MAX_TOKENS,
     operational_mode: bool = True,
     preserve_raw_response: bool = False,
+    session_state: MutableMapping[str, Any] | None = None,
+    progress_callback: Any = None,
+    profile: Any = None,
+    checkpoint_store: Any = None,
+    enable_checkpointing: bool = True,
 ) -> TopicDetectionResult:
     """
     Esegue Topic Detection sulla conversazione corrente tramite LocalTopicAnalysisService.
@@ -456,8 +505,11 @@ def execute_manual_topic_detection(
         base_url=base_url,
         model_id=model_id,
         timeout_seconds=timeout_seconds,
+        profile=profile,
+        checkpoint_store=checkpoint_store,
+        enable_checkpointing=enable_checkpointing,
     )
-    return service.run_topic_detection(
+    res = service.run_topic_detection(
         document=document,
         topic=topic,
         client=client,
@@ -468,7 +520,18 @@ def execute_manual_topic_detection(
         max_tokens=max_tokens,
         operational_mode=operational_mode,
         preserve_raw_response=preserve_raw_response,
+        progress_callback=progress_callback,
     )
+    if session_state is not None:
+        try:
+            from ui import state
+            doc_analysis = state.get_document_analysis_state(document.document_id, state=session_state)
+            existing = list(doc_analysis.detection_runs)
+            existing.append(res)
+            doc_analysis.detection_runs = tuple(existing)
+        except Exception:
+            pass
+    return res
 
 
 def execute_topic_discovery(
@@ -481,6 +544,10 @@ def execute_topic_discovery(
     seed: int | None = 42,
     preserve_raw_response: bool = False,
     session_state: MutableMapping[str, Any] | None = None,
+    progress_callback: Any = None,
+    profile: Any = None,
+    checkpoint_store: Any = None,
+    enable_checkpointing: bool = True,
 ) -> TopicDiscoveryResult:
     """
     Esegue Topic Discovery LIVE sulla conversazione corrente tramite LocalTopicAnalysisService.
@@ -494,6 +561,9 @@ def execute_topic_discovery(
         model_id=model_id,
         discovery_run_store=disc_store,
         authoritative_live_run_ids=auth_ids,
+        profile=profile,
+        checkpoint_store=checkpoint_store,
+        enable_checkpointing=enable_checkpointing,
     )
     res = service.run_topic_discovery(
         document=document,
@@ -503,6 +573,7 @@ def execute_topic_discovery(
         temperature=temperature,
         seed=seed,
         preserve_raw_response=preserve_raw_response,
+        progress_callback=progress_callback,
     )
     # Aggiorna lo stato scoped del documento per persistenza di sessione
     try:
@@ -529,16 +600,21 @@ def execute_discovery_verification(
     temperature: float = DEFAULT_OPERATIONAL_TEMPERATURE,
     seed: int | None = 42,
     preserve_raw_response: bool = False,
+    session_state: MutableMapping[str, Any] | None = None,
+    progress_callback: Any = None,
+    profile: Any = None,
+    checkpoint_store: Any = None,
+    enable_checkpointing: bool = True,
 ) -> tuple[TopicDetectionResult, Any]:
     """
     Esegue la "Prova del Nove":
     Seconda inferenza indipendente di Topic Detection per verificare il topic emerso da Topic Discovery.
     Restituisce (TopicDetectionResult, ConsistencyResult).
     """
+    from ui import state
     if discovery_result is None:
-        from ui import state
-        doc_analysis = state.get_document_analysis_state(document.document_id)
-        candidate_runs = list(doc_analysis.discovery_runs) + list(state.get_discovery_results())
+        doc_analysis = state.get_document_analysis_state(document.document_id, state=session_state)
+        candidate_runs = list(doc_analysis.discovery_runs) + list(state.get_discovery_results(state=session_state))
         for r in candidate_runs:
             if getattr(r, "provenance_document_id", None) == document.document_id:
                 r_id = r.metadata.get("run_id") if isinstance(r.metadata, Mapping) else None
@@ -556,11 +632,18 @@ def execute_discovery_verification(
                             discovery_run_id = str(r_id)
                             break
 
+    disc_store = state.get_discovery_run_store(session_state)
+    auth_ids = state.get_authoritative_live_run_ids(session_state)
     service = get_operational_analysis_service(
         base_url=base_url,
         model_id=model_id,
+        discovery_run_store=disc_store,
+        authoritative_live_run_ids=auth_ids,
+        profile=profile,
+        checkpoint_store=checkpoint_store,
+        enable_checkpointing=enable_checkpointing,
     )
-    return service.verify_discovered_topic(
+    det_res, cons_res = service.verify_discovered_topic(
         document=document,
         discovered_topic=discovered_topic,
         discovery_result=discovery_result,
@@ -571,7 +654,15 @@ def execute_discovery_verification(
         temperature=temperature,
         seed=seed,
         preserve_raw_response=preserve_raw_response,
+        progress_callback=progress_callback,
     )
+    if session_state is not None:
+        try:
+            state.add_detection_result(det_res, state=session_state)
+            state.add_consistency_result(cons_res, state=session_state)
+        except Exception:
+            pass
+    return det_res, cons_res
 
 
 def execute_local_media_processing(

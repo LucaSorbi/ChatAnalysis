@@ -63,11 +63,107 @@ class TopicProvenanceError(ValueError):
     pass
 
 
+class InsufficientContextHeadroomError(ValueError):
+    """
+    Sollevata quando il context length del runtime è insufficiente a contenere
+    l'overhead essenziale (output reserved + safety margin + system/schema overhead)
+    e un budget minimo vitale per i chunk documentali.
+    Non dichiara MAI token disponibili oltre lo spazio reale.
+    """
+    def __init__(self, context_length: int, total_overhead: int, available_headroom: int) -> None:
+        super().__init__(
+            f"Context length insufficiente ({context_length} token): overhead richiesto "
+            f"({total_overhead} token) supera lo spazio utile (headroom disponibile: {available_headroom} token)."
+        )
+        self.context_length = context_length
+        self.total_overhead = total_overhead
+        self.available_headroom = available_headroom
+
+
+class OperationalProfile(str, Enum):
+    """
+    Profili operativi per l'analisi tematica locale:
+    - PRUDENT: 2500 token per blocco (massima compatibilità e sicurezza con margini ampi)
+    - BALANCED: 4200 token per blocco (profilo raccomandato per contesti >= 8192 token)
+    - PERFORMANCE: 5200 token per blocco (massimo throughput con blocchi estesi previa verifica del budget)
+    """
+    PRUDENT = "PRUDENT"
+    BALANCED = "BALANCED"
+    PERFORMANCE = "PERFORMANCE"
+
+
+PROFILE_TOKEN_BUDGETS: dict[OperationalProfile, int] = {
+    OperationalProfile.PRUDENT: 2500,
+    OperationalProfile.BALANCED: 4200,
+    OperationalProfile.PERFORMANCE: 5200,
+}
+
+PROFILE_CHARACTER_BUDGETS: dict[OperationalProfile, int] = {
+    OperationalProfile.PRUDENT: 12000,
+    OperationalProfile.BALANCED: 18000,
+    OperationalProfile.PERFORMANCE: 24000,
+}
+
+
+def resolve_operational_profile(
+    profile: OperationalProfile | str | None,
+    context_length: int = 8192,
+    reserved_output_tokens: int = 1500,
+    safety_margin: int = 1000,
+    system_overhead: int = 400,
+) -> tuple[OperationalProfile, int, int]:
+    """
+    Risolve il profilo operativo verificando rigorosamente la sicurezza rispetto al context budget.
+    Se il profilo richiesto (es. PERFORMANCE o BALANCED) supera lo spazio utile disponibile,
+    effettua il downgrade automatico e sicuro al profilo compatibile più vicino (o PRUDENT).
+    Se l'headroom è inferiore a 256 token o negativo, solleva InsufficientContextHeadroomError
+    senza dichiarare artificialmente token inesistenti.
+    Restituisce (profilo_effettivo, max_chunk_tokens, max_chunk_characters).
+    """
+    if profile is None:
+        requested = OperationalProfile.BALANCED
+    elif isinstance(profile, OperationalProfile):
+        requested = profile
+    else:
+        try:
+            requested = OperationalProfile(str(profile).strip().upper())
+        except ValueError:
+            requested = OperationalProfile.BALANCED
+
+    target_tokens = PROFILE_TOKEN_BUDGETS[requested]
+    target_chars = PROFILE_CHARACTER_BUDGETS[requested]
+
+    # Spazio utile reale prima del context overflow
+    total_overhead = reserved_output_tokens + safety_margin + system_overhead + 128
+    available_headroom = context_length - total_overhead
+
+    MIN_HEADROOM_TOKENS = 256
+    if available_headroom < MIN_HEADROOM_TOKENS:
+        raise InsufficientContextHeadroomError(
+            context_length=context_length,
+            total_overhead=total_overhead,
+            available_headroom=max(0, available_headroom),
+        )
+
+    # Verifica di sicurezza preventiva
+    if target_tokens > available_headroom:
+        if available_headroom >= PROFILE_TOKEN_BUDGETS[OperationalProfile.BALANCED]:
+            return OperationalProfile.BALANCED, PROFILE_TOKEN_BUDGETS[OperationalProfile.BALANCED], PROFILE_CHARACTER_BUDGETS[OperationalProfile.BALANCED]
+        elif available_headroom >= PROFILE_TOKEN_BUDGETS[OperationalProfile.PRUDENT]:
+            return OperationalProfile.PRUDENT, PROFILE_TOKEN_BUDGETS[OperationalProfile.PRUDENT], PROFILE_CHARACTER_BUDGETS[OperationalProfile.PRUDENT]
+        else:
+            safe_tokens = available_headroom
+            return OperationalProfile.PRUDENT, safe_tokens, max(1000, safe_tokens * 4)
+
+    return requested, target_tokens, target_chars
+
+
 @dataclass(frozen=True)
 class OperationalAnalysisConfig:
     """
     Configurazione centralizzata per l'analisi tematica operativa locale.
-    Elimina i magic numbers sparsi e documenta il budget prudenziale.
+    Supporta profili operativi espliciti (PRUDENT, BALANCED, PERFORMANCE)
+    con verifica della sicurezza rispetto al context budget.
     """
     model_spec: str = "qwen2.5-7b-instruct"
     context_length: int = 8192
@@ -76,8 +172,55 @@ class OperationalAnalysisConfig:
     temperature: float = 0.0
     seed: int | None = 42
     max_topics: int = 10
-    chunk_character_budget: int = 7500  # Budget prudenziale per context 8192 (~1800-2000 token stimati)
-    max_chunk_bundles: int = 25
+    profile: OperationalProfile = OperationalProfile.BALANCED
+    chunk_character_budget: int = 18000
+    max_chunk_bundles: int = 100
+    max_chunk_tokens: int | None = 4200
+
+    def with_profile(self, profile: OperationalProfile | str) -> OperationalAnalysisConfig:
+        """Restituisce una nuova configurazione applicando il profilo specificato."""
+        res_prof, tok_b, char_b = resolve_operational_profile(
+            profile=profile,
+            context_length=self.context_length,
+        )
+        return OperationalAnalysisConfig(
+            model_spec=self.model_spec,
+            context_length=self.context_length,
+            timeout_seconds=self.timeout_seconds,
+            max_tokens=self.max_tokens,
+            temperature=self.temperature,
+            seed=self.seed,
+            max_topics=self.max_topics,
+            profile=res_prof,
+            chunk_character_budget=char_b,
+            max_chunk_bundles=self.max_chunk_bundles,
+            max_chunk_tokens=tok_b,
+        )
+
+
+@dataclass(frozen=True)
+class AnalysisPlan:
+    """
+    Piano analitico preventivo e immutabile condiviso tra UI e Service Layer.
+    Garantisce perfetta coerenza dei budget di token e del numero di chunk.
+    """
+    document_id: str
+    analysis_type: str  # "detection" | "discovery"
+    planned_chunks_count: int
+    chunk_token_budget: int
+    chunk_character_budget: int
+    input_token_budget: int
+    output_token_budget: int
+    schema: Mapping[str, Any]
+    safety_margin: int
+    headroom_tokens: int
+    profile: OperationalProfile
+    max_topics: int | None
+    effective_config: OperationalAnalysisConfig
+    chunks: tuple[Any, ...] = ()
+    plan_hash: str = ""
+    requires_dynamic_splitting: bool = False
+
 
 
 @dataclass(frozen=True)

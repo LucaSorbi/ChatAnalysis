@@ -1064,6 +1064,89 @@ def resolve_operational_model_from_metadata(
     )
 
 
+def classify_lmstudio_http_error(
+    http_code: int,
+    reason: Any,
+    raw_body_bytes: bytes,
+    base_url: str = "http://127.0.0.1:1234",
+    model_id: str | None = None,
+    max_tokens: int | None = None,
+    prompt_tokens: int | None = None,
+) -> AiBackendRequestError:
+    """
+    Classifica in modo strutturato e sicuro per la privacy forense gli errori HTTP di LM Studio.
+    Non espone mai nei messaggi di errore o nei log estratti di conversazione o dati personali.
+    """
+    body_text = ""
+    error_msg = ""
+    request_id = None
+    try:
+        body_text = raw_body_bytes.decode("utf-8", errors="replace")
+        parsed = json.loads(body_text)
+        if isinstance(parsed, dict):
+            err_obj = parsed.get("error")
+            if isinstance(err_obj, dict):
+                error_msg = str(err_obj.get("message") or "")
+                request_id = err_obj.get("request_id") or err_obj.get("id")
+            elif isinstance(err_obj, str):
+                error_msg = err_obj
+            elif "message" in parsed:
+                error_msg = str(parsed["message"])
+            if not request_id and "id" in parsed:
+                request_id = str(parsed["id"])
+    except Exception:
+        error_msg = body_text[:200]
+
+    lower_msg = (error_msg or body_text).lower()
+
+    if http_code == 400:
+        if any(k in lower_msg for k in ("context", "n_ctx", "maximum context length", "too many tokens", "exceed", "window", "context length")):
+            cat = "CONTEXT_OVERFLOW"
+            safe_reason = "LM Studio ha rifiutato la richiesta perché il prompt e il budget di risposta superano la finestra di contesto disponibile."
+        elif any(k in lower_msg for k in ("response_format", "json_schema", "schema", "grammar", "structured output")):
+            cat = "UNSUPPORTED_STRUCTURED_OUTPUT"
+            safe_reason = "Il backend non accetta il formato JSON strutturato richiesto."
+        elif any(k in lower_msg for k in ("model not loaded", "no model loaded", "model not found", "not loaded")):
+            cat = "MODEL_NOT_LOADED"
+            safe_reason = "Il modello specificato non risulta attualmente caricato in LM Studio."
+        elif any(k in lower_msg for k in ("invalid parameter", "unknown field", "parameter", "temperature", "max_tokens", "seed", "out of range")):
+            cat = "INVALID_PARAMETER"
+            safe_reason = "LM Studio ha rifiutato un parametro della richiesta."
+        elif any(k in lower_msg for k in ("cuda", "vram", "out of memory", "llama_decode", "memory", "metal")):
+            cat = "INFERENCE_BACKEND_ERROR"
+            safe_reason = "Errore del backend di inferenza locale o memoria GPU insufficiente."
+        else:
+            cat = "UNCLASSIFIED_HTTP_ERROR"
+            safe_reason = "LM Studio ha restituito HTTP 400. Non è stato possibile determinare la causa specifica."
+    elif http_code == 429:
+        cat = "RATE_LIMIT_EXCEEDED"
+        safe_reason = "LM Studio ha restituito HTTP 429: troppe richieste simultanee o server occupato."
+    elif http_code in (500, 502, 503, 504):
+        cat = "SERVER_ERROR"
+        safe_reason = f"Errore interno del server LM Studio (HTTP {http_code})."
+    else:
+        cat = "HTTP_ERROR"
+        safe_reason = f"Errore HTTP {http_code} restituito da LM Studio: {reason or 'Unknown'}"
+
+    clean_technical = f"HTTP {http_code} [{cat}]"
+    if request_id:
+        clean_technical += f" (req_id: {request_id})"
+
+    full_message = f"Errore HTTP {http_code} da LM Studio: {safe_reason} (Dettaglio: {clean_technical})"
+
+    return AiBackendRequestError(
+        message=full_message,
+        status_code=http_code,
+        error_category=cat,
+        safe_reason=safe_reason,
+        technical_details=clean_technical,
+        model_id=model_id,
+        request_id=str(request_id) if request_id else None,
+        prompt_tokens_estimate=prompt_tokens,
+        max_tokens_requested=max_tokens,
+    )
+
+
 def _is_timeout_error(exc: BaseException) -> bool:
     """Determina se un'eccezione di rete o socket è dovuta a un timeout effettivo."""
     if isinstance(exc, (TimeoutError, socket.timeout)):
@@ -1103,6 +1186,7 @@ class LmStudioClient(BaseLocalLlmClient):
         api_token: str | None = None,
         default_timeout_seconds: float = 30.0,
         debug_preserve_raw: bool = False,
+        request_listener: Any = None,
     ) -> None:
         _validate_loopback_url(base_url)
         self.base_url = base_url.rstrip("/")
@@ -1111,6 +1195,7 @@ class LmStudioClient(BaseLocalLlmClient):
         self._api_token = api_token or os.environ.get("LM_STUDIO_API_TOKEN")
         self.default_timeout_seconds = default_timeout_seconds
         self.debug_preserve_raw = debug_preserve_raw
+        self.request_listener = request_listener
         self._last_loaded_model: str | None = None
         self._last_loaded_model_key: str | None = None
         self._loaded_instance_id: str | None = None
@@ -1809,11 +1894,12 @@ class LmStudioClient(BaseLocalLlmClient):
         seed: int | None = None,
         max_tokens: int | None = None,
         timeout_seconds: float = 30.0,
+        request_listener: Any = None,
     ) -> LlmCompletionResponse:
         """
         Invia una richiesta OpenAI-compatible a POST /v1/chat/completions.
         Richiede un model_id esplicito (passato a chiamata o preimpostato nel client).
-        Non seleziona mai modelli in modo automatico.
+        Collega gli eventi di avanzamento al ciclo di vita reale di ogni richiesta HTTP.
         Valida rigorosamente che il campo 'model' provenga dalla risposta del server
         e che la forma della risposta rispetti il protocollo atteso.
         """
@@ -1823,6 +1909,8 @@ class LmStudioClient(BaseLocalLlmClient):
                 "Nessun model_id specificato per la chat completion. "
                 "Per garantire l'integrità scientifica dell'esperimento, l'identificativo modello deve essere esplicito."
             )
+
+        listener = request_listener if request_listener is not None else getattr(self, "request_listener", None)
 
         payload: dict[str, Any] = {
             "model": target_model,
@@ -1849,14 +1937,50 @@ class LmStudioClient(BaseLocalLlmClient):
         req_data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=req_data, headers=self._get_headers(), method="POST")
 
+        if listener is not None and hasattr(listener, "record_request_sent"):
+            try:
+                listener.record_request_sent(phase="Esecuzione inferenza HTTP")
+            except Exception:
+                pass
+
         start_t = time.perf_counter()
         try:
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
                 elapsed = round(time.perf_counter() - start_t, 3)
                 raw_bytes = resp.read()
+            if listener is not None and hasattr(listener, "record_http_response_received"):
+                try:
+                    listener.record_http_response_received()
+                except Exception:
+                    pass
         except urllib.error.HTTPError as e:
-            raise AiBackendRequestError(f"Errore HTTP {e.code} da LM Studio ({self.base_url}): {e.reason}") from e
+            raw_err_bytes = b""
+            try:
+                raw_err_bytes = e.read()
+            except Exception:
+                pass
+            if listener is not None and hasattr(listener, "record_http_error"):
+                try:
+                    listener.record_http_error(status_code=e.code, message=f"HTTP {e.code}")
+                except Exception:
+                    pass
+            raise classify_lmstudio_http_error(
+                http_code=e.code,
+                reason=getattr(e, "reason", None),
+                raw_body_bytes=raw_err_bytes,
+                base_url=self.base_url,
+                model_id=target_model,
+                max_tokens=max_tokens,
+            ) from e
         except _NETWORK_ERRORS as e:
+            if listener is not None:
+                try:
+                    if _is_timeout_error(e) and hasattr(listener, "record_timeout"):
+                        listener.record_timeout(message=str(e))
+                    elif hasattr(listener, "record_http_error"):
+                        listener.record_http_error(status_code=None, message=str(e))
+                except Exception:
+                    pass
             if _is_timeout_error(e):
                 raise AiBackendTimeoutError(
                     f"Timeout ({timeout_seconds}s) durante la chat completion su LM Studio ({self.base_url}): {e}"
@@ -1868,19 +1992,39 @@ class LmStudioClient(BaseLocalLlmClient):
         try:
             raw_json = json.loads(raw_bytes.decode("utf-8"))
         except json.JSONDecodeError as e:
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error(f"JSONDecodeError: {e}")
+                except Exception:
+                    pass
             raise AiBackendProtocolError(f"Risposta non valida da LM Studio (JSON malformato): {e}") from e
 
         # Validazione Sezione B: top-level response deve essere dict
         if not isinstance(raw_json, dict):
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Risposta top-level non dict")
+                except Exception:
+                    pass
             raise AiBackendProtocolError(
                 f"Risposta top-level da LM Studio non è un dizionario (ricevuto {type(raw_json).__name__})."
             )
 
         # Validazione Sezione A: model ID deve venire RIGOROSAMENTE dalla risposta del backend
         if "model" not in raw_json:
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Campo 'model' mancante")
+                except Exception:
+                    pass
             raise AiBackendProtocolError("Risposta da LM Studio priva del campo obbligatorio 'model'.")
         raw_model = raw_json["model"]
         if not isinstance(raw_model, str) or not raw_model.strip():
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Campo 'model' non valido o vuoto")
+                except Exception:
+                    pass
             raise AiBackendProtocolError(
                 f"Campo 'model' nella risposta da LM Studio non valido o vuoto (ricevuto {raw_model!r})."
             )
@@ -1888,6 +2032,11 @@ class LmStudioClient(BaseLocalLlmClient):
 
         # Validazione positiva identità response.model contro target_model per tutte le completion
         if not self.is_equivalent_model(target_model, response_model):
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Response model mismatch")
+                except Exception:
+                    pass
             raise AiModelMismatchError(
                 f"Response model mismatch: modello richiesto '{target_model}', "
                 f"ma la risposta proviene dal modello non equivalente '{response_model}'.",
@@ -1898,31 +2047,70 @@ class LmStudioClient(BaseLocalLlmClient):
         # Validazione Sezione B: choices, message, content, finish_reason, usage
         choices = raw_json.get("choices")
         if not isinstance(choices, list) or len(choices) == 0:
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Campo 'choices' mancante o vuoto")
+                except Exception:
+                    pass
             raise AiBackendProtocolError("Campo 'choices' mancante, vuoto o non lista nella risposta di LM Studio.")
 
         first_choice = choices[0]
         if not isinstance(first_choice, dict):
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Elemento choices[0] non dict")
+                except Exception:
+                    pass
             raise AiBackendProtocolError(
                 f"L'elemento choices[0] deve essere un dizionario, ricevuto {type(first_choice).__name__}."
             )
 
         message_obj = first_choice.get("message")
         if not isinstance(message_obj, dict):
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Campo choices[0]['message'] non dict")
+                except Exception:
+                    pass
             raise AiBackendProtocolError(
                 f"Campo choices[0]['message'] deve essere un dizionario, ricevuto {type(message_obj).__name__}."
             )
 
         content = message_obj.get("content")
         if not isinstance(content, str):
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Campo content non stringa")
+                except Exception:
+                    pass
             raise AiBackendProtocolError(
                 f"Campo choices[0]['message']['content'] deve essere una stringa, ricevuto {type(content).__name__}."
             )
 
         finish_reason = first_choice.get("finish_reason")
         if finish_reason is not None and not isinstance(finish_reason, str):
+            if listener is not None and hasattr(listener, "record_protocol_error"):
+                try:
+                    listener.record_protocol_error("Campo finish_reason non stringa")
+                except Exception:
+                    pass
             raise AiBackendProtocolError(
                 f"Campo 'finish_reason' deve essere una stringa o None, ricevuto {type(finish_reason).__name__}."
             )
+
+        # Troncamento JSON se schema richiesto e finish_reason='length'
+        if schema is not None and finish_reason == "length":
+            try:
+                json.loads(content)
+            except Exception as j_trunc_err:
+                if listener is not None and hasattr(listener, "record_protocol_error"):
+                    try:
+                        listener.record_protocol_error("Risposta JSON troncata (finish_reason=length)")
+                    except Exception:
+                        pass
+                raise AiStructuredOutputError(
+                    f"Risposta JSON troncata da LM Studio prima del completamento (finish_reason=length): {j_trunc_err}"
+                ) from j_trunc_err
 
         usage = raw_json.get("usage")
         prompt_tokens = None
@@ -1930,6 +2118,11 @@ class LmStudioClient(BaseLocalLlmClient):
         total_tokens = None
         if usage is not None:
             if not isinstance(usage, dict):
+                if listener is not None and hasattr(listener, "record_protocol_error"):
+                    try:
+                        listener.record_protocol_error("Campo usage non dict")
+                    except Exception:
+                        pass
                 raise AiBackendProtocolError(
                     f"Campo 'usage' deve essere un dizionario, ricevuto {type(usage).__name__}."
                 )
@@ -1937,6 +2130,11 @@ class LmStudioClient(BaseLocalLlmClient):
                 val = usage.get(k)
                 if val is not None:
                     if not isinstance(val, (int, float)) or isinstance(val, bool) or val < 0:
+                        if listener is not None and hasattr(listener, "record_protocol_error"):
+                            try:
+                                listener.record_protocol_error(f"Valore token usage non valido per {k}")
+                            except Exception:
+                                pass
                         raise AiBackendProtocolError(
                             f"Conteggio token '{k}' in 'usage' non numerico valido >= 0: {val!r}."
                         )
@@ -1968,6 +2166,12 @@ class LmStudioClient(BaseLocalLlmClient):
                 "usage": usage if isinstance(usage, dict) else {},
                 "finish_reason": finish_reason,
             }
+
+        if listener is not None and hasattr(listener, "record_request_success"):
+            try:
+                listener.record_request_success()
+            except Exception:
+                pass
 
         return LlmCompletionResponse(
             content=content,

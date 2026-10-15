@@ -41,8 +41,11 @@ from ai.lmstudio import (
     SUPPORTED_OPERATIONAL_MODELS,
     get_model_display_name,
 )
+from pathlib import Path
+
 from ai.models import TopicDecision
-from analysis.models import ConsistencyStatus
+from analysis.models import ConsistencyStatus, OperationalProfile, resolve_operational_profile
+from analysis.checkpoint import AnalysisCheckpointStore
 from search.models import MatchMode
 from search.service import SearchService
 from ui import state
@@ -78,6 +81,195 @@ from ui.models import (
     SourceFormat,
     TopicFilterDecision,
 )
+from typing import Any
+from ai.chunking import profile_document_for_analysis
+from analysis.progress import AnalysisProgressEvent
+
+
+def create_streamlit_progress_callback(container: Any, title: str = "ANALISI IN CORSO") -> Any:
+    """
+    Crea un callback thread-safe compatibile con Streamlit per aggiornare
+    in tempo reale il pannello di avanzamento e i contatori di inferenza.
+    Garantisce piena visibilità della separazione tra ciclo di vita chunk e chiamate HTTP.
+    """
+    def _callback(event: AnalysisProgressEvent) -> None:
+        try:
+            with container.container():
+                st.markdown(f"#### ⏳ {title}")
+                st.markdown(f"**Fase:** {event.phase}")
+                progress_val = max(0.0, min(1.0, event.percentage / 100.0))
+                st.progress(progress_val, text=f"Progresso fase corrente: {event.percentage:.1f}%")
+
+                c1, c2, c3 = st.columns(3)
+                with c1:
+                    st.metric("Blocchi completati", f"{event.completed_chunks} / {event.total_chunks}")
+                    st.metric("Blocco attuale", f"{event.current_chunk_index} di {event.total_chunks}")
+                with c2:
+                    st.metric("Blocchi rimanenti", f"{event.remaining_chunks}")
+                    sent_txt = f"{event.requests_sent}"
+                    if event.requests_in_flight > 0:
+                        sent_txt += f" ({event.requests_in_flight} in volo)"
+                    st.metric("Richieste inviate", sent_txt)
+                with c3:
+                    st.metric("Richieste riuscite", f"{event.requests_successful}")
+                    st.metric("Retry / Fallite", f"{event.retries_count} / {event.requests_failed}")
+
+                diag_parts = []
+                if event.http_errors_count > 0:
+                    diag_parts.append(f"HTTP Error: {event.http_errors_count}")
+                if event.timeouts_count > 0:
+                    diag_parts.append(f"Timeout: {event.timeouts_count}")
+                if event.protocol_errors_count > 0:
+                    diag_parts.append(f"Protocollo/JSON: {event.protocol_errors_count}")
+                if event.split_count > 0:
+                    diag_parts.append(f"Suddivisioni dinamiche: {event.split_count}")
+
+                diag_str = f" | Contabilità: {', '.join(diag_parts)}" if diag_parts else ""
+                st.caption(
+                    f"⏱️ **Tempo trascorso:** `{event.elapsed_formatted}` | "
+                    f"**Stato:** {event.status_message}{diag_str}"
+                )
+                if "recuperati" in event.phase.casefold():
+                    st.info(f"💾 **Stato Checkpoint:** {event.phase}")
+                elif "consolidamento" in event.phase.casefold():
+                    st.info(f"🔄 **Fase:** {event.phase}")
+        except Exception:
+            pass
+
+    return _callback
+
+
+def render_operational_profile_selector(doc: Any) -> OperationalProfile:
+    """
+    Rende disponibili nell'app profili operativi espliciti:
+    - Prudente (2500 token).
+    - Bilanciato (4200 token).
+    - Prestazioni elevate (5200 token).
+    Verifica la sicurezza rispetto al context budget (context length 8192) e consente
+    il ritorno immediato alla configurazione prudente. Mostra i limiti effettivi utilizzati.
+    Offre controlli di gestione del checkpointing persistente.
+    """
+    current_prof = state.get_operational_profile()
+    profile_options = [
+        ("BALANCED", "Bilanciato (4200 token - Consigliato)"),
+        ("PRUDENT", "Prudente (2500 token - Massima sicurezza)"),
+        ("PERFORMANCE", "Prestazioni elevate (5200 token - Sperimentale)"),
+    ]
+    profile_keys = [p[0] for p in profile_options]
+    current_key = current_prof.value if isinstance(current_prof, OperationalProfile) else str(current_prof)
+    if current_key not in profile_keys:
+        current_key = "BALANCED"
+    default_idx = profile_keys.index(current_key)
+
+    with st.expander("⚙️ Profilo Operativo & Gestione Checkpoint", expanded=False):
+        c_prof, c_chk = st.columns([2, 1])
+        with c_prof:
+            choice = st.radio(
+                "Profilo Operativo di Analisi:",
+                options=profile_keys,
+                index=default_idx,
+                format_func=lambda k: dict(profile_options)[k],
+                key="operational_profile_radio",
+                help="Bilanciato riduce il numero di chunk del 40% rispetto al profilo prudente, preservando la sicurezza.",
+            )
+            requested_enum = OperationalProfile(choice)
+            try:
+                effective_enum, t_lim, c_lim = resolve_operational_profile(requested_enum, context_length=8192)
+                if effective_enum != requested_enum:
+                    st.warning(
+                        f"⚠️ Il profilo '{requested_enum.value}' non è sicuro per il context headroom attuale. "
+                        f"Ripiegato automaticamente sul profilo sicuro '{effective_enum.value}'."
+                    )
+            except InsufficientContextHeadroomError as err:
+                st.error(f"⚠️ Spazio di contesto insufficiente per il profilo: {err}")
+                effective_enum, t_lim, c_lim = OperationalProfile.PRUDENT, 2500, 12000
+
+            state.set_operational_profile(effective_enum)
+
+            st.caption(
+                f"📊 **Limiti effettivi:** Budget token chunk: `{t_lim}` | "
+                f"Budget caratteri: `{c_lim:,}` | Margine di sicurezza: `1000` token"
+            )
+
+        with c_chk:
+            st.markdown("**💾 Checkpoint Permanente**")
+            st.caption("Salvataggio progressivo e ripresa senza ripetizione dei chunk già validati.")
+            chk_store = state.get_checkpoint_store()
+            if chk_store is None:
+                chk_store = AnalysisCheckpointStore(checkpoint_dir=Path(".checkpoints"))
+                state.set_checkpoint_store(chk_store)
+
+            if doc is not None and getattr(doc, "document_id", None):
+                doc_id = doc.document_id
+                if st.button("🗑️ Cancella Checkpoint Documento", key=f"btn_clear_chk_{doc_id}"):
+                    try:
+                        cleared = chk_store.clear_for_document(doc)
+                        if cleared > 0:
+                            st.success(f"Cancellati con successo {cleared} checkpoint per '{doc_id}'.")
+                        else:
+                            st.info(f"Nessun checkpoint presente per '{doc_id}'.")
+                    except Exception as exc:
+                        st.error(f"Errore durante la cancellazione dei checkpoint: {exc}")
+
+    return state.get_operational_profile()
+
+
+def render_pre_analysis_profile(document: Any, service: Any = None, max_topics: int | None = None) -> None:
+    """
+    Visualizza il profilo quantitativo preventivo del documento e la stima dei chunk prima dell'analisi.
+    Utilizza la configurazione effettiva del servizio locale per garantire perfetta coerenza operativa.
+    Riflette dinamicamente il numero massimo di topic impostato (es. 3, 10, 25 topic).
+    """
+    if document is None:
+        return
+    if service is None:
+        try:
+            from ui.application import get_operational_analysis_service
+            service = get_operational_analysis_service()
+        except Exception:
+            service = None
+
+    eff_max_topics = max_topics or (st.session_state.get("disc_max_topics", 10) if hasattr(st, "session_state") else 10)
+
+    prof = profile_document_for_analysis(document, service=service, analysis_type="detection")
+    prof_disc = profile_document_for_analysis(document, service=service, analysis_type="discovery", max_topics=int(eff_max_topics))
+
+    with st.expander("📊 Profilo Preventivo Dataset & Stima Inferenze", expanded=False):
+        c1, c2, c3, c4 = st.columns(4)
+        c1.metric("Messaggi Totali", f"{prof.total_messages:,}")
+        c2.metric("Evidenze Testuali", f"{prof.total_evidence_sections:,}")
+        c3.metric("Caratteri / Token Stimati", f"{prof.total_text_characters:,} / ~{prof.estimated_text_tokens:,}")
+        if prof.estimated_chunks == prof_disc.estimated_chunks:
+            c4.metric("Blocchi Previsti", f"{prof.estimated_chunks:,}")
+        else:
+            c4.metric("Blocchi Previsti", f"{prof.estimated_chunks} (Det) / {prof_disc.estimated_chunks} (Disc {eff_max_topics}t)")
+        if prof.has_multimodal_evidence:
+            st.caption("ℹ️ Il dataset include evidenze multimodali (trascrizioni audio o analisi immagini).")
+
+
+def render_backend_error_details(exc: Exception) -> None:
+    """
+    Mostra all'utente una spiegazione chiara e priva di dati sensibili per errori AI backend.
+    """
+    if isinstance(exc, AiBackendRequestError):
+        st.error(f"⚠️ {exc.safe_reason}")
+        with st.expander("🔍 Diagnostica Tecnica Sicura (Senza Dati Sensibili)", expanded=False):
+            st.write(f"- **Categoria Errore:** `{exc.error_category or 'NON_CLASSIFICATO'}`")
+            if exc.status_code:
+                st.write(f"- **Codice HTTP:** `{exc.status_code}`")
+            if exc.model_id:
+                st.write(f"- **Modello:** `{exc.model_id}`")
+            if exc.request_id:
+                st.write(f"- **Request ID:** `{exc.request_id}`")
+            if exc.prompt_tokens_estimate is not None:
+                st.write(f"- **Token Input Stimati:** `{exc.prompt_tokens_estimate}`")
+            if exc.max_tokens_requested is not None:
+                st.write(f"- **Token Output Richiesti:** `{exc.max_tokens_requested}`")
+            if exc.technical_details:
+                st.caption(f"Dettaglio backend: `{exc.technical_details}`")
+    else:
+        st.error(f"Errore di comunicazione con LM Studio: {type(exc).__name__}: {exc}")
+
 
 
 def render_overview() -> None:
@@ -654,6 +846,9 @@ def render_topics() -> None:
             discovery_results=state.get_discovery_results(),
         )
 
+    selected_profile = render_operational_profile_selector(doc)
+    render_pre_analysis_profile(doc)
+
     tab_det, tab_disc = st.tabs(["Topic Detection (Verifica Mirata)", "Topic Discovery (Argomenti Emersi)"])
 
     with tab_det:
@@ -710,9 +905,10 @@ def render_topics() -> None:
                 if q is not None:
                     client = state.get_lm_studio_client()
                     raw_model_choice = model_input.strip() if model_input.strip() else (state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL)
-                    status_placeholder = st.empty()
+                    progress_placeholder = st.empty()
+                    prog_cb = create_streamlit_progress_callback(progress_placeholder, title="TOPIC DETECTION IN CORSO")
                     try:
-                        status_placeholder.info("Preparazione ed esecuzione analisi locale...")
+                        progress_placeholder.info("Preparazione ed esecuzione analisi locale...")
                         with st.spinner("Analisi locale in corso..."):
                             det_res = execute_manual_topic_detection(
                                 document=doc,
@@ -721,47 +917,49 @@ def render_topics() -> None:
                                 model_id=raw_model_choice,
                                 timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
                                 max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
+                                progress_callback=prog_cb,
+                                profile=selected_profile,
                             )
-                        status_placeholder.empty()
+                        progress_placeholder.empty()
                         state.add_detection_result(det_res)
                         state.set_last_manual_detection(det_res)
                         state.set_custom_topic_label(topic_input)
                         state.set_custom_topic_description(desc_input)
                         state.set_lm_studio_model(det_res.metadata.get("model", raw_model_choice))
-                        st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
+                        d_meta_res = getattr(det_res, "metadata", {}) or {}
+                        chunk_c_res = d_meta_res.get("chunk_count", 1)
+                        comp_c_res = d_meta_res.get("completed_chunk_count", 1)
+                        fail_c_res = d_meta_res.get("failed_chunk_count", 0)
+                        det_st = d_meta_res.get("status", "SUCCESS")
+                        if det_st == "PARTIAL" or fail_c_res > 0:
+                            st.warning(f"⚠️ Topic Detection parziale (PARTIAL): {comp_c_res}/{chunk_c_res} blocchi completati (falliti: {fail_c_res}). Esito parziale: {det_res.decision.value}")
+                        else:
+                            st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
+                        if chunk_c_res > 1 and det_st != "PARTIAL":
+                            st.info(f"Diagnostica blocchi: {comp_c_res}/{chunk_c_res} completati con successo (falliti: {fail_c_res}).")
                     except LmStudioUnavailableError:
-                        status_placeholder.empty()
+                        progress_placeholder.empty()
                         st.error(
                             "LM Studio non raggiungibile su http://127.0.0.1:1234. "
                             "Verificare che il server locale di LM Studio sia attivo."
                         )
-                    except AiModelNotInstalledError as ni_err:
-                        status_placeholder.empty()
+                    except (
+                        AiModelNotInstalledError,
+                        AiModelAmbiguousError,
+                        AiModelLoadError,
+                        AiBackendTimeoutError,
+                        AiModelMismatchError,
+                        AiInvalidEvidenceCitationError,
+                        AiStructuredOutputError,
+                    ) as ni_err:
+                        progress_placeholder.empty()
                         st.error(str(ni_err))
-                    except AiModelAmbiguousError as amb_err:
-                        status_placeholder.empty()
-                        st.error(str(amb_err))
-                    except AiModelLoadError as l_err:
-                        status_placeholder.empty()
-                        st.error(f"Errore durante il caricamento del modello in LM Studio: {l_err}")
-                    except AiBackendTimeoutError as t_err:
-                        status_placeholder.empty()
-                        st.error(f"Timeout durante l'operazione con LM Studio: {t_err}")
-                    except AiModelMismatchError as m_err:
-                        status_placeholder.empty()
-                        st.error(f"Disallineamento modello LM Studio: {m_err}")
-                    except AiInvalidEvidenceCitationError as c_err:
-                        status_placeholder.empty()
-                        st.error(f"Errore citazione evidenze: {c_err}")
-                    except AiStructuredOutputError as s_err:
-                        status_placeholder.empty()
-                        st.error(f"Errore schema strutturato: {s_err}")
                     except (AiBackendRequestError, AiBackendProtocolError) as b_err:
-                        status_placeholder.empty()
-                        st.error(f"Errore di comunicazione con LM Studio: {b_err}")
+                        progress_placeholder.empty()
+                        render_backend_error_details(b_err)
                     except Exception as exc:
-                        status_placeholder.empty()
-                        st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}")
+                        progress_placeholder.empty()
+                        st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}: {exc}")
 
         # Visualizzazione del risultato per la verifica
         last_det = state.get_last_manual_detection()
@@ -781,16 +979,31 @@ def render_topics() -> None:
                 with b_col:
                     st.markdown(f"**Esito:** {badge}")
 
-                if last_det.topic.description and last_det.topic.description != last_det.topic.label:
+                meta = last_det.metadata or {}
+                is_label_only = (
+                    meta.get("query_mode") == "LABEL_ONLY"
+                    or getattr(last_det.topic, "is_label_only", False)
+                    or (last_det.topic.description.strip().casefold() == last_det.topic.label.strip().casefold())
+                )
+                input_mode_str = "🏷️ Sola Label (titolo argomento)" if is_label_only else "📝 Label + Descrizione specifica"
+                origin_flow = meta.get("origin_flow", "MANUAL_DETECTION")
+                origin_flow_str = "🔬 Verifica automatica (da Topic Discovery)" if origin_flow == "DISCOVERY_VERIFICATION" else "🎯 Topic Detection manuale"
+
+                if not is_label_only and last_det.topic.description:
                     st.markdown(f"**Descrizione Topic:** {last_det.topic.description}")
 
                 st.info(f"**Motivazione AI (Rationale):** {last_det.rationale}")
 
-                meta = last_det.metadata
                 mod_name = meta.get("model", "n/a")
                 lat = meta.get("latency_seconds")
                 lat_str = f"{lat:.2f}s" if isinstance(lat, (int, float)) else "n/a"
-                st.caption(f"Modello: `{mod_name}` | Latenza: `{lat_str}` | Provenance: `{last_det.provenance_document_id}`")
+                run_id_val = meta.get("run_id", "n/a")
+                chunk_c = meta.get("chunk_count", 1)
+                comp_c = meta.get("completed_chunk_count", 1)
+                fail_c = meta.get("failed_chunk_count", 0)
+
+                st.caption(f"Run ID: `{run_id_val}` | Flusso: `{origin_flow_str}` | Input: `{input_mode_str}` | Provenance: `{last_det.provenance_document_id}`")
+                st.caption(f"Modello: `{mod_name}` | Latenza: `{lat_str}` | Chunk analizzati: `{comp_c}/{chunk_c}` (falliti: {fail_c})")
 
                 st.write(
                     f"**Evidenze collegate:** {len(last_det.evidence_ids)} sezioni "
@@ -814,6 +1027,35 @@ def render_topics() -> None:
                                 key=f"area1_ev_{sec.evidence_id}_{s_idx}",
                                 disabled=True,
                             )
+
+                # Controllo storico e correlazione inferenze precedenti per questo topic
+                doc_analysis = state.get_document_analysis_state(doc.document_id)
+                prior_runs = [
+                    r for r in doc_analysis.detection_runs
+                    if r.topic.label.strip().casefold() == last_det.topic.label.strip().casefold()
+                    and r.metadata.get("run_id") != run_id_val
+                ]
+                if prior_runs:
+                    with st.expander(f"📜 Storico inferenze per '{last_det.topic.label}' ({len(prior_runs)} precedenti in sessione)"):
+                        for p_idx, prev_r in enumerate(reversed(prior_runs), start=1):
+                            p_meta = prev_r.metadata or {}
+                            p_flow = "Discovery Verification" if p_meta.get("origin_flow") == "DISCOVERY_VERIFICATION" else "Detection Manuale"
+                            p_mode = "Sola label" if p_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
+                            st.markdown(
+                                f"- **Run #{p_idx}:** `{p_meta.get('run_id', 'n/a')}` | **Flusso:** {p_flow} | **Input:** {p_mode} | **Esito:** `{prev_r.decision.value}`"
+                            )
+
+                # Se presente una verifica da discovery con esito diverso, mostra chiarimento esplicito
+                disc_verifs = [r for r in prior_runs if r.metadata.get("origin_flow") == "DISCOVERY_VERIFICATION"]
+                if disc_verifs and origin_flow == "MANUAL_DETECTION":
+                    last_v = disc_verifs[-1]
+                    if last_v.decision != last_det.decision:
+                        st.info(
+                            f"ℹ️ **Discrepanza tra inferenze indipendenti**: Una precedente verifica da Topic Discovery (Run `{last_v.metadata.get('run_id')}`) "
+                            f"ha prodotto **{last_v.decision.value}** (utilizzando come input la descrizione estratta da Discovery), "
+                            f"mentre questa Detection manuale (Run `{run_id_val}`, input: {input_mode_str}) "
+                            f"ha prodotto **{last_det.decision.value}**. Ciascuna inferenza riflette fedelmente il proprio input e rimane immutabile."
+                        )
 
         # ==================================================
         # AREA 2: Filtra risultati Detection già eseguiti
@@ -923,30 +1165,64 @@ def render_topics() -> None:
                 key="disc_max_topics",
             )
 
+        # Stima preventiva Discovery allineata dinamicamente al numero di topic
+        try:
+            from ui.application import get_operational_analysis_service
+            disc_svc = get_operational_analysis_service()
+            plan_disc = disc_svc.create_analysis_plan(
+                document=doc,
+                analysis_type="discovery",
+                max_topics=int(max_topics_val),
+                profile=selected_profile,
+            )
+            st.caption(
+                f"ℹ️ **Piano Discovery ({int(max_topics_val)} topic):** `{plan_disc.planned_chunks_count}` blocchi previsti | "
+                f"Budget chunk effettivo: `{plan_disc.chunk_token_budget}` token | "
+                f"Riserva output: `{plan_disc.output_token_budget}` token"
+            )
+        except Exception:
+            pass
+
         run_discovery_btn = st.button("🚀 Esegui Topic Discovery (LIVE)", type="primary", key="btn_run_live_discovery")
 
         if run_discovery_btn:
             client = state.get_lm_studio_client()
             raw_model = disc_model_input.strip() if disc_model_input.strip() else DEFAULT_OPERATIONAL_MODEL
-            disc_status = st.empty()
+            progress_placeholder = st.empty()
+            prog_cb = create_streamlit_progress_callback(progress_placeholder, title="TOPIC DISCOVERY IN CORSO")
             try:
-                disc_status.info("Preparazione LM Studio per Topic Discovery...")
+                progress_placeholder.info("Preparazione LM Studio per Topic Discovery...")
                 with st.spinner("Scansione aperta e scoperta argomenti in corso..."):
                     disc_res = execute_topic_discovery(
                         document=doc,
                         client=client,
                         model_id=raw_model,
                         max_topics=int(max_topics_val),
+                        progress_callback=prog_cb,
+                        profile=selected_profile,
                     )
-                disc_status.empty()
+                progress_placeholder.empty()
                 state.add_discovery_result(disc_res)
                 state.set_lm_studio_model(raw_model)
-                st.success(f"Topic Discovery completata! Emersi {len(disc_res.topics)} argomenti.")
+                d_meta_res = getattr(disc_res, "metadata", {}) or {}
+                chunk_c_res = d_meta_res.get("chunk_count", 1)
+                comp_c_res = d_meta_res.get("completed_chunk_count", 1)
+                fail_c_res = d_meta_res.get("failed_chunk_count", 0)
+                disc_st = d_meta_res.get("status", "COMPLETE")
+                if disc_st == "PARTIAL" or fail_c_res > 0:
+                    st.warning(f"⚠️ Topic Discovery parziale (PARTIAL): {comp_c_res}/{chunk_c_res} blocchi completati (falliti: {fail_c_res}). Emersi {len(disc_res.topics)} argomenti.")
+                else:
+                    st.success(f"Topic Discovery completata! Emersi {len(disc_res.topics)} argomenti.")
+                if chunk_c_res > 1 and disc_st != "PARTIAL":
+                    st.info(f"Diagnostica blocchi: {comp_c_res}/{chunk_c_res} completati con successo (falliti: {fail_c_res}).")
             except LmStudioUnavailableError:
-                disc_status.empty()
+                progress_placeholder.empty()
                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
+            except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+                progress_placeholder.empty()
+                render_backend_error_details(b_err)
             except Exception as exc:
-                disc_status.empty()
+                progress_placeholder.empty()
                 st.error(f"Errore durante l'esecuzione di Topic Discovery: {type(exc).__name__}: {exc}")
 
         st.divider()
@@ -972,6 +1248,13 @@ def render_topics() -> None:
             with st.container(border=True):
                 st.markdown(f"### 💡 {hit.label}")
                 st.markdown(f"**Sintesi AI:** {hit.description}")
+                d_meta = hit.metadata or {}
+                d_run_id = d_meta.get("run_id", "n/a")
+                d_chunk_c = d_meta.get("chunk_count", 1)
+                d_comp_c = d_meta.get("completed_chunk_count", 1)
+                d_fail_c = d_meta.get("failed_chunk_count", 0)
+                d_prov = d_meta.get("provenance_document_id", "n/a")
+                st.caption(f"Discovery Run ID: `{d_run_id}` | Chunk analizzati: `{d_comp_c}/{d_chunk_c}` (falliti: {d_fail_c}) | Provenance: `{d_prov}`")
                 st.write(f"**Evidenze di supporto:** {len(hit.evidence_ids)} sezioni")
 
                 if hit.matched_sections:
@@ -1013,9 +1296,10 @@ def render_topics() -> None:
                         else:
                             client = state.get_lm_studio_client()
                             raw_model = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
-                            disc_status = st.empty()
+                            progress_placeholder = st.empty()
+                            prog_cb = create_streamlit_progress_callback(progress_placeholder, title="VERIFICA PROVA DEL NOVE IN CORSO")
                             try:
-                                disc_status.info("Preparazione seconda inferenza indipendente...")
+                                progress_placeholder.info("Preparazione seconda inferenza indipendente...")
                                 with st.spinner("Seconda inferenza indipendente (Prova del Nove) in corso..."):
                                     det_res, consistency_res = execute_discovery_verification(
                                         document=doc,
@@ -1023,8 +1307,10 @@ def render_topics() -> None:
                                         discovery_run_id=hit.metadata.get("run_id"),
                                         client=client,
                                         model_id=raw_model,
+                                        progress_callback=prog_cb,
+                                        profile=selected_profile,
                                     )
-                                disc_status.empty()
+                                progress_placeholder.empty()
                                 state.add_detection_result(det_res)
                                 state.add_consistency_result(consistency_res)
                                 state.set_last_manual_detection(det_res)
@@ -1041,14 +1327,22 @@ def render_topics() -> None:
                                 else:
                                     st.warning(f"⚠️ INCERTO: Topic '{hit.label}' valutato UNCERTAIN in Topic Detection")
                             except LmStudioUnavailableError:
-                                disc_status.empty()
+                                progress_placeholder.empty()
                                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
+                            except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+                                progress_placeholder.empty()
+                                render_backend_error_details(b_err)
                             except Exception as exc:
-                                disc_status.empty()
+                                progress_placeholder.empty()
                                 st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}: {exc}")
 
                 # Visualizzazione dell'esito di verifica e consistency
-                cons_list = [c for c in state.get_consistency_results(doc.document_id) if c.topic_label == hit.label]
+                target_run_id = hit.metadata.get("run_id")
+                cons_list = [
+                    c for c in state.get_consistency_results(doc.document_id)
+                    if c.topic_label.strip().casefold() == hit.label.strip().casefold()
+                    and (target_run_id is None or c.metadata.get("discovery_run_id") == target_run_id or c.metadata.get("discovery_run_id") is None)
+                ]
                 if cons_list:
                     latest_cons = cons_list[-1]
                     with st.container(border=True):
@@ -1077,6 +1371,24 @@ def render_topics() -> None:
 
                         overlap_str = ", ".join(latest_cons.overlap_evidence_ids) if latest_cons.overlap_evidence_ids else "Nessuna evidenza in comune"
                         st.caption(f"Evidenze condivise in overlap: `{overlap_str}`")
+
+                # Controllo correlazione se esiste una detection manuale separata per questo topic
+                doc_analysis = state.get_document_analysis_state(doc.document_id)
+                manual_dets = [
+                    r for r in doc_analysis.detection_runs
+                    if r.topic.label.strip().casefold() == hit.label.strip().casefold()
+                    and r.metadata.get("origin_flow") == "MANUAL_DETECTION"
+                ]
+                if manual_dets:
+                    latest_m = manual_dets[-1]
+                    m_meta = latest_m.metadata or {}
+                    m_mode = "Sola label" if m_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
+                    st.info(
+                        f"📌 **Nota di correlazione indipendente**: Nella sessione esiste anche una Detection manuale per '{hit.label}' "
+                        f"(Run `{m_meta.get('run_id')}`, input: {m_mode}) con esito **{latest_m.decision.value}**. "
+                        f"La verifica sopra visualizzata è ancorata unicamente alla specifica Discovery (Run `{target_run_id}`) "
+                        f"e non viene alterata da nuove inferenze indipendenti."
+                    )
 
         # Sezione opzionale di riferimento per la modalità DEMO
         if state.get_dataset_mode() == DatasetMode.DEMO:

@@ -1,0 +1,4040 @@
+diff --git a/ai/__init__.py b/ai/__init__.py
+index d4aed6d..06c5c26 100644
+--- a/ai/__init__.py
++++ b/ai/__init__.py
+@@ -70,6 +70,7 @@ from ai.topics import (
+     PROMPT_VERSION_DETECTION,
+     PROMPT_VERSION_DETECTION_OPERATIONAL,
+     PROMPT_VERSION_DISCOVERY,
++    PROMPT_VERSION_DISCOVERY_OPERATIONAL,
+     TopicDetectionAnalyzer,
+     TopicDiscoveryAnalyzer,
+ )
+@@ -142,5 +143,6 @@ __all__ = [
+     "PROMPT_VERSION_DETECTION",
+     "PROMPT_VERSION_DETECTION_OPERATIONAL",
+     "PROMPT_VERSION_DISCOVERY",
++    "PROMPT_VERSION_DISCOVERY_OPERATIONAL",
+     "PROMPT_VERSION_TRANSLATION",
+ ]
+diff --git a/ai/backend.py b/ai/backend.py
+index e61b152..9e20e97 100644
+--- a/ai/backend.py
++++ b/ai/backend.py
+@@ -106,7 +106,33 @@ class AiBackendProtocolError(AiBackendError):
+ 
+ 
+ class AiBackendRequestError(AiBackendError):
+-    """Sollevata per errori di richiesta HTTP (es. codici di stato 4xx o 5xx restituiti dal backend)."""
++    """
++    Sollevata per errori di richiesta HTTP (es. codici di stato 4xx o 5xx restituiti dal backend).
++    Include categorizzazione sicura per prevenire leak di dati sensibili nei log forensi.
++    """
++
++    def __init__(
++        self,
++        message: str,
++        status_code: int | None = None,
++        error_category: str = "UNCLASSIFIED_HTTP_ERROR",
++        safe_reason: str | None = None,
++        technical_details: str = "",
++        model_id: str | None = None,
++        request_id: str | None = None,
++        prompt_tokens_estimate: int | None = None,
++        max_tokens_requested: int | None = None,
++    ) -> None:
++        super().__init__(message)
++        self.status_code = status_code
++        self.error_category = error_category
++        self.safe_reason = safe_reason or message
++        self.technical_details = technical_details
++        self.model_id = model_id
++        self.request_id = request_id
++        self.prompt_tokens_estimate = prompt_tokens_estimate
++        self.max_tokens_requested = max_tokens_requested
++
+ class AiModelAmbiguousError(AiModelNotSpecifiedError):
+     """Sollevata quando più varianti compatibili del modello sono installate senza selezione univoca."""
+     pass
+diff --git a/ai/chunking.py b/ai/chunking.py
+index bb90cd3..cd976b4 100644
+--- a/ai/chunking.py
++++ b/ai/chunking.py
+@@ -61,27 +61,140 @@ class ChunkAnalysisOutcome:
+     error_message: str | None = None
+ 
+ 
++@dataclass(frozen=True)
++class DocumentAnalysisProfile:
++    """
++    Profilo statico e forense del documento calcolato prima dell'inferenza.
++    Distingue testo analizzabile e conteggi strutturali senza invocare l'AI.
++    """
++    document_id: str
++    total_messages: int
++    total_evidence_sections: int
++    total_text_characters: int
++    estimated_text_tokens: int
++    estimated_chunks: int
++    source_name: str
++    has_multimodal_evidence: bool
++
++    def to_dict(self) -> dict[str, Any]:
++        return {
++            "document_id": self.document_id,
++            "total_messages": self.total_messages,
++            "total_evidence_sections": self.total_evidence_sections,
++            "total_text_characters": self.total_text_characters,
++            "estimated_text_tokens": self.estimated_text_tokens,
++            "estimated_chunks": self.estimated_chunks,
++            "source_name": self.source_name,
++            "has_multimodal_evidence": self.has_multimodal_evidence,
++        }
++
++
++def estimate_evidence_framing_tokens(section: Any, default_floor: int = 85) -> int:
++    """
++    Stima conservativa e verificabile dell'overhead di serializzazione JSON per una sezione di evidenza.
++    Tiene conto di identificativi complessi, metadati e delimitatori JSON (~85 token floor).
++    """
++    ev_id = getattr(section, "evidence_id", "")
++    s_type = getattr(getattr(section, "source_type", None), "value", "text")
++    msg_id = getattr(section, "message_id", "")
++    s_name = getattr(section, "source_name", "") or ""
++    s_rec = getattr(section, "source_record_id", "") or ""
++    s_lang = getattr(section, "language", "") or ""
++    meta_chars = len(ev_id) + len(s_type) + len(msg_id) + len(s_name) + len(s_rec) + len(s_lang) + 110
++    import math
++    return max(default_floor, math.ceil(meta_chars / 2.5))
++
++
++def profile_document_for_analysis(
++    document: ConversationEvidenceDocument,
++    max_characters: int = 12000,
++    max_bundles: int = 100,
++    max_tokens: int | None = 2500,
++    service: Any = None,
++    analysis_type: str = "detection",
++    max_topics: int | None = None,
++    profile: Any = None,
++) -> DocumentAnalysisProfile:
++    """
++    Esegue la profilazione preventiva del documento prima di iniziare l'analisi AI.
++    Se viene fornita un'istanza del servizio, ne utilizza la configurazione effettiva
++    per garantire coerenza al 100% tra stima preventiva e run operativa.
++    """
++    if service is not None and hasattr(service, "profile_document"):
++        return service.profile_document(
++            document=document,
++            analysis_type=analysis_type,
++            max_topics=max_topics,
++            profile=profile,
++        )
++
++    total_chars = 0
++    sec_count = 0
++    has_multimodal = False
++
++    for b in document.bundles:
++        if b.audio_transcription or b.image_ocr or b.image_vision:
++            has_multimodal = True
++        for sec in b.text_evidence_sections:
++            sec_count += 1
++            total_chars += len(sec.text)
++
++    # Stima prudenziale dei token (~2.8 caratteri per token in italiano/multilingue)
++    import math
++    est_tokens = max(math.ceil(total_chars / 2.8), 0)
++
++    # Calcolo dei chunk effettivi tramite split_document_into_chunks
++    chunks = split_document_into_chunks(
++        document,
++        max_characters=max_characters,
++        max_bundles=max_bundles,
++        max_tokens=max_tokens,
++    )
++
++    return DocumentAnalysisProfile(
++        document_id=document.document_id,
++        total_messages=document.message_count,
++        total_evidence_sections=sec_count,
++        total_text_characters=total_chars,
++        estimated_text_tokens=est_tokens,
++        estimated_chunks=len(chunks),
++        source_name=document.source_name or "unknown",
++        has_multimodal_evidence=has_multimodal,
++    )
++
++
+ def split_document_into_chunks(
+     document: ConversationEvidenceDocument,
+     max_characters: int = 8000,
+     max_bundles: int = 25,
++    max_tokens: int | None = None,
+ ) -> tuple[ConversationEvidenceDocument, ...]:
+     """
+     Suddivide deterministicamente un ConversationEvidenceDocument in una sequenza di sotto-documenti
+-    preservando l'atomicità dei bundle di evidenza.
++    preservando l'atomicità dei bundle di evidenza e la cronologia.
+ 
+-    Nota metodologica: max_characters rappresenta una stima prudenziale del budget di caratteri,
+-    non un calcolo token-perfect.
++    Supporta budget congiunto di caratteri, numero di bundle e token stimati:
++    - max_characters: limite massimo prudenziale di caratteri testuali per chunk;
++    - max_bundles: numero massimo di bundle atomici per chunk;
++    - max_tokens: limite opzionale sul budget stimato di token di evidenza.
+     """
+     if not document.bundles:
+         return (document,)
+ 
++    import math
++
+     chunks: list[list[MessageEvidenceBundle]] = []
+     current_chunk: list[MessageEvidenceBundle] = []
+     current_chars = 0
++    current_tokens = 0
+ 
+     for bundle in document.bundles:
+         bundle_chars = sum(len(sec.text) for sec in bundle.text_evidence_sections)
++        # Stima token realistica che include il testo e il framing JSON serializzato della sezione (~85 token floor o dinamico)
++        bundle_framing_tokens = sum(
++            estimate_evidence_framing_tokens(sec) for sec in bundle.text_evidence_sections
++        )
++        bundle_tokens = math.ceil(bundle_chars / 2.8) + bundle_framing_tokens
+ 
+         # H1: Controllo singola evidenza oversize
+         for sec in bundle.text_evidence_sections:
+@@ -90,6 +203,10 @@ def split_document_into_chunks(
+                     f"La sezione di evidenza '{sec.evidence_id}' ({len(sec.text)} caratteri) "
+                     f"supera il limite massimo consentito per chunk ({max_characters} caratteri)."
+                 )
++            if max_tokens is not None and math.ceil(len(sec.text) / 2.8) > max_tokens:
++                raise AnalysisInputTooLargeError(
++                    f"La sezione di evidenza '{sec.evidence_id}' supera il limite token consentito per chunk ({max_tokens} token)."
++                )
+ 
+         # H2: Controllo bundle atomico oversize
+         if bundle_chars > max_characters:
+@@ -97,18 +214,26 @@ def split_document_into_chunks(
+                 f"Il bundle atomico per il messaggio '{bundle.message.message_id}' ({bundle_chars} caratteri) "
+                 f"supera da solo il limite massimo consentito per chunk ({max_characters} caratteri)."
+             )
++        if max_tokens is not None and bundle_tokens > max_tokens:
++            raise AnalysisInputTooLargeError(
++                f"Il bundle atomico per il messaggio '{bundle.message.message_id}' ({bundle_tokens} token stimati) "
++                f"supera da solo il limite massimo token consentito per chunk ({max_tokens} token)."
++            )
+ 
+         # Se l'aggiunta supera i limiti e il chunk corrente non è vuoto, chiude il chunk
+-        if current_chunk and (
+-            current_chars + bundle_chars > max_characters
+-            or len(current_chunk) >= max_bundles
+-        ):
++        exceeds_chars = (current_chars + bundle_chars > max_characters)
++        exceeds_bundles = (len(current_chunk) >= max_bundles)
++        exceeds_tokens = (max_tokens is not None and (current_tokens + bundle_tokens > max_tokens))
++
++        if current_chunk and (exceeds_chars or exceeds_bundles or exceeds_tokens):
+             chunks.append(current_chunk)
+             current_chunk = []
+             current_chars = 0
++            current_tokens = 0
+ 
+         current_chunk.append(bundle)
+         current_chars += bundle_chars
++        current_tokens += bundle_tokens
+ 
+     if current_chunk:
+         chunks.append(current_chunk)
+@@ -304,6 +429,57 @@ def aggregate_topic_detection(
+     )
+ 
+ 
++ITALIAN_STOP_WORDS: frozenset[str] = frozenset({
++    "di", "a", "da", "in", "con", "su", "per", "tra", "fra",
++    "il", "lo", "la", "i", "gli", "le", "un", "uno", "una",
++    "del", "dello", "della", "dei", "degli", "delle",
++    "al", "allo", "alla", "ai", "agli", "alle",
++    "dal", "dallo", "dalla", "dai", "dagli", "dalle",
++    "nel", "nello", "nella", "nei", "negli", "nelle",
++    "sul", "sullo", "sulla", "sui", "sugli", "sulle",
++    "d", "l", "ed", "ad",
++})
++
++
++def stem_italian_word(word: str) -> str:
++    """Semplice e deterministico normalizzatore morfologico per sostantivi e aggettivi italiani."""
++    w = word.strip().casefold()
++    if len(w) <= 3:
++        return w
++    if w.endswith("i"):
++        return w[:-1]
++    if w.endswith("e") and len(w) > 4:
++        return w[:-1]
++    if w.endswith(("o", "a")) and len(w) > 4:
++        return w[:-1]
++    return w
++
++
++def canonicalize_topic_label(label: str) -> str:
++    """
++    Normalizza la label a livello morfologico/sintattico (senza falsi claim di embedding neurale):
++    1. Normalizzazione testuale NFKC, rimozione punteggiatura;
++    2. Rimozione stop words e preposizioni italiane;
++    3. Stemming morfologico deterministico (singolari/plurali e flessioni);
++    4. Conservazione rigorosa dell'ordine sintattico dei lemmi per evitare fusioni
++       semanticamente improprie (es. 'Cessione di armi a privati' != 'Cessione di privati ad armi').
++    Esempi:
++    - 'Traffico di armi' e 'Traffico d'armi' -> 'traffic arm'
++    - 'Incontri riservati' e 'Incontro riservato' -> 'incontr riservat'
++    - 'Spaccio di stupefacenti' e 'Spaccio stupefacenti' -> 'spacci stupefacent'
++    """
++    raw_norm = normalize_topic_label(label)
++    if not raw_norm:
++        return ""
++    words = raw_norm.split()
++    content_words = [w for w in words if w not in ITALIAN_STOP_WORDS]
++    if not content_words:
++        content_words = words
++    stems = [stem_italian_word(w) for w in content_words]
++    return " ".join(stems)
++
++
++
+ def normalize_topic_label(label: str) -> str:
+     """
+     Normalizza deterministicamente una label tematica per il consolidamento:
+@@ -326,7 +502,7 @@ def aggregate_topic_discovery(
+ ) -> TopicDiscoveryResult:
+     """
+     Aggrega deterministicamente i risultati di Topic Discovery provenienti da più chunk.
+-    Fonde topic semanticamente/sintatticamente equivalenti (NFKC, casefold, punteggiatura)
++    Fonde topic semanticamente/sintatticamente equivalenti (NFKC, casefold, punteggiatura, stem morfologici)
+     preservando tutti gli evidence_ids e tracciando il supporto dei chunk.
+     Se il numero di topic consolidati supera max_topics, applica Deterministic Support Ranking:
+     1. Supporto dei chunk indipendenti (quanti chunk hanno rilevato il tema);
+@@ -349,19 +525,21 @@ def aggregate_topic_discovery(
+         chunk_id = getattr(cr, "metadata", {}).get("chunk_id") or f"{getattr(cr, 'provenance_document_id', 'doc')}::chunk_{chunk_idx}"
+         for t in cr.topics:
+             raw_topics_count += 1
+-            norm_key = normalize_topic_label(t.label) or t.label.strip().casefold()
+-            if norm_key in consolidated:
+-                item = consolidated[norm_key]
++            canonical_key = canonicalize_topic_label(t.label) or normalize_topic_label(t.label) or t.label.strip().casefold()
++            if canonical_key in consolidated:
++                item = consolidated[canonical_key]
+                 item["supporting_chunks"].add(chunk_id)
+                 for eid in t.evidence_ids:
+                     if eid not in item["evidence_ids"]:
+                         item["evidence_ids"].append(eid)
+                 if len(t.short_description.strip()) > len(item["short_description"]):
+                     item["short_description"] = t.short_description.strip()
++                if len(t.label.strip()) > len(item["label"]):
++                    item["label"] = t.label.strip()
+             else:
+-                consolidated[norm_key] = {
++                consolidated[canonical_key] = {
+                     "label": t.label.strip(),
+-                    "norm_key": norm_key,
++                    "norm_key": canonical_key,
+                     "short_description": t.short_description.strip(),
+                     "evidence_ids": list(t.evidence_ids),
+                     "supporting_chunks": {chunk_id},
+@@ -407,5 +585,7 @@ def aggregate_topic_discovery(
+             "consolidated_topic_count": consolidated_count,
+             "selected_topic_count": len(topics),
+             "reduction_strategy": reduction_strategy,
++            "consolidation_mode": "stem_canonical_deduplication",
++            "semantic_deduplication": False,
+         },
+     )
+diff --git a/ai/lmstudio.py b/ai/lmstudio.py
+index 73d2c5d..add860b 100644
+--- a/ai/lmstudio.py
++++ b/ai/lmstudio.py
+@@ -1064,6 +1064,89 @@ def resolve_operational_model_from_metadata(
+     )
+ 
+ 
++def classify_lmstudio_http_error(
++    http_code: int,
++    reason: Any,
++    raw_body_bytes: bytes,
++    base_url: str = "http://127.0.0.1:1234",
++    model_id: str | None = None,
++    max_tokens: int | None = None,
++    prompt_tokens: int | None = None,
++) -> AiBackendRequestError:
++    """
++    Classifica in modo strutturato e sicuro per la privacy forense gli errori HTTP di LM Studio.
++    Non espone mai nei messaggi di errore o nei log estratti di conversazione o dati personali.
++    """
++    body_text = ""
++    error_msg = ""
++    request_id = None
++    try:
++        body_text = raw_body_bytes.decode("utf-8", errors="replace")
++        parsed = json.loads(body_text)
++        if isinstance(parsed, dict):
++            err_obj = parsed.get("error")
++            if isinstance(err_obj, dict):
++                error_msg = str(err_obj.get("message") or "")
++                request_id = err_obj.get("request_id") or err_obj.get("id")
++            elif isinstance(err_obj, str):
++                error_msg = err_obj
++            elif "message" in parsed:
++                error_msg = str(parsed["message"])
++            if not request_id and "id" in parsed:
++                request_id = str(parsed["id"])
++    except Exception:
++        error_msg = body_text[:200]
++
++    lower_msg = (error_msg or body_text).lower()
++
++    if http_code == 400:
++        if any(k in lower_msg for k in ("context", "n_ctx", "maximum context length", "too many tokens", "exceed", "window", "context length")):
++            cat = "CONTEXT_OVERFLOW"
++            safe_reason = "LM Studio ha rifiutato la richiesta perché il prompt e il budget di risposta superano la finestra di contesto disponibile."
++        elif any(k in lower_msg for k in ("response_format", "json_schema", "schema", "grammar", "structured output")):
++            cat = "UNSUPPORTED_STRUCTURED_OUTPUT"
++            safe_reason = "Il backend non accetta il formato JSON strutturato richiesto."
++        elif any(k in lower_msg for k in ("model not loaded", "no model loaded", "model not found", "not loaded")):
++            cat = "MODEL_NOT_LOADED"
++            safe_reason = "Il modello specificato non risulta attualmente caricato in LM Studio."
++        elif any(k in lower_msg for k in ("invalid parameter", "unknown field", "parameter", "temperature", "max_tokens", "seed", "out of range")):
++            cat = "INVALID_PARAMETER"
++            safe_reason = "LM Studio ha rifiutato un parametro della richiesta."
++        elif any(k in lower_msg for k in ("cuda", "vram", "out of memory", "llama_decode", "memory", "metal")):
++            cat = "INFERENCE_BACKEND_ERROR"
++            safe_reason = "Errore del backend di inferenza locale o memoria GPU insufficiente."
++        else:
++            cat = "UNCLASSIFIED_HTTP_ERROR"
++            safe_reason = "LM Studio ha restituito HTTP 400. Non è stato possibile determinare la causa specifica."
++    elif http_code == 429:
++        cat = "RATE_LIMIT_EXCEEDED"
++        safe_reason = "LM Studio ha restituito HTTP 429: troppe richieste simultanee o server occupato."
++    elif http_code in (500, 502, 503, 504):
++        cat = "SERVER_ERROR"
++        safe_reason = f"Errore interno del server LM Studio (HTTP {http_code})."
++    else:
++        cat = "HTTP_ERROR"
++        safe_reason = f"Errore HTTP {http_code} restituito da LM Studio: {reason or 'Unknown'}"
++
++    clean_technical = f"HTTP {http_code} [{cat}]"
++    if request_id:
++        clean_technical += f" (req_id: {request_id})"
++
++    full_message = f"Errore HTTP {http_code} da LM Studio: {safe_reason} (Dettaglio: {clean_technical})"
++
++    return AiBackendRequestError(
++        message=full_message,
++        status_code=http_code,
++        error_category=cat,
++        safe_reason=safe_reason,
++        technical_details=clean_technical,
++        model_id=model_id,
++        request_id=str(request_id) if request_id else None,
++        prompt_tokens_estimate=prompt_tokens,
++        max_tokens_requested=max_tokens,
++    )
++
++
+ def _is_timeout_error(exc: BaseException) -> bool:
+     """Determina se un'eccezione di rete o socket è dovuta a un timeout effettivo."""
+     if isinstance(exc, (TimeoutError, socket.timeout)):
+@@ -1103,6 +1186,7 @@ class LmStudioClient(BaseLocalLlmClient):
+         api_token: str | None = None,
+         default_timeout_seconds: float = 30.0,
+         debug_preserve_raw: bool = False,
++        request_listener: Any = None,
+     ) -> None:
+         _validate_loopback_url(base_url)
+         self.base_url = base_url.rstrip("/")
+@@ -1111,6 +1195,7 @@ class LmStudioClient(BaseLocalLlmClient):
+         self._api_token = api_token or os.environ.get("LM_STUDIO_API_TOKEN")
+         self.default_timeout_seconds = default_timeout_seconds
+         self.debug_preserve_raw = debug_preserve_raw
++        self.request_listener = request_listener
+         self._last_loaded_model: str | None = None
+         self._last_loaded_model_key: str | None = None
+         self._loaded_instance_id: str | None = None
+@@ -1809,11 +1894,12 @@ class LmStudioClient(BaseLocalLlmClient):
+         seed: int | None = None,
+         max_tokens: int | None = None,
+         timeout_seconds: float = 30.0,
++        request_listener: Any = None,
+     ) -> LlmCompletionResponse:
+         """
+         Invia una richiesta OpenAI-compatible a POST /v1/chat/completions.
+         Richiede un model_id esplicito (passato a chiamata o preimpostato nel client).
+-        Non seleziona mai modelli in modo automatico.
++        Collega gli eventi di avanzamento al ciclo di vita reale di ogni richiesta HTTP.
+         Valida rigorosamente che il campo 'model' provenga dalla risposta del server
+         e che la forma della risposta rispetti il protocollo atteso.
+         """
+@@ -1824,6 +1910,8 @@ class LmStudioClient(BaseLocalLlmClient):
+                 "Per garantire l'integrità scientifica dell'esperimento, l'identificativo modello deve essere esplicito."
+             )
+ 
++        listener = request_listener if request_listener is not None else getattr(self, "request_listener", None)
++
+         payload: dict[str, Any] = {
+             "model": target_model,
+             "messages": messages,
+@@ -1849,14 +1937,50 @@ class LmStudioClient(BaseLocalLlmClient):
+         req_data = json.dumps(payload).encode("utf-8")
+         req = urllib.request.Request(url, data=req_data, headers=self._get_headers(), method="POST")
+ 
++        if listener is not None and hasattr(listener, "record_request_sent"):
++            try:
++                listener.record_request_sent(phase="Esecuzione inferenza HTTP")
++            except Exception:
++                pass
++
+         start_t = time.perf_counter()
+         try:
+             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
+                 elapsed = round(time.perf_counter() - start_t, 3)
+                 raw_bytes = resp.read()
++            if listener is not None and hasattr(listener, "record_http_response_received"):
++                try:
++                    listener.record_http_response_received()
++                except Exception:
++                    pass
+         except urllib.error.HTTPError as e:
+-            raise AiBackendRequestError(f"Errore HTTP {e.code} da LM Studio ({self.base_url}): {e.reason}") from e
++            raw_err_bytes = b""
++            try:
++                raw_err_bytes = e.read()
++            except Exception:
++                pass
++            if listener is not None and hasattr(listener, "record_http_error"):
++                try:
++                    listener.record_http_error(status_code=e.code, message=f"HTTP {e.code}")
++                except Exception:
++                    pass
++            raise classify_lmstudio_http_error(
++                http_code=e.code,
++                reason=getattr(e, "reason", None),
++                raw_body_bytes=raw_err_bytes,
++                base_url=self.base_url,
++                model_id=target_model,
++                max_tokens=max_tokens,
++            ) from e
+         except _NETWORK_ERRORS as e:
++            if listener is not None:
++                try:
++                    if _is_timeout_error(e) and hasattr(listener, "record_timeout"):
++                        listener.record_timeout(message=str(e))
++                    elif hasattr(listener, "record_http_error"):
++                        listener.record_http_error(status_code=None, message=str(e))
++                except Exception:
++                    pass
+             if _is_timeout_error(e):
+                 raise AiBackendTimeoutError(
+                     f"Timeout ({timeout_seconds}s) durante la chat completion su LM Studio ({self.base_url}): {e}"
+@@ -1868,19 +1992,39 @@ class LmStudioClient(BaseLocalLlmClient):
+         try:
+             raw_json = json.loads(raw_bytes.decode("utf-8"))
+         except json.JSONDecodeError as e:
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error(f"JSONDecodeError: {e}")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError(f"Risposta non valida da LM Studio (JSON malformato): {e}") from e
+ 
+         # Validazione Sezione B: top-level response deve essere dict
+         if not isinstance(raw_json, dict):
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Risposta top-level non dict")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError(
+                 f"Risposta top-level da LM Studio non è un dizionario (ricevuto {type(raw_json).__name__})."
+             )
+ 
+         # Validazione Sezione A: model ID deve venire RIGOROSAMENTE dalla risposta del backend
+         if "model" not in raw_json:
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Campo 'model' mancante")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError("Risposta da LM Studio priva del campo obbligatorio 'model'.")
+         raw_model = raw_json["model"]
+         if not isinstance(raw_model, str) or not raw_model.strip():
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Campo 'model' non valido o vuoto")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError(
+                 f"Campo 'model' nella risposta da LM Studio non valido o vuoto (ricevuto {raw_model!r})."
+             )
+@@ -1888,6 +2032,11 @@ class LmStudioClient(BaseLocalLlmClient):
+ 
+         # Validazione positiva identità response.model contro target_model per tutte le completion
+         if not self.is_equivalent_model(target_model, response_model):
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Response model mismatch")
++                except Exception:
++                    pass
+             raise AiModelMismatchError(
+                 f"Response model mismatch: modello richiesto '{target_model}', "
+                 f"ma la risposta proviene dal modello non equivalente '{response_model}'.",
+@@ -1898,38 +2047,82 @@ class LmStudioClient(BaseLocalLlmClient):
+         # Validazione Sezione B: choices, message, content, finish_reason, usage
+         choices = raw_json.get("choices")
+         if not isinstance(choices, list) or len(choices) == 0:
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Campo 'choices' mancante o vuoto")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError("Campo 'choices' mancante, vuoto o non lista nella risposta di LM Studio.")
+ 
+         first_choice = choices[0]
+         if not isinstance(first_choice, dict):
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Elemento choices[0] non dict")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError(
+                 f"L'elemento choices[0] deve essere un dizionario, ricevuto {type(first_choice).__name__}."
+             )
+ 
+         message_obj = first_choice.get("message")
+         if not isinstance(message_obj, dict):
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Campo choices[0]['message'] non dict")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError(
+                 f"Campo choices[0]['message'] deve essere un dizionario, ricevuto {type(message_obj).__name__}."
+             )
+ 
+         content = message_obj.get("content")
+         if not isinstance(content, str):
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Campo content non stringa")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError(
+                 f"Campo choices[0]['message']['content'] deve essere una stringa, ricevuto {type(content).__name__}."
+             )
+ 
+         finish_reason = first_choice.get("finish_reason")
+         if finish_reason is not None and not isinstance(finish_reason, str):
++            if listener is not None and hasattr(listener, "record_protocol_error"):
++                try:
++                    listener.record_protocol_error("Campo finish_reason non stringa")
++                except Exception:
++                    pass
+             raise AiBackendProtocolError(
+                 f"Campo 'finish_reason' deve essere una stringa o None, ricevuto {type(finish_reason).__name__}."
+             )
+ 
++        # Troncamento JSON se schema richiesto e finish_reason='length'
++        if schema is not None and finish_reason == "length":
++            try:
++                json.loads(content)
++            except Exception as j_trunc_err:
++                if listener is not None and hasattr(listener, "record_protocol_error"):
++                    try:
++                        listener.record_protocol_error("Risposta JSON troncata (finish_reason=length)")
++                    except Exception:
++                        pass
++                raise AiStructuredOutputError(
++                    f"Risposta JSON troncata da LM Studio prima del completamento (finish_reason=length): {j_trunc_err}"
++                ) from j_trunc_err
++
+         usage = raw_json.get("usage")
+         prompt_tokens = None
+         completion_tokens = None
+         total_tokens = None
+         if usage is not None:
+             if not isinstance(usage, dict):
++                if listener is not None and hasattr(listener, "record_protocol_error"):
++                    try:
++                        listener.record_protocol_error("Campo usage non dict")
++                    except Exception:
++                        pass
+                 raise AiBackendProtocolError(
+                     f"Campo 'usage' deve essere un dizionario, ricevuto {type(usage).__name__}."
+                 )
+@@ -1937,6 +2130,11 @@ class LmStudioClient(BaseLocalLlmClient):
+                 val = usage.get(k)
+                 if val is not None:
+                     if not isinstance(val, (int, float)) or isinstance(val, bool) or val < 0:
++                        if listener is not None and hasattr(listener, "record_protocol_error"):
++                            try:
++                                listener.record_protocol_error(f"Valore token usage non valido per {k}")
++                            except Exception:
++                                pass
+                         raise AiBackendProtocolError(
+                             f"Conteggio token '{k}' in 'usage' non numerico valido >= 0: {val!r}."
+                         )
+@@ -1969,6 +2167,12 @@ class LmStudioClient(BaseLocalLlmClient):
+                 "finish_reason": finish_reason,
+             }
+ 
++        if listener is not None and hasattr(listener, "record_request_success"):
++            try:
++                listener.record_request_success()
++            except Exception:
++                pass
++
+         return LlmCompletionResponse(
+             content=content,
+             model=response_model,
+diff --git a/ai/models.py b/ai/models.py
+index 1469210..87f4dfb 100644
+--- a/ai/models.py
++++ b/ai/models.py
+@@ -156,6 +156,7 @@ class TopicQuery:
+     topic_id: str
+     label: str
+     description: str
++    is_label_only: bool = False
+ 
+     def __post_init__(self) -> None:
+         if not isinstance(self.topic_id, str) or not self.topic_id.strip():
+diff --git a/ai/topics.py b/ai/topics.py
+index 520e428..d371c18 100644
+--- a/ai/topics.py
++++ b/ai/topics.py
+@@ -21,6 +21,8 @@ from typing import Any, Mapping
+ 
+ from ai.backend import (
+     AiModelMismatchError,
++    AiStructuredOutputError,
++    AnalysisInputTooLargeError,
+     BaseLlmClient,
+ )
+ from ai.chunking import verify_translated_document_size
+@@ -44,28 +46,45 @@ from ai.structured import (
+     validate_topic_detection_payload,
+     validate_topic_discovery_payload,
+ )
++from ai.token_budget import (
++    DEFAULT_SAFETY_MARGIN_TOKENS,
++    calculate_dynamic_output_budget,
++    calculate_token_budget_plan,
++    estimate_request_input_tokens,
++)
+ 
+ PROMPT_VERSION_DETECTION = "topic_detection_v1"
+-PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v1"
++PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v2"
+ PROMPT_VERSION_DISCOVERY = "topic_discovery_v1"
+-
+-OPERATIONAL_MULTIMODAL_DIRECTIVE = """
+-MULTIMODAL SEMANTIC DIRECTIVE:
+-The requested topic may be expressed semantically rather than through literal keyword overlap.
+-
+-Evaluate the meaning of ALL evidence sources, including:
+-- original message text,
+-- speech-to-text transcriptions,
+-- OCR text,
+-- image vision descriptions,
+-- image vision observations.
+-
+-If the evidence clearly describes the concept represented by the topic, return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
+-
+-PRESENT still requires at least one valid evidence_id.
+-Do not infer beyond the supplied evidence.
++PROMPT_VERSION_DISCOVERY_OPERATIONAL = "topic_discovery_operational_v2"
++
++OPERATIONAL_SEMANTIC_DIRECTIVE = """
++OPERATIONAL SEMANTIC & MULTIMODAL INTERPRETATION DIRECTIVE:
++1. OBJECTIVE THEMATIC & CONCEPTUAL EVALUATION:
++   - In LABEL-ONLY mode (where no separate description is provided), interpret the genuine thematic and conceptual scope of the topic label across Italian and any other languages present in the evidence.
++   - The requested topic may be expressed semantically rather than through literal keyword overlap.
++   - Do NOT require the literal words of the topic title to appear verbatim: recognize valid synonyms, paraphrases, contextual equivalents, and domain-appropriate terminology when directly supported by the evidence.
++   - You may return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
++   - Crucially, do NOT confuse mere thematic proximity, incidental mentions, or background context with sufficient proof of the topic.
++2. BALANCED FORENSIC TRI-STATE DISCIPLINE:
++   - PRESENT: Return 'PRESENT' if and only if the forensic evidence contains clear, direct, and verifiable proof that the topic was actively discussed. Every 'PRESENT' decision MUST cite at least one specific, genuinely supporting evidence_id. PRESENT still requires at least one valid evidence_id.
++   - ABSENT: Return 'ABSENT' whenever the topic is not discussed, mentioned, or evidenced in the conversation. When decision is 'ABSENT', 'evidence_ids' MUST be an empty array [].
++   - UNCERTAIN: Return 'UNCERTAIN' if the evidence is fragmentary, ambiguous, tangential, or merely hints at related elements without providing solid proof. Do NOT force 'PRESENT' on ambiguous data.
++   - Do NOT bias your judgment toward any verdict. Treat PRESENT, ABSENT, and UNCERTAIN with equal objectivity.
++3. STRICT EVIDENCE GROUNDING:
++   - Cite ONLY exact evidence_ids present in the provided evidence block.
++   - NEVER fabricate, extrapolate, or invent evidence IDs.
++   - Do not infer beyond the supplied evidence.
++4. MULTIMODAL SOURCES:
++   - Evaluate the meaning of ALL evidence sources, including:
++     - message text
++     - audio transcriptions
++     - image OCR text
++     - image vision descriptions
+ """
+ 
++OPERATIONAL_MULTIMODAL_DIRECTIVE = OPERATIONAL_SEMANTIC_DIRECTIVE
++
+ 
+ class TopicDetectionAnalyzer:
+     """
+@@ -94,6 +113,7 @@ class TopicDetectionAnalyzer:
+         timeout_seconds: float = 30.0,
+         max_tokens: int | None = None,
+         operational_mode: bool | None = None,
++        context_length: int = 8192,
+     ) -> TopicDetectionResult:
+         """
+         Esegue la detection del topic specificato.
+@@ -126,8 +146,35 @@ class TopicDetectionAnalyzer:
+                 },
+             )
+ 
++        is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
++
+         # Costruzione del system prompt con direttiva anti-injection e specifiche di task
+-        system_content = f"""{SYSTEM_SECURITY_DIRECTIVE}
++        if is_operational:
++            if is_label_only:
++                topic_spec = f"""TOPIC ID: {topic.topic_id}
++TOPIC LABEL (TITLE ONLY): {topic.label}
++SPECIFIC DESCRIPTION: None provided (LABEL-ONLY query). Evaluate the semantic, conceptual, and contextual scope of '{topic.label}'."""
++            else:
++                topic_spec = f"""TOPIC ID: {topic.topic_id}
++TOPIC LABEL: {topic.label}
++DESCRIPTION: {topic.description}"""
++
++            system_content = f"""{SYSTEM_SECURITY_DIRECTIVE}
++TASK: SPECIFIC TOPIC DETECTION (Version: {prompt_version})
++You must determine if the following topic is discussed or present in the forensic evidence:
++{topic_spec}
++
++OUTPUT RULES:
++1. Return decision 'PRESENT' if and only if the topic is clearly discussed or evidenced in the conversation.
++   You MUST cite at least one exact evidence_id in 'evidence_ids'.
++2. Return decision 'ABSENT' if the topic is NOT present in the conversation evidence. 'evidence_ids' MUST be an empty array [].
++3. Return decision 'UNCERTAIN' if the evidence is ambiguous, partial, fragmentary, or insufficient to decide. You may cite ambiguous evidence_ids.
++4. CITE ONLY EXACT evidence_ids that are present in the evidence block. DO NOT fabricate or invent IDs.
++5. Provide a short, objective rationale explaining the decision in Italian. DO NOT provide lengthy chain-of-thought.
++"""
++            system_content += f"{OPERATIONAL_SEMANTIC_DIRECTIVE}\n"
++        else:
++            system_content = f"""{SYSTEM_SECURITY_DIRECTIVE}
+ TASK: SPECIFIC TOPIC DETECTION (Version: {prompt_version})
+ You must determine if the following topic is discussed or present in the forensic evidence:
+ TOPIC ID: {topic.topic_id}
+@@ -143,9 +190,6 @@ OUTPUT RULES:
+ 5. Provide a short, objective rationale explaining the decision in Italian. DO NOT provide lengthy chain-of-thought.
+ """
+ 
+-        if is_operational:
+-            system_content += f"{OPERATIONAL_MULTIMODAL_DIRECTIVE}\n"
+-
+         if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
+             system_content += "\nMULTILINGUAL DIRECTIVE: The evidence may contain multiple languages. Understand the original language but respond with rationale in Italian.\n"
+         elif strategy == AnalysisLanguageStrategy.TRANSLATE_FIRST:
+@@ -160,6 +204,20 @@ OUTPUT RULES:
+             {"role": "user", "content": user_content},
+         ]
+ 
++        if is_operational and context_length > 0:
++            eff_out = max_tokens or 512
++            plan = calculate_token_budget_plan(
++                context_length=context_length,
++                messages=messages,
++                reserved_output_tokens=eff_out,
++                schema=TOPIC_DETECTION_SCHEMA,
++            )
++            if not plan.fits_in_context:
++                raise AnalysisInputTooLargeError(
++                    f"La richiesta di Topic Detection supera la finestra di contesto ({plan.total_budget_needed} > {context_length} token stimati). "
++                    f"Il blocco necessita di ulteriore suddivisione."
++                )
++
+         response = self.client.chat_completion(
+             messages=messages,
+             model_id=target_model,
+@@ -173,7 +231,7 @@ OUTPUT RULES:
+         # Verifica Model Mismatch
+         if target_model and response.model != target_model:
+             is_match = False
+-            if operational_mode:
++            if is_operational:
+                 from ai.lmstudio import is_equivalent_operational_model
+                 is_match = is_equivalent_operational_model(target_model, response.model, client=self.client)
+ 
+@@ -201,6 +259,8 @@ OUTPUT RULES:
+             "temperature": temperature,
+             "seed": seed,
+             "operational_mode": is_operational,
++            "query_mode": "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION",
++            "is_label_only": is_label_only,
+             "raw_response": response.content,
+         }
+ 
+@@ -241,6 +301,8 @@ class TopicDiscoveryAnalyzer:
+         timeout_seconds: float = 30.0,
+         max_tokens: int | None = None,
+         operational_mode: bool | None = None,
++        context_length: int = 8192,
++        on_retry_callback: Any = None,
+     ) -> TopicDiscoveryResult:
+         """
+         Esegue la scoperta non supervisionata di temi emergenti nel documento.
+@@ -260,10 +322,20 @@ class TopicDiscoveryAnalyzer:
+                 },
+             )
+ 
+-        system_content = f"""{SYSTEM_SECURITY_DIRECTIVE}
+-TASK: OPEN TOPIC DISCOVERY (Version: {PROMPT_VERSION_DISCOVERY})
++        is_op = self.operational_mode if operational_mode is None else operational_mode
++        prompt_version = (
++            PROMPT_VERSION_DISCOVERY_OPERATIONAL
++            if is_op
++            else PROMPT_VERSION_DISCOVERY
++        )
++
++        current_topics = max_topics
++
++        def _make_sys_prompt(num_topics: int) -> str:
++            sp = f"""{SYSTEM_SECURITY_DIRECTIVE}
++TASK: OPEN TOPIC DISCOVERY (Version: {prompt_version})
+ Analyze the forensic conversation evidence and discover the main topics or subjects discussed.
+-Find up to {max_topics} distinct topics.
++Find up to {num_topics} distinct topics.
+ 
+ ETHICAL FORENSIC CONSTRAINTS:
+ - DO NOT infer personal identities, real names, or demographic profiles.
+@@ -274,12 +346,13 @@ OUTPUT RULES:
+ 1. Provide a concise 'label' for each topic (in Italian).
+ 2. Provide a 'short_description' explaining the topic objectively (in Italian).
+ 3. Cite the exact 'evidence_ids' supporting each topic. Each topic must cite at least one valid evidence_id.
+-4. Return an array of topics matching schema, with at most {max_topics} elements.
++4. Return an array of topics matching schema, with at most {num_topics} elements.
+ """
++            if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
++                sp += "\nMULTILINGUAL DIRECTIVE: The evidence may contain multiple languages. Analyze all languages and output labels/descriptions in Italian.\n"
++            return sp
+ 
+-        if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
+-            system_content += "\nMULTILINGUAL DIRECTIVE: The evidence may contain multiple languages. Analyze all languages and output labels/descriptions in Italian.\n"
+-        elif strategy == AnalysisLanguageStrategy.TRANSLATE_FIRST:
++        if strategy == AnalysisLanguageStrategy.TRANSLATE_FIRST:
+             if translation is None:
+                 raise ValueError("Per la strategia TRANSLATE_FIRST è obbligatorio fornire un EvidenceTranslationResult.")
+             verify_translated_document_size(document, translation, max_characters=8000)
+@@ -287,51 +360,146 @@ OUTPUT RULES:
+         user_content = serialize_document_for_llm(document, strategy=strategy, translation=translation)
+ 
+         messages = [
+-            {"role": "system", "content": system_content},
++            {"role": "system", "content": _make_sys_prompt(current_topics)},
+             {"role": "user", "content": user_content},
+         ]
+ 
+-        response = self.client.chat_completion(
+-            messages=messages,
+-            model_id=target_model,
+-            schema=TOPIC_DISCOVERY_SCHEMA,
+-            temperature=temperature,
+-            seed=seed,
+-            timeout_seconds=timeout_seconds,
+-            max_tokens=max_tokens,
+-        )
+-
+-        is_op = self.operational_mode if operational_mode is None else operational_mode
+-        if target_model and response.model != target_model:
+-            is_match = False
+-            if is_op:
+-                from ai.lmstudio import is_equivalent_operational_model
+-                is_match = is_equivalent_operational_model(target_model, response.model, client=self.client)
++        # Stima preventiva input tokens e verifica budget rispetto a context_length
++        input_est = estimate_request_input_tokens(messages, schema=TOPIC_DISCOVERY_SCHEMA)
++        if is_op and context_length > 0:
++            plan = calculate_token_budget_plan(
++                context_length=context_length,
++                messages=messages,
++                reserved_output_tokens=max_tokens or 1024,
++                schema=TOPIC_DISCOVERY_SCHEMA,
++            )
++            if not plan.fits_in_context:
++                if plan.available_headroom < 256:
++                    raise AnalysisInputTooLargeError(
++                        f"Il chunk di Topic Discovery è troppo esteso per la finestra di contesto "
++                        f"(stima input: {plan.estimated_input_tokens} token su {context_length} disponibili). "
++                        f"Il blocco necessita di ulteriore suddivisione."
++                    )
++                max_tokens = min(max_tokens or 1024, plan.available_headroom)
++
++        max_attempts = 2 if is_op else 1
++        current_max_tokens = max_tokens
++        last_error: Exception | None = None
++        response = None
++        attempt_used = 0
++
++        for attempt in range(max_attempts):
++            attempt_used = attempt
++            response = self.client.chat_completion(
++                messages=messages,
++                model_id=target_model,
++                schema=TOPIC_DISCOVERY_SCHEMA,
++                temperature=temperature,
++                seed=seed,
++                timeout_seconds=timeout_seconds,
++                max_tokens=current_max_tokens,
++            )
+ 
+-            if not is_match:
+-                raise AiModelMismatchError(
+-                    f"Model mismatch in Topic Discovery: richiesto model_id '{target_model}', "
+-                    f"ma il backend ha restituito '{response.model}'."
++            if target_model and response.model != target_model:
++                is_match = False
++                if is_op:
++                    from ai.lmstudio import is_equivalent_operational_model
++                    is_match = is_equivalent_operational_model(target_model, response.model, client=self.client)
++
++                if not is_match:
++                    raise AiModelMismatchError(
++                        f"Model mismatch in Topic Discovery: richiesto model_id '{target_model}', "
++                        f"ma il backend ha restituito '{response.model}'."
++                    )
++
++            raw_resp = getattr(response, "raw_response", {})
++            finish_reason = raw_resp.get("finish_reason") if isinstance(raw_resp, Mapping) else None
++
++            # Rilevamento troncamento per superamento limite token
++            if finish_reason == "length":
++                if attempt + 1 < max_attempts:
++                    headroom = max(0, context_length - input_est - DEFAULT_SAFETY_MARGIN_TOKENS)
++                    if headroom > (current_max_tokens or 1024):
++                        current_max_tokens = min(int((current_max_tokens or 1024) * 1.5), headroom)
++                    else:
++                        current_topics = max(2, current_topics // 2)
++                        messages[0]["content"] = _make_sys_prompt(current_topics)
++                        input_est = estimate_request_input_tokens(messages, schema=TOPIC_DISCOVERY_SCHEMA)
++                        current_max_tokens = calculate_dynamic_output_budget(
++                            context_length=context_length,
++                            estimated_prompt_tokens=input_est,
++                            desired_output_tokens=current_topics * 120 + 256,
++                            min_output_tokens=256,
++                            safety_margin=DEFAULT_SAFETY_MARGIN_TOKENS,
++                        )
++                    if on_retry_callback:
++                        try:
++                            on_retry_callback(attempt + 1, "finish_reason=length")
++                        except Exception:
++                            pass
++                    continue
++                raise AiStructuredOutputError(
++                    f"Topic Discovery fallita: risposta del modello troncata per limite token "
++                    f"(finish_reason='length', max_tokens={current_max_tokens})."
+                 )
+ 
+-        discovered = validate_topic_discovery_payload(
+-            raw_text=response.content,
+-            valid_evidence_ids=valid_evidence_ids,
+-            max_topics=max_topics,
+-        )
++            try:
++                discovered = validate_topic_discovery_payload(
++                    raw_text=response.content,
++                    valid_evidence_ids=valid_evidence_ids,
++                    max_topics=current_topics,
++                )
++                last_error = None
++                break
++            except AiStructuredOutputError as parse_err:
++                last_error = parse_err
++                err_msg = str(parse_err)
++                if attempt + 1 < max_attempts and ("Unterminated string" in err_msg or "JSONDecodeError" in err_msg):
++                    headroom = max(0, context_length - input_est - DEFAULT_SAFETY_MARGIN_TOKENS)
++                    if headroom > (current_max_tokens or 1024):
++                        current_max_tokens = min(int((current_max_tokens or 1024) * 1.5), headroom)
++                    else:
++                        current_topics = max(2, current_topics // 2)
++                        messages[0]["content"] = _make_sys_prompt(current_topics)
++                        input_est = estimate_request_input_tokens(messages, schema=TOPIC_DISCOVERY_SCHEMA)
++                        current_max_tokens = calculate_dynamic_output_budget(
++                            context_length=context_length,
++                            estimated_prompt_tokens=input_est,
++                            desired_output_tokens=current_topics * 120 + 256,
++                            min_output_tokens=256,
++                            safety_margin=DEFAULT_SAFETY_MARGIN_TOKENS,
++                        )
++                    if on_retry_callback:
++                        try:
++                            on_retry_callback(attempt + 1, "incomplete_json")
++                        except Exception:
++                            pass
++                    continue
++                if finish_reason == "length":
++                    raise AiStructuredOutputError(
++                        f"Topic Discovery fallita: risposta del modello troncata per limite token "
++                        f"(finish_reason='length', max_tokens={current_max_tokens}). Dettaglio: {parse_err}"
++                    ) from parse_err
++                raise
++
++        if last_error is not None:
++            raise last_error
+ 
+         metadata: dict[str, Any] = {
+-            "prompt_version": PROMPT_VERSION_DISCOVERY,
++            "prompt_version": prompt_version,
+             "strategy": strategy.value,
+             "model": response.model,
+             "latency_seconds": response.latency_seconds,
+             "prompt_tokens": response.prompt_tokens,
+             "completion_tokens": response.completion_tokens,
+             "total_tokens": response.total_tokens,
+-            "max_tokens": max_tokens,
+-            "max_topics": max_topics,
++            "max_tokens": current_max_tokens,
++            "max_topics": current_topics,
++            "context_length": context_length,
+             "temperature": temperature,
+             "seed": seed,
++            "retries": attempt_used,
++            "operational_mode": is_op,
+         }
+ 
+         return TopicDiscoveryResult(
+diff --git a/analysis/__init__.py b/analysis/__init__.py
+index fc1e069..18c0580 100644
+--- a/analysis/__init__.py
++++ b/analysis/__init__.py
+@@ -14,8 +14,10 @@ from analysis.models import (
+     DiscoveredTopicRef,
+     DiscoveryChunkOutcome,
+     DocumentAnalysisState,
++    InsufficientContextHeadroomError,
+     OperationalAnalysisConfig,
+     OperationalAnalysisFailedError,
++    OperationalProfile,
+     TopicAnalysisRunMetadata,
+     TopicProvenanceError,
+ )
+@@ -30,9 +32,11 @@ __all__ = [
+     "DiscoveredTopicRef",
+     "DiscoveryChunkOutcome",
+     "DocumentAnalysisState",
++    "InsufficientContextHeadroomError",
+     "LocalTopicAnalysisService",
+     "OperationalAnalysisConfig",
+     "OperationalAnalysisFailedError",
++    "OperationalProfile",
+     "TopicAnalysisRunMetadata",
+     "TopicProvenanceError",
+ ]
+diff --git a/analysis/models.py b/analysis/models.py
+index a990a6b..6124550 100644
+--- a/analysis/models.py
++++ b/analysis/models.py
+@@ -63,11 +63,107 @@ class TopicProvenanceError(ValueError):
+     pass
+ 
+ 
++class InsufficientContextHeadroomError(ValueError):
++    """
++    Sollevata quando il context length del runtime è insufficiente a contenere
++    l'overhead essenziale (output reserved + safety margin + system/schema overhead)
++    e un budget minimo vitale per i chunk documentali.
++    Non dichiara MAI token disponibili oltre lo spazio reale.
++    """
++    def __init__(self, context_length: int, total_overhead: int, available_headroom: int) -> None:
++        super().__init__(
++            f"Context length insufficiente ({context_length} token): overhead richiesto "
++            f"({total_overhead} token) supera lo spazio utile (headroom disponibile: {available_headroom} token)."
++        )
++        self.context_length = context_length
++        self.total_overhead = total_overhead
++        self.available_headroom = available_headroom
++
++
++class OperationalProfile(str, Enum):
++    """
++    Profili operativi per l'analisi tematica locale:
++    - PRUDENT: 2500 token per blocco (massima compatibilità e sicurezza con margini ampi)
++    - BALANCED: 4200 token per blocco (profilo raccomandato per contesti >= 8192 token)
++    - PERFORMANCE: 5200 token per blocco (massimo throughput con blocchi estesi previa verifica del budget)
++    """
++    PRUDENT = "PRUDENT"
++    BALANCED = "BALANCED"
++    PERFORMANCE = "PERFORMANCE"
++
++
++PROFILE_TOKEN_BUDGETS: dict[OperationalProfile, int] = {
++    OperationalProfile.PRUDENT: 2500,
++    OperationalProfile.BALANCED: 4200,
++    OperationalProfile.PERFORMANCE: 5200,
++}
++
++PROFILE_CHARACTER_BUDGETS: dict[OperationalProfile, int] = {
++    OperationalProfile.PRUDENT: 12000,
++    OperationalProfile.BALANCED: 18000,
++    OperationalProfile.PERFORMANCE: 24000,
++}
++
++
++def resolve_operational_profile(
++    profile: OperationalProfile | str | None,
++    context_length: int = 8192,
++    reserved_output_tokens: int = 1500,
++    safety_margin: int = 1000,
++    system_overhead: int = 400,
++) -> tuple[OperationalProfile, int, int]:
++    """
++    Risolve il profilo operativo verificando rigorosamente la sicurezza rispetto al context budget.
++    Se il profilo richiesto (es. PERFORMANCE o BALANCED) supera lo spazio utile disponibile,
++    effettua il downgrade automatico e sicuro al profilo compatibile più vicino (o PRUDENT).
++    Se l'headroom è inferiore a 256 token o negativo, solleva InsufficientContextHeadroomError
++    senza dichiarare artificialmente token inesistenti.
++    Restituisce (profilo_effettivo, max_chunk_tokens, max_chunk_characters).
++    """
++    if profile is None:
++        requested = OperationalProfile.BALANCED
++    elif isinstance(profile, OperationalProfile):
++        requested = profile
++    else:
++        try:
++            requested = OperationalProfile(str(profile).strip().upper())
++        except ValueError:
++            requested = OperationalProfile.BALANCED
++
++    target_tokens = PROFILE_TOKEN_BUDGETS[requested]
++    target_chars = PROFILE_CHARACTER_BUDGETS[requested]
++
++    # Spazio utile reale prima del context overflow
++    total_overhead = reserved_output_tokens + safety_margin + system_overhead + 128
++    available_headroom = context_length - total_overhead
++
++    MIN_HEADROOM_TOKENS = 256
++    if available_headroom < MIN_HEADROOM_TOKENS:
++        raise InsufficientContextHeadroomError(
++            context_length=context_length,
++            total_overhead=total_overhead,
++            available_headroom=max(0, available_headroom),
++        )
++
++    # Verifica di sicurezza preventiva
++    if target_tokens > available_headroom:
++        if available_headroom >= PROFILE_TOKEN_BUDGETS[OperationalProfile.BALANCED]:
++            return OperationalProfile.BALANCED, PROFILE_TOKEN_BUDGETS[OperationalProfile.BALANCED], PROFILE_CHARACTER_BUDGETS[OperationalProfile.BALANCED]
++        elif available_headroom >= PROFILE_TOKEN_BUDGETS[OperationalProfile.PRUDENT]:
++            return OperationalProfile.PRUDENT, PROFILE_TOKEN_BUDGETS[OperationalProfile.PRUDENT], PROFILE_CHARACTER_BUDGETS[OperationalProfile.PRUDENT]
++        else:
++            safe_tokens = available_headroom
++            return OperationalProfile.PRUDENT, safe_tokens, max(1000, safe_tokens * 4)
++
++    return requested, target_tokens, target_chars
++
++
+ @dataclass(frozen=True)
+ class OperationalAnalysisConfig:
+     """
+     Configurazione centralizzata per l'analisi tematica operativa locale.
+-    Elimina i magic numbers sparsi e documenta il budget prudenziale.
++    Supporta profili operativi espliciti (PRUDENT, BALANCED, PERFORMANCE)
++    con verifica della sicurezza rispetto al context budget.
+     """
+     model_spec: str = "qwen2.5-7b-instruct"
+     context_length: int = 8192
+@@ -76,8 +172,55 @@ class OperationalAnalysisConfig:
+     temperature: float = 0.0
+     seed: int | None = 42
+     max_topics: int = 10
+-    chunk_character_budget: int = 7500  # Budget prudenziale per context 8192 (~1800-2000 token stimati)
+-    max_chunk_bundles: int = 25
++    profile: OperationalProfile = OperationalProfile.BALANCED
++    chunk_character_budget: int = 18000
++    max_chunk_bundles: int = 100
++    max_chunk_tokens: int | None = 4200
++
++    def with_profile(self, profile: OperationalProfile | str) -> OperationalAnalysisConfig:
++        """Restituisce una nuova configurazione applicando il profilo specificato."""
++        res_prof, tok_b, char_b = resolve_operational_profile(
++            profile=profile,
++            context_length=self.context_length,
++        )
++        return OperationalAnalysisConfig(
++            model_spec=self.model_spec,
++            context_length=self.context_length,
++            timeout_seconds=self.timeout_seconds,
++            max_tokens=self.max_tokens,
++            temperature=self.temperature,
++            seed=self.seed,
++            max_topics=self.max_topics,
++            profile=res_prof,
++            chunk_character_budget=char_b,
++            max_chunk_bundles=self.max_chunk_bundles,
++            max_chunk_tokens=tok_b,
++        )
++
++
++@dataclass(frozen=True)
++class AnalysisPlan:
++    """
++    Piano analitico preventivo e immutabile condiviso tra UI e Service Layer.
++    Garantisce perfetta coerenza dei budget di token e del numero di chunk.
++    """
++    document_id: str
++    analysis_type: str  # "detection" | "discovery"
++    planned_chunks_count: int
++    chunk_token_budget: int
++    chunk_character_budget: int
++    input_token_budget: int
++    output_token_budget: int
++    schema: Mapping[str, Any]
++    safety_margin: int
++    headroom_tokens: int
++    profile: OperationalProfile
++    max_topics: int | None
++    effective_config: OperationalAnalysisConfig
++    chunks: tuple[Any, ...] = ()
++    plan_hash: str = ""
++    requires_dynamic_splitting: bool = False
++
+ 
+ 
+ @dataclass(frozen=True)
+diff --git a/analysis/service.py b/analysis/service.py
+index 0e1b289..c8c900f 100644
+--- a/analysis/service.py
++++ b/analysis/service.py
+@@ -17,6 +17,7 @@ from __future__ import annotations
+ 
+ from datetime import datetime, timezone
+ import hashlib
++import json
+ import re
+ import time
+ import uuid
+@@ -31,6 +32,7 @@ from ai.backend import (
+     AiModelMismatchError,
+     AiModelNotInstalledError,
+     AiModelNotSpecifiedError,
++    AnalysisInputTooLargeError,
+     BaseLlmClient,
+     BaseLocalLlmClient,
+     LmStudioUnavailableError,
+@@ -39,8 +41,34 @@ from ai.chunking import (
+     ChunkAnalysisOutcome,
+     aggregate_topic_detection,
+     aggregate_topic_discovery,
++    profile_document_for_analysis,
+     split_document_into_chunks,
+ )
++from ai.structured import (
++    TOPIC_DETECTION_SCHEMA,
++    TOPIC_DISCOVERY_SCHEMA,
++)
++from ai.token_budget import (
++    DEFAULT_SAFETY_MARGIN_TOKENS,
++    calculate_dynamic_output_budget,
++    calculate_token_budget_plan,
++    estimate_request_input_tokens,
++    estimate_schema_tokens,
++)
++from analysis.progress import (
++    AnalysisProgressCallback,
++    AnalysisProgressEvent,
++    AnalysisProgressTracker,
++)
++from analysis.checkpoint import (
++    AnalysisCheckpointStore,
++    CheckpointSaveError,
++    compute_document_fingerprint,
++    compute_run_config_hash,
++    deserialize_detection_result_from_checkpoint,
++    deserialize_discovery_result_from_checkpoint,
++    validate_checkpoint_evidence_references,
++)
+ from ai.lmstudio import (
+     DEFAULT_OPERATIONAL_CONTEXT_LENGTH,
+     DEFAULT_OPERATIONAL_MAX_TOKENS,
+@@ -70,13 +98,16 @@ from analysis.consistency import ConsistencyService
+ from analysis.models import (
+     AnalysisNoEvidenceError,
+     AnalysisOrigin,
++    AnalysisPlan,
+     ConsistencyResult,
+     DiscoveredTopicRef,
+     DiscoveryChunkOutcome,
+     OperationalAnalysisConfig,
+     OperationalAnalysisFailedError,
++    OperationalProfile,
+     TopicAnalysisRunMetadata,
+     TopicProvenanceError,
++    resolve_operational_profile,
+ )
+ 
+ FATAL_BACKEND_ERRORS = (
+@@ -88,9 +119,39 @@ FATAL_BACKEND_ERRORS = (
+     AiBackendProtocolError,
+     AiBackendTimeoutError,
+     AiBackendRequestError,
++    AnalysisInputTooLargeError,
+ )
+ 
+ 
++def calculate_discovery_max_tokens(
++    max_topics: int,
++    user_max_tokens: int | None = None,
++    context_length: int = 8192,
++    estimated_prompt_tokens: int | None = None,
++    safety_margin: int = DEFAULT_SAFETY_MARGIN_TOKENS,
++) -> int:
++    """
++    Calcola un budget dinamico di token di completamento per Topic Discovery operativa,
++    proporzionato al numero di topic richiesti e vincolato all'occupazione effettiva del prompt
++    e alla context window del modello.
++    Garantisce tassativamente di non superare mai l'headroom disponibile.
++    """
++    needed = max_topics * 120 + 256
++    if estimated_prompt_tokens is not None:
++        available_headroom = max(0, context_length - estimated_prompt_tokens - safety_margin)
++        if available_headroom <= 0:
++            return 0
++        if user_max_tokens is not None and user_max_tokens > 256:
++            return min(user_max_tokens, available_headroom)
++        safe_target = min(needed, available_headroom)
++        return min(available_headroom, max(min(1024, available_headroom), safe_target))
++    else:
++        max_safe = max(1024, context_length - 4096)
++        if user_max_tokens is not None and user_max_tokens > 512:
++            return min(user_max_tokens, max_safe)
++        return max(1024, min(needed, max_safe))
++
++
+ class LocalTopicAnalysisService:
+     """
+     Servizio unificato per l'esecuzione di Topic Detection e Topic Discovery
+@@ -106,18 +167,47 @@ class LocalTopicAnalysisService:
+         timeout_seconds: float | None = None,
+         max_chunk_characters: int | None = None,
+         max_chunk_bundles: int | None = None,
++        max_chunk_tokens: int | None = None,
++        profile: OperationalProfile | str | None = None,
+         client: BaseLlmClient | None = None,
+         discovery_run_store: MutableMapping[str, dict[str, TopicDiscoveryResult]] | None = None,
+         authoritative_live_run_ids: MutableSet[str] | None = None,
++        checkpoint_store: AnalysisCheckpointStore | None = None,
++        enable_checkpointing: bool = False,
+     ) -> None:
+         cfg = config or OperationalAnalysisConfig()
++        if profile is not None:
++            cfg = cfg.with_profile(profile)
++        if (
++            context_length is not None
++            or timeout_seconds is not None
++            or max_chunk_characters is not None
++            or max_chunk_bundles is not None
++            or max_chunk_tokens is not None
++            or default_model is not None
++        ):
++            cfg = OperationalAnalysisConfig(
++                model_spec=default_model or cfg.model_spec,
++                context_length=context_length or cfg.context_length,
++                timeout_seconds=timeout_seconds or cfg.timeout_seconds,
++                max_tokens=cfg.max_tokens,
++                temperature=cfg.temperature,
++                seed=cfg.seed,
++                max_topics=cfg.max_topics,
++                profile=cfg.profile,
++                chunk_character_budget=max_chunk_characters or cfg.chunk_character_budget,
++                max_chunk_bundles=max_chunk_bundles if max_chunk_bundles is not None else cfg.max_chunk_bundles,
++                max_chunk_tokens=max_chunk_tokens if max_chunk_tokens is not None else cfg.max_chunk_tokens,
++            )
+         self.config = cfg
++        self.profile = cfg.profile
+         self.base_url = base_url
+-        self.default_model = default_model or cfg.model_spec
+-        self.context_length = context_length or cfg.context_length
+-        self.timeout_seconds = timeout_seconds or cfg.timeout_seconds
+-        self.max_chunk_characters = max_chunk_characters or cfg.chunk_character_budget
+-        self.max_chunk_bundles = max_chunk_bundles or cfg.max_chunk_bundles
++        self.default_model = cfg.model_spec
++        self.context_length = cfg.context_length
++        self.timeout_seconds = cfg.timeout_seconds
++        self.max_chunk_characters = cfg.chunk_character_budget
++        self.max_chunk_bundles = cfg.max_chunk_bundles
++        self.max_chunk_tokens = cfg.max_chunk_tokens
+         self.default_max_tokens = cfg.max_tokens
+         self._injected_client = client
+         # Registro document-scoped delle discovery run per validazione formale di provenance
+@@ -128,6 +218,160 @@ class LocalTopicAnalysisService:
+         self._authoritative_live_run_ids: MutableSet[str] = (
+             authoritative_live_run_ids if authoritative_live_run_ids is not None else set()
+         )
++        # Gestore di checkpoint e ripresa: attivo se checkpoint_store è fornito o enable_checkpointing è True
++        self.checkpoint_store = checkpoint_store
++        self.enable_checkpointing = enable_checkpointing or (checkpoint_store is not None)
++        # Cache per piani di analisi invariati a parità di documento e parametri
++        self._analysis_plan_cache: dict[str, AnalysisPlan] = {}
++
++    def _calculate_effective_chunk_token_budget(
++        self,
++        context_length: int,
++        reserved_output_tokens: int,
++        schema: Mapping[str, Any] | None = None,
++        system_prompt_overhead: int = 400,
++        safety_margin: int = DEFAULT_SAFETY_MARGIN_TOKENS,
++        raise_on_insufficient: bool = False,
++    ) -> int:
++        """
++        Calcola dinamicamente il budget prudenziale di token per singolo chunk documentale,
++        considerando l'intero prompt (system + frame), lo schema JSON, il budget di output
++        e il safety margin rispetto alla context window reale del modello.
++        Non dichiara MAI disponibile uno spazio che non esiste (headroom reale senza clamp arbitrario).
++        """
++        schema_tokens = estimate_schema_tokens(schema) if schema else 128
++        total_overhead = reserved_output_tokens + safety_margin + system_prompt_overhead + schema_tokens + 32
++        available_headroom = max(0, context_length - total_overhead)
++        if available_headroom < 256:
++            if raise_on_insufficient or available_headroom <= 0:
++                raise AnalysisInputTooLargeError(
++                    f"Spazio di contesto disponibile ({available_headroom} token) insufficiente "
++                    f"per un blocco documentale rispetto a context_length={context_length} "
++                    f"e total_overhead={total_overhead} token."
++                )
++            return available_headroom
++        configured = self.max_chunk_tokens if self.max_chunk_tokens is not None else 2500
++        return min(configured, available_headroom)
++
++    def create_analysis_plan(
++        self,
++        document: ConversationEvidenceDocument,
++        analysis_type: str = "detection",
++        max_topics: int | None = None,
++        user_max_tokens: int | None = None,
++        context_length: int | None = None,
++        profile: OperationalProfile | str | None = None,
++        topic_query: TopicQuery | None = None,
++    ) -> AnalysisPlan:
++        """
++        Unica funzione autoritativa di pianificazione delle analisi (Topic Detection e Discovery).
++        Garantisce che la profilazione preventiva della UI e l'esecuzione effettiva del servizio
++        utilizzino esattamente lo stesso piano immutabile di chunking e budget di token.
++        Per Discovery, calcola la riserva di output proporzionata a max_topics (3, 10, 25 topic).
++        """
++        ctx_len = context_length or self.context_length
++        eff_profile = profile or self.profile
++        cfg = self.config.with_profile(eff_profile) if profile else self.config
++
++        schema = TOPIC_DETECTION_SCHEMA if analysis_type == "detection" else TOPIC_DISCOVERY_SCHEMA
++        eff_max_topics = max_topics if max_topics is not None else cfg.max_topics
++
++        doc_fp = compute_document_fingerprint(document)
++        cache_key = (
++            f"{document.document_id}::{doc_fp}::{analysis_type}::{cfg.profile.value}::"
++            f"{eff_max_topics}::{ctx_len}::{user_max_tokens}::{cfg.chunk_character_budget}::"
++            f"{cfg.max_chunk_bundles}::{cfg.max_chunk_tokens}"
++        )
++        if cache_key in self._analysis_plan_cache:
++            return self._analysis_plan_cache[cache_key]
++
++        if analysis_type == "discovery":
++            out_tokens = calculate_discovery_max_tokens(
++                max_topics=eff_max_topics,
++                user_max_tokens=user_max_tokens,
++                context_length=ctx_len,
++            )
++        else:
++            out_tokens = user_max_tokens or cfg.max_tokens
++
++        eff_tokens = self._calculate_effective_chunk_token_budget(
++            context_length=ctx_len,
++            reserved_output_tokens=out_tokens,
++            schema=schema,
++        )
++
++        chunks = split_document_into_chunks(
++            document=document,
++            max_characters=cfg.chunk_character_budget,
++            max_bundles=cfg.max_chunk_bundles,
++            max_tokens=eff_tokens,
++        )
++
++        schema_tokens = estimate_schema_tokens(schema) if schema else 128
++        safety_margin = DEFAULT_SAFETY_MARGIN_TOKENS
++        overhead = out_tokens + safety_margin + 400 + schema_tokens + 32
++        headroom = max(0, ctx_len - overhead)
++
++        plan_hash_payload = {
++            "doc_id": document.document_id,
++            "type": analysis_type,
++            "chunks_count": len(chunks),
++            "chunk_tokens": eff_tokens,
++            "out_tokens": out_tokens,
++            "ctx_len": ctx_len,
++            "profile": cfg.profile.value if hasattr(cfg.profile, "value") else str(cfg.profile),
++            "max_topics": eff_max_topics if analysis_type == "discovery" else None,
++        }
++        plan_hash = hashlib.sha256(json.dumps(plan_hash_payload, sort_keys=True).encode("utf-8")).hexdigest()
++
++        plan = AnalysisPlan(
++            document_id=document.document_id,
++            analysis_type=analysis_type,
++            planned_chunks_count=len(chunks),
++            chunk_token_budget=eff_tokens,
++            chunk_character_budget=cfg.chunk_character_budget,
++            input_token_budget=eff_tokens,
++            output_token_budget=out_tokens,
++            schema=schema,
++            safety_margin=safety_margin,
++            headroom_tokens=headroom,
++            profile=cfg.profile,
++            max_topics=eff_max_topics if analysis_type == "discovery" else None,
++            effective_config=cfg,
++            chunks=tuple(chunks),
++            plan_hash=plan_hash,
++            requires_dynamic_splitting=False,
++        )
++        self._analysis_plan_cache[cache_key] = plan
++        return plan
++
++    def profile_document(
++        self,
++        document: ConversationEvidenceDocument,
++        analysis_type: str = "detection",
++        reserved_output_tokens: int | None = None,
++        context_length: int | None = None,
++        max_topics: int | None = None,
++        profile: OperationalProfile | str | None = None,
++    ) -> DocumentAnalysisProfile:
++        """
++        Esegue la profilazione preventiva del documento basandosi sul piano immutabile unificato.
++        Risolve qualsiasi discrepanza di budget o chunking tra anteprima ed esecuzione reale.
++        """
++        plan = self.create_analysis_plan(
++            document=document,
++            analysis_type=analysis_type,
++            max_topics=max_topics,
++            user_max_tokens=reserved_output_tokens,
++            context_length=context_length,
++            profile=profile,
++        )
++        return profile_document_for_analysis(
++            document=document,
++            max_characters=plan.chunk_character_budget,
++            max_bundles=plan.effective_config.max_chunk_bundles,
++            max_tokens=plan.chunk_token_budget,
++        )
+ 
+     def _are_discovery_results_identical(
+         self, existing: TopicDiscoveryResult, incoming: TopicDiscoveryResult
+@@ -394,6 +638,136 @@ class LocalTopicAnalysisService:
+             return True
+         return False
+ 
++    def _process_subchunks_detection(
++        self,
++        chunk: ConversationEvidenceDocument,
++        analyzer: TopicDetectionAnalyzer,
++        topic: TopicQuery,
++        strategy: AnalysisLanguageStrategy,
++        resolved_model: str,
++        eff_temp: float,
++        eff_seed: int | None,
++        eff_max_tokens: int,
++        operational_mode: bool,
++        tracker: AnalysisProgressTracker,
++        chunk_idx_1based: int,
++    ) -> list[ChunkAnalysisOutcome]:
++        """Esegue suddivisione controllata di un blocco che supera la finestra di contesto."""
++        mid = len(chunk.bundles) // 2
++        sub1 = ConversationEvidenceDocument(
++            document_id=f"{chunk.document_id}::sub::0",
++            bundles=chunk.bundles[:mid],
++            chat_id=chunk.chat_id,
++            source_name=chunk.source_name,
++        )
++        sub2 = ConversationEvidenceDocument(
++            document_id=f"{chunk.document_id}::sub::1",
++            bundles=chunk.bundles[mid:],
++            chat_id=chunk.chat_id,
++            source_name=chunk.source_name,
++        )
++        outcomes: list[ChunkAnalysisOutcome] = []
++        for s_idx, sub in enumerate((sub1, sub2), start=1):
++            sub_display_idx = chunk_idx_1based + (s_idx - 1)
++            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/2", record_request=False)
++            try:
++                res = analyzer.detect_topic(
++                    document=sub,
++                    topic=topic,
++                    strategy=strategy,
++                    model_id=resolved_model,
++                    temperature=eff_temp,
++                    seed=eff_seed,
++                    timeout_seconds=self.timeout_seconds,
++                    max_tokens=eff_max_tokens,
++                    operational_mode=operational_mode,
++                    context_length=self.context_length,
++                )
++                outcomes.append(
++                    ChunkAnalysisOutcome(
++                        chunk_id=sub.document_id,
++                        result=res,
++                        status="SUCCESS",
++                    )
++                )
++                tracker.chunk_success(sub_display_idx, record_request=False)
++            except Exception as s_exc:
++                tracker.chunk_failed(sub_display_idx, str(s_exc))
++                outcomes.append(
++                    ChunkAnalysisOutcome(
++                        chunk_id=sub.document_id,
++                        result=None,
++                        status="FAILED",
++                        error_type=type(s_exc).__name__,
++                        error_message=str(s_exc),
++                    )
++                )
++        return outcomes
++
++    def _process_subchunks_discovery(
++        self,
++        chunk: ConversationEvidenceDocument,
++        analyzer: TopicDiscoveryAnalyzer,
++        resolved_model: str,
++        eff_temp: float,
++        eff_seed: int | None,
++        chunk_target_topics: int,
++        tracker: AnalysisProgressTracker,
++        chunk_idx_1based: int,
++    ) -> tuple[list[DiscoveryChunkOutcome], list[TopicDiscoveryResult]]:
++        """Esegue suddivisione controllata di un blocco di discovery oversize."""
++        mid = len(chunk.bundles) // 2
++        sub1 = ConversationEvidenceDocument(
++            document_id=f"{chunk.document_id}::sub::0",
++            bundles=chunk.bundles[:mid],
++            chat_id=chunk.chat_id,
++            source_name=chunk.source_name,
++        )
++        sub2 = ConversationEvidenceDocument(
++            document_id=f"{chunk.document_id}::sub::1",
++            bundles=chunk.bundles[mid:],
++            chat_id=chunk.chat_id,
++            source_name=chunk.source_name,
++        )
++        outcomes: list[DiscoveryChunkOutcome] = []
++        results: list[TopicDiscoveryResult] = []
++        for s_idx, sub in enumerate((sub1, sub2), start=1):
++            sub_display_idx = chunk_idx_1based + (s_idx - 1)
++            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/2", record_request=False)
++            try:
++                res = analyzer.discover_topics(
++                    document=sub,
++                    model_id=resolved_model,
++                    temperature=eff_temp,
++                    seed=eff_seed,
++                    timeout_seconds=self.timeout_seconds,
++                    max_topics=chunk_target_topics,
++                    operational_mode=True,
++                    context_length=self.context_length,
++                    on_retry_callback=lambda att, r: tracker.chunk_retry(sub_display_idx, f"sub{s_idx}:{r}"),
++                )
++                outcomes.append(
++                    DiscoveryChunkOutcome(
++                        chunk_id=sub.document_id,
++                        status="SUCCESS",
++                        result=res,
++                    )
++                )
++                results.append(res)
++                tracker.chunk_success(sub_display_idx, record_request=False)
++            except Exception as s_exc:
++                tracker.chunk_failed(sub_display_idx, str(s_exc))
++                outcomes.append(
++                    DiscoveryChunkOutcome(
++                        chunk_id=sub.document_id,
++                        status="FAILED",
++                        result=None,
++                        error_type=type(s_exc).__name__,
++                        safe_error_code="SUBCHUNK_DISCOVERY_ERROR",
++                    )
++                )
++        return outcomes, results
++
+     def run_topic_detection(
+         self,
+         document: ConversationEvidenceDocument,
+@@ -406,9 +780,10 @@ class LocalTopicAnalysisService:
+         max_tokens: int | None = None,
+         operational_mode: bool = True,
+         preserve_raw_response: bool = False,
++        progress_callback: AnalysisProgressCallback | None = None,
+     ) -> TopicDetectionResult:
+         """
+-        Esegue Topic Detection con supporto trasparente al chunking multi-chunk.
++        Esegue Topic Detection con supporto trasparente al chunking multi-chunk e progress callback.
+         """
+         # Verifica preventiva: documento privo di evidenze testuali non è analizzabile
+         if not document.bundles or not document.all_evidence_sections:
+@@ -432,141 +807,372 @@ class LocalTopicAnalysisService:
+             operational_mode=operational_mode,
+         )
+ 
+-        chunks = split_document_into_chunks(
+-            document,
+-            max_characters=self.max_chunk_characters,
+-            max_bundles=self.max_chunk_bundles,
++        plan = self.create_analysis_plan(
++            document=document,
++            analysis_type="detection",
++            user_max_tokens=eff_max_tokens,
++            context_length=self.context_length,
++            topic_query=topic,
++        )
++        chunks = list(plan.chunks)
++        eff_chunk_tokens = plan.chunk_token_budget
++
++        tracker = AnalysisProgressTracker(
++            total_chunks=len(chunks),
++            callback=progress_callback,
++            initial_phase="Analisi dei messaggi",
+         )
+ 
+         is_synthetic = self._is_synthetic_document(document)
+         should_preserve_raw = preserve_raw_response or is_synthetic
+         classification = "SYNTHETIC_DEMO" if is_synthetic else "REAL_FORENSIC"
+ 
+-        if len(chunks) == 1:
+-            try:
+-                result = analyzer.detect_topic(
+-                    document=chunks[0],
+-                    topic=topic,
+-                    strategy=strategy,
+-                    model_id=resolved_model,
+-                    temperature=eff_temp,
+-                    seed=eff_seed,
+-                    timeout_seconds=self.timeout_seconds,
+-                    max_tokens=eff_max_tokens,
+-                    operational_mode=operational_mode,
+-                )
+-            except FATAL_BACKEND_ERRORS:
+-                raise
+-            except Exception as exc:
+-                raise OperationalAnalysisFailedError(
+-                    f"Inferenza di Topic Detection fallita sul documento: {exc}"
+-                ) from exc
+-
+-            latency = round(time.perf_counter() - start_time, 3)
+-            now_ts = datetime.now(timezone.utc).isoformat()
+-            run_meta = TopicAnalysisRunMetadata(
+-                run_id=run_id,
+-                origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
+-                model=resolved_model,
+-                requested_model=(model_name or "").strip() or self.default_model,
+-                latency_seconds=latency,
+-                prompt_version=result.metadata.get("prompt_version", "topic_detection_operational_v1"),
+-                strategy=strategy.value,
+-                temperature=eff_temp,
+-                seed=eff_seed,
+-                chunk_count=1,
+-                completed_chunk_count=1,
+-                data_classification=classification,
+-                timestamp=now_ts,
+-                document_id=document.document_id,
+-                analysis_type="DETECTION",
+-                resolved_model_key=(
+-                    getattr(target_client, "_active_binding", None).resolved_model_key
+-                    if getattr(target_client, "_active_binding", None)
+-                    else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
+-                ),
+-                loaded_instance_id=(
+-                    getattr(target_client, "_loaded_instance_id", None)
+-                    or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
+-                    or "UNKNOWN (not provided by LM Studio)"
+-                ),
+-                api_identifier=getattr(target_client, "model_id", resolved_model),
+-                response_model=result.metadata.get("model") or resolved_model,
++        # Checkpoint: caricamento risultati validati pregressi se abilitato
++        chk_store = self.checkpoint_store if self.enable_checkpointing else None
++        doc_fp = ""
++        cfg_fp = ""
++        cached_results: dict[int, TopicDetectionResult] = {}
++        if chk_store is not None:
++            doc_fp = compute_document_fingerprint(document)
++            eff_run_cfg = OperationalAnalysisConfig(
++                model_spec=resolved_model,
+                 context_length=self.context_length,
++                timeout_seconds=self.timeout_seconds,
+                 max_tokens=eff_max_tokens,
+-                start_timestamp=start_iso,
+-                end_timestamp=now_ts,
+-                status="SUCCESS",
+-                error_classification=None,
++                temperature=eff_temp,
++                seed=eff_seed,
++                profile=self.profile,
++                chunk_character_budget=self.max_chunk_characters,
++                max_chunk_bundles=self.max_chunk_bundles,
++                max_chunk_tokens=eff_chunk_tokens,
+             )
+-
+-            meta = dict(result.metadata)
+-            meta.update(run_meta.to_dict())
+-            meta["chunk_count"] = 1
+-            meta["completed_chunk_count"] = 1
+-            if not should_preserve_raw and "raw_response" in meta:
+-                del meta["raw_response"]
+-
+-            return TopicDetectionResult(
+-                topic=result.topic,
+-                decision=result.decision,
+-                evidence_ids=result.evidence_ids,
+-                rationale=result.rationale,
+-                provenance_document_id=document.document_id,
+-                metadata=meta,
++            cfg_fp = compute_run_config_hash(
++                model_id=resolved_model,
++                prompt_version="detection_operational" if operational_mode else "detection",
++                config=eff_run_cfg,
++                topic_query=topic,
++                chunks=chunks,
++                extra_params={
++                    "strategy": strategy.value if hasattr(strategy, "value") else str(strategy),
++                    "operational_mode": operational_mode,
++                    "resolved_model_key": (
++                        getattr(target_client, "_active_binding", None).resolved_model_key
++                        if getattr(target_client, "_active_binding", None)
++                        else getattr(target_client, "_last_loaded_model_key", None)
++                    ),
++                    "quantization": (
++                        getattr(target_client, "_active_binding", None).quantization
++                        if getattr(target_client, "_active_binding", None)
++                        else None
++                    ),
++                },
+             )
+-
+-        # Multi-chunk: esecuzione chunk-by-chunk con tracking dei fallimenti
+-        outcomes: list[ChunkAnalysisOutcome] = []
+-        for idx, chunk in enumerate(chunks):
++            checkpoint = chk_store.load_and_validate_checkpoint(
++                document=document,
++                config_fingerprint=cfg_fp,
++                chunks=chunks,
++                expected_topic_query=topic,
++                expected_analysis_type="detection",
++            )
++            if checkpoint is not None:
++                for s_idx, s_data in checkpoint.serialized_results.items():
++                    try:
++                        cached_results[int(s_idx)] = deserialize_detection_result_from_checkpoint(s_data)
++                    except Exception:
++                        pass
++                rec_count = len(cached_results)
++                rem_count = max(0, len(chunks) - rec_count)
++                if rec_count > 0:
++                    tracker.phase = f"Risultati precedenti recuperati: {rec_count} chunk | Chunk ancora da elaborare: {rem_count}"
++
++        old_listener = getattr(target_client, "request_listener", None)
++        try:
+             try:
+-                res = analyzer.detect_topic(
+-                    document=chunk,
+-                    topic=topic,
+-                    strategy=strategy,
+-                    model_id=resolved_model,
++                target_client.request_listener = tracker
++            except Exception:
++                pass
++
++            if len(chunks) == 1:
++                total_units = 1
++                completed_count = 1
++                failed_count = 0
++                det_status = "SUCCESS"
++                if 0 in cached_results:
++                    result = cached_results[0]
++                    tracker.chunk_success(1, record_request=False)
++                    tracker.complete("Topic Detection completata da checkpoint: 1/1 blocchi recuperati.")
++                else:
++                    tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
++                    try:
++                        result = analyzer.detect_topic(
++                            document=chunks[0],
++                            topic=topic,
++                            strategy=strategy,
++                            model_id=resolved_model,
++                            temperature=eff_temp,
++                            seed=eff_seed,
++                            timeout_seconds=self.timeout_seconds,
++                            max_tokens=eff_max_tokens,
++                            operational_mode=operational_mode,
++                            context_length=self.context_length,
++                        )
++                        tracker.chunk_success(1, record_request=False)
++                        tracker.complete("Topic Detection completata.")
++                        if chk_store is not None:
++                            try:
++                                chk_store.save_chunk(
++                                    document_id=document.document_id,
++                                    document_fingerprint=doc_fp,
++                                    config_fingerprint=cfg_fp,
++                                    chunk_idx=0,
++                                    result=result,
++                                    total_planned_chunks=1,
++                                    analysis_type="detection",
++                                    model_id=resolved_model,
++                                    prompt_version="detection_operational" if operational_mode else "detection",
++                                )
++                            except Exception as chk_err:
++                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
++                    except FATAL_BACKEND_ERRORS as fatal_err:
++                        if (
++                            isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
++                            and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
++                            and len(chunks[0].bundles) > 1
++                        ):
++                            tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
++                            sub_outcomes = self._process_subchunks_detection(
++                                chunk=chunks[0],
++                                analyzer=analyzer,
++                                topic=topic,
++                                strategy=strategy,
++                                resolved_model=resolved_model,
++                                eff_temp=eff_temp,
++                                eff_seed=eff_seed,
++                                eff_max_tokens=eff_max_tokens,
++                                operational_mode=operational_mode,
++                                tracker=tracker,
++                                chunk_idx_1based=1,
++                            )
++                            total_units = len(sub_outcomes)
++                            completed_count = sum(1 for o in sub_outcomes if o.status == "SUCCESS")
++                            failed_count = total_units - completed_count
++                            if completed_count == total_units:
++                                result = aggregate_topic_detection(
++                                    outcomes=sub_outcomes,
++                                    topic=topic,
++                                    parent_document_id=document.document_id,
++                                    expected_chunk_count=total_units,
++                                )
++                                tracker.complete("Topic Detection completata tramite suddivisione sub-chunk.")
++                                det_status = "SUCCESS"
++                            elif completed_count > 0:
++                                result = aggregate_topic_detection(
++                                    outcomes=sub_outcomes,
++                                    topic=topic,
++                                    parent_document_id=document.document_id,
++                                    expected_chunk_count=total_units,
++                                )
++                                tracker.partial(f"Topic Detection parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
++                                det_status = "PARTIAL"
++                            else:
++                                tracker.chunk_failed(1, str(fatal_err))
++                                tracker.fail(str(fatal_err))
++                                raise
++                        else:
++                            tracker.chunk_failed(1, str(fatal_err))
++                            tracker.fail(str(fatal_err))
++                            raise
++                    except Exception as exc:
++                        tracker.chunk_failed(1, str(exc))
++                        tracker.fail(str(exc))
++                        raise OperationalAnalysisFailedError(
++                            f"Inferenza di Topic Detection fallita sul documento: {exc}"
++                        ) from exc
++
++                latency = round(time.perf_counter() - start_time, 3)
++                now_ts = datetime.now(timezone.utc).isoformat()
++                run_meta = TopicAnalysisRunMetadata(
++                    run_id=run_id,
++                    origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
++                    model=resolved_model,
++                    requested_model=(model_name or "").strip() or self.default_model,
++                    latency_seconds=latency,
++                    prompt_version=result.metadata.get("prompt_version", "topic_detection_operational_v1"),
++                    strategy=strategy.value,
+                     temperature=eff_temp,
+                     seed=eff_seed,
+-                    timeout_seconds=self.timeout_seconds,
++                    chunk_count=int(total_units),
++                    completed_chunk_count=int(completed_count),
++                    failed_chunk_count=int(failed_count),
++                    data_classification=classification,
++                    timestamp=now_ts,
++                    document_id=document.document_id,
++                    analysis_type="DETECTION",
++                    resolved_model_key=(
++                        getattr(target_client, "_active_binding", None).resolved_model_key
++                        if getattr(target_client, "_active_binding", None)
++                        else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
++                    ),
++                    loaded_instance_id=(
++                        getattr(target_client, "_loaded_instance_id", None)
++                        or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
++                        or "UNKNOWN (not provided by LM Studio)"
++                    ),
++                    api_identifier=getattr(target_client, "model_id", resolved_model),
++                    response_model=result.metadata.get("model") or resolved_model,
++                    context_length=self.context_length,
+                     max_tokens=eff_max_tokens,
+-                    operational_mode=operational_mode,
++                    start_timestamp=start_iso,
++                    end_timestamp=now_ts,
++                    status=det_status,
++                    error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
+                 )
+-                outcomes.append(
+-                    ChunkAnalysisOutcome(
+-                        chunk_id=chunk.document_id,
+-                        result=res,
+-                        status="SUCCESS",
+-                    )
++
++                meta = dict(result.metadata)
++                meta.update(run_meta.to_dict())
++                meta["chunk_count"] = int(total_units)
++                meta["completed_chunk_count"] = int(completed_count)
++                meta["failed_chunk_count"] = int(failed_count)
++                is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
++                meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
++                meta["is_label_only"] = is_label_only
++                meta["origin_flow"] = meta.get("origin_flow", "MANUAL_DETECTION")
++                meta["input_label"] = topic.label
++                meta["input_description"] = topic.description if not is_label_only else None
++                if not should_preserve_raw and "raw_response" in meta:
++                    del meta["raw_response"]
++
++                return TopicDetectionResult(
++                    topic=result.topic,
++                    decision=result.decision,
++                    evidence_ids=result.evidence_ids,
++                    rationale=result.rationale,
++                    provenance_document_id=document.document_id,
++                    metadata=meta,
+                 )
+-            except FATAL_BACKEND_ERRORS:
+-                # Errori sistemici/fatali propagano immediatamente
+-                raise
+-            except Exception as exc:
+-                outcomes.append(
+-                    ChunkAnalysisOutcome(
+-                        chunk_id=chunk.document_id,
+-                        result=None,
+-                        status="FAILED",
+-                        error_type=type(exc).__name__,
+-                        error_message=str(exc),
++
++            # Multi-chunk: esecuzione chunk-by-chunk con tracking dei fallimenti e progress
++            outcomes: list[ChunkAnalysisOutcome] = []
++            for idx, chunk in enumerate(chunks):
++                current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
++                if idx in cached_results:
++                    res = cached_results[idx]
++                    outcomes.append(
++                        ChunkAnalysisOutcome(
++                            chunk_id=chunk.document_id,
++                            result=res,
++                            status="SUCCESS",
++                        )
+                     )
+-                )
++                    tracker.chunk_success(current_tracker_idx, record_request=False)
++                    continue
++
++                tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
++                try:
++                    res = analyzer.detect_topic(
++                        document=chunk,
++                        topic=topic,
++                        strategy=strategy,
++                        model_id=resolved_model,
++                        temperature=eff_temp,
++                        seed=eff_seed,
++                        timeout_seconds=self.timeout_seconds,
++                        max_tokens=eff_max_tokens,
++                        operational_mode=operational_mode,
++                        context_length=self.context_length,
++                    )
++                    outcomes.append(
++                        ChunkAnalysisOutcome(
++                            chunk_id=chunk.document_id,
++                            result=res,
++                            status="SUCCESS",
++                        )
++                    )
++                    tracker.chunk_success(current_tracker_idx, record_request=False)
++                    if chk_store is not None:
++                        try:
++                            chk_store.save_chunk(
++                                document_id=document.document_id,
++                                document_fingerprint=doc_fp,
++                                config_fingerprint=cfg_fp,
++                                chunk_idx=idx,
++                                result=res,
++                                total_planned_chunks=len(chunks),
++                                analysis_type="detection",
++                                model_id=resolved_model,
++                                prompt_version="detection_operational" if operational_mode else "detection",
++                            )
++                        except Exception as chk_err:
++                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
++                except FATAL_BACKEND_ERRORS as fatal_err:
++                    # Se è un CONTEXT_OVERFLOW recuperabile su chunk con più di un bundle, tenta suddivisione
++                    if (
++                        isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
++                        and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
++                        and len(chunk.bundles) > 1
++                    ):
++                        tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
++                        sub_outcomes = self._process_subchunks_detection(
++                            chunk=chunk,
++                            analyzer=analyzer,
++                            topic=topic,
++                            strategy=strategy,
++                            resolved_model=resolved_model,
++                            eff_temp=eff_temp,
++                            eff_seed=eff_seed,
++                            eff_max_tokens=eff_max_tokens,
++                            operational_mode=operational_mode,
++                            tracker=tracker,
++                            chunk_idx_1based=current_tracker_idx,
++                        )
++                        outcomes.extend(sub_outcomes)
++                    else:
++                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
++                        tracker.fail(str(fatal_err))
++                        raise
++                except Exception as exc:
++                    tracker.chunk_failed(current_tracker_idx, str(exc))
++                    outcomes.append(
++                        ChunkAnalysisOutcome(
++                            chunk_id=chunk.document_id,
++                            result=None,
++                            status="FAILED",
++                            error_type=type(exc).__name__,
++                            error_message=str(exc),
++                        )
++                    )
++        finally:
++            try:
++                target_client.request_listener = old_listener
++            except Exception:
++                pass
+ 
++        total_units = len(outcomes)
+         completed_count = sum(1 for o in outcomes if o.status == "SUCCESS")
++        failed_count = total_units - completed_count
+         if completed_count == 0:
++            tracker.fail(f"Tutti i {total_units} blocchi di Topic Detection sono falliti.")
+             raise OperationalAnalysisFailedError(
+-                f"Tutti i {len(chunks)} chunk di Topic Detection sono falliti durante l'inferenza."
++                f"Tutti i {total_units} chunk di Topic Detection sono falliti durante l'inferenza."
+             )
+ 
++        tracker.start_consolidation()
+         aggregated = aggregate_topic_detection(
+             outcomes=outcomes,
+             topic=topic,
+             parent_document_id=document.document_id,
+-            expected_chunk_count=len(chunks),
++            expected_chunk_count=total_units,
+         )
++        if failed_count == 0:
++            tracker.complete(f"Topic Detection completata: {completed_count}/{total_units} blocchi analizzati.")
++            det_status = "SUCCESS"
++            if chk_store is not None:
++                chk_store.clear_checkpoint(doc_fp, cfg_fp)
++        else:
++            tracker.partial(f"Topic Detection completata parzialmente: {completed_count}/{total_units} blocchi analizzati.")
++            det_status = "PARTIAL"
+ 
+         latency = round(time.perf_counter() - start_time, 3)
+-        failed_count = len(chunks) - completed_count
+         now_ts = datetime.now(timezone.utc).isoformat()
+         run_meta = TopicAnalysisRunMetadata(
+             run_id=run_id,
+@@ -574,11 +1180,11 @@ class LocalTopicAnalysisService:
+             model=resolved_model,
+             requested_model=(model_name or "").strip() or self.default_model,
+             latency_seconds=latency,
+-            prompt_version=aggregated.metadata.get("prompt_version", "topic_detection_operational_v1"),
++            prompt_version=aggregated.metadata.get("prompt_version", "topic_detection_operational_v2"),
+             strategy=strategy.value,
+             temperature=eff_temp,
+             seed=eff_seed,
+-            chunk_count=int(len(chunks)),
++            chunk_count=int(total_units),
+             completed_chunk_count=int(completed_count),
+             failed_chunk_count=int(failed_count),
+             data_classification=classification,
+@@ -601,15 +1207,21 @@ class LocalTopicAnalysisService:
+             max_tokens=eff_max_tokens,
+             start_timestamp=start_iso,
+             end_timestamp=now_ts,
+-            status="PARTIAL" if failed_count > 0 else "SUCCESS",
++            status=det_status,
+             error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
+         )
+ 
+         meta = dict(aggregated.metadata)
+         meta.update(run_meta.to_dict())
+-        meta["chunk_count"] = int(len(chunks))
++        meta["chunk_count"] = int(total_units)
+         meta["completed_chunk_count"] = int(completed_count)
+         meta["failed_chunk_count"] = int(failed_count)
++        is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
++        meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
++        meta["is_label_only"] = is_label_only
++        meta["origin_flow"] = meta.get("origin_flow", "MANUAL_DETECTION")
++        meta["input_label"] = topic.label
++        meta["input_description"] = topic.description if not is_label_only else None
+         if not should_preserve_raw and "raw_response" in meta:
+             del meta["raw_response"]
+ 
+@@ -632,9 +1244,10 @@ class LocalTopicAnalysisService:
+         seed: int | None = None,
+         max_tokens: int | None = None,
+         preserve_raw_response: bool = False,
++        progress_callback: AnalysisProgressCallback | None = None,
+     ) -> TopicDiscoveryResult:
+         """
+-        Esegue Topic Discovery LIVE con supporto trasparente al chunking multi-chunk.
++        Esegue Topic Discovery LIVE con supporto trasparente al chunking multi-chunk e progress callback.
+         """
+         if not document.bundles or not document.all_evidence_sections:
+             raise AnalysisNoEvidenceError(
+@@ -644,7 +1257,6 @@ class LocalTopicAnalysisService:
+         eff_max_topics = max_topics if max_topics is not None else self.config.max_topics
+         eff_temp = temperature if temperature is not None else self.config.temperature
+         eff_seed = seed if seed is not None else self.config.seed
+-        eff_max_tokens = max_tokens if max_tokens is not None else self.config.max_tokens
+ 
+         run_id = f"run_disc_{uuid.uuid4().hex[:10]}"
+         start_time = time.perf_counter()
+@@ -658,142 +1270,378 @@ class LocalTopicAnalysisService:
+             operational_mode=True,
+         )
+ 
+-        chunks = split_document_into_chunks(
+-            document,
+-            max_characters=self.max_chunk_characters,
+-            max_bundles=self.max_chunk_bundles,
++        eff_max_tokens = calculate_discovery_max_tokens(
++            max_topics=eff_max_topics,
++            user_max_tokens=max_tokens,
++            context_length=self.context_length,
++        )
++
++        plan = self.create_analysis_plan(
++            document=document,
++            analysis_type="discovery",
++            max_topics=eff_max_topics,
++            user_max_tokens=max_tokens,
++            context_length=self.context_length,
++        )
++        chunks = list(plan.chunks)
++        eff_chunk_tokens = plan.chunk_token_budget
++
++        tracker = AnalysisProgressTracker(
++            total_chunks=len(chunks),
++            callback=progress_callback,
++            initial_phase="Analisi dei messaggi",
+         )
+ 
+         is_synthetic = self._is_synthetic_document(document)
+         should_preserve_raw = preserve_raw_response or is_synthetic
+         classification = "SYNTHETIC_DEMO" if is_synthetic else "REAL_FORENSIC"
+ 
+-        if len(chunks) == 1:
+-            try:
+-                disc_res = analyzer.discover_topics(
+-                    document=chunks[0],
+-                    model_id=resolved_model,
+-                    temperature=eff_temp,
+-                    seed=eff_seed,
+-                    timeout_seconds=self.timeout_seconds,
+-                    max_topics=eff_max_topics,
+-                    max_tokens=eff_max_tokens,
+-                    operational_mode=True,
+-                )
+-            except FATAL_BACKEND_ERRORS:
+-                raise
+-            except Exception as exc:
+-                raise OperationalAnalysisFailedError(
+-                    f"Inferenza di Topic Discovery fallita sul documento: {exc}"
+-                ) from exc
+-
+-            latency = round(time.perf_counter() - start_time, 3)
+-            now_ts = datetime.now(timezone.utc).isoformat()
+-            run_meta = TopicAnalysisRunMetadata(
+-                run_id=run_id,
+-                origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
+-                model=resolved_model,
+-                requested_model=(model_name or "").strip() or self.default_model,
+-                latency_seconds=latency,
+-                prompt_version=disc_res.metadata.get("prompt_version", "topic_discovery_v1"),
+-                strategy="DIRECT_MULTILINGUAL",
+-                temperature=eff_temp,
+-                seed=eff_seed,
+-                chunk_count=1,
+-                completed_chunk_count=1,
+-                reduction_strategy="none",
+-                data_classification=classification,
+-                timestamp=now_ts,
+-                document_id=document.document_id,
+-                analysis_type="DISCOVERY",
+-                resolved_model_key=(
+-                    getattr(target_client, "_active_binding", None).resolved_model_key
+-                    if getattr(target_client, "_active_binding", None)
+-                    else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
+-                ),
+-                loaded_instance_id=(
+-                    getattr(target_client, "_loaded_instance_id", None)
+-                    or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
+-                    or "UNKNOWN (not provided by LM Studio)"
+-                ),
+-                api_identifier=getattr(target_client, "model_id", resolved_model),
+-                response_model=disc_res.metadata.get("model") or resolved_model,
++        # Checkpoint: caricamento risultati validati pregressi se abilitato
++        chk_store = self.checkpoint_store if self.enable_checkpointing else None
++        doc_fp = ""
++        cfg_fp = ""
++        cached_discovery_results: dict[int, TopicDiscoveryResult] = {}
++        if chk_store is not None:
++            doc_fp = compute_document_fingerprint(document)
++            eff_run_cfg = OperationalAnalysisConfig(
++                model_spec=resolved_model,
+                 context_length=self.context_length,
++                timeout_seconds=self.timeout_seconds,
+                 max_tokens=eff_max_tokens,
+-                start_timestamp=start_iso,
+-                end_timestamp=now_ts,
+-                status="COMPLETE",
+-                error_classification=None,
++                temperature=eff_temp,
++                seed=eff_seed,
++                profile=self.profile,
++                chunk_character_budget=self.max_chunk_characters,
++                max_chunk_bundles=self.max_chunk_bundles,
++                max_chunk_tokens=eff_chunk_tokens,
+             )
+-
+-            meta = dict(disc_res.metadata)
+-            meta.update(run_meta.to_dict())
+-            meta["chunk_count"] = 1
+-            meta["completed_chunk_count"] = 1
+-            if not should_preserve_raw and "raw_response" in meta:
+-                del meta["raw_response"]
+-
+-            final_res = TopicDiscoveryResult(
+-                topics=disc_res.topics,
+-                provenance_document_id=document.document_id,
+-                metadata=meta,
++            cfg_fp = compute_run_config_hash(
++                model_id=resolved_model,
++                prompt_version="discovery_operational",
++                config=eff_run_cfg,
++                chunks=chunks,
++                extra_params={
++                    "max_topics": eff_max_topics,
++                    "resolved_model_key": (
++                        getattr(target_client, "_active_binding", None).resolved_model_key
++                        if getattr(target_client, "_active_binding", None)
++                        else getattr(target_client, "_last_loaded_model_key", None)
++                    ),
++                    "quantization": (
++                        getattr(target_client, "_active_binding", None).quantization
++                        if getattr(target_client, "_active_binding", None)
++                        else None
++                    ),
++                },
+             )
+-            if isinstance(target_client, LmStudioClient):
+-                self._authoritative_live_run_ids.add(run_id)
+-            self._record_authoritative_discovery_run(document.document_id, final_res)
+-            return final_res
+-
+-        # Multi-chunk discovery con tracking esplicito
+-        chunk_outcomes: list[DiscoveryChunkOutcome] = []
+-        successful_results: list[TopicDiscoveryResult] = []
+-
+-        for chunk in chunks:
++            checkpoint = chk_store.load_and_validate_checkpoint(
++                document=document,
++                config_fingerprint=cfg_fp,
++                chunks=chunks,
++                expected_analysis_type="discovery",
++            )
++            if checkpoint is not None:
++                for s_idx, s_data in checkpoint.serialized_results.items():
++                    try:
++                        cached_discovery_results[int(s_idx)] = deserialize_discovery_result_from_checkpoint(s_data)
++                    except Exception:
++                        pass
++                rec_count = len(cached_discovery_results)
++                rem_count = max(0, len(chunks) - rec_count)
++                if rec_count > 0:
++                    tracker.phase = f"Risultati precedenti recuperati: {rec_count} chunk | Chunk ancora da elaborare: {rem_count}"
++
++        old_listener = getattr(target_client, "request_listener", None)
++        try:
+             try:
+-                res = analyzer.discover_topics(
+-                    document=chunk,
+-                    model_id=resolved_model,
++                target_client.request_listener = tracker
++            except Exception:
++                pass
++
++            if len(chunks) == 1:
++                total_units = 1
++                completed_count = 1
++                failed_count = 0
++                disc_status = "COMPLETE"
++                if 0 in cached_discovery_results:
++                    disc_res = cached_discovery_results[0]
++                    tracker.chunk_success(1, record_request=False)
++                    tracker.complete("Topic Discovery completata da checkpoint: 1/1 blocchi recuperati.")
++                else:
++                    tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
++                    try:
++                        disc_res = analyzer.discover_topics(
++                            document=chunks[0],
++                            model_id=resolved_model,
++                            temperature=eff_temp,
++                            seed=eff_seed,
++                            timeout_seconds=self.timeout_seconds,
++                            max_topics=eff_max_topics,
++                            max_tokens=eff_max_tokens,
++                            operational_mode=True,
++                            context_length=self.context_length,
++                            on_retry_callback=lambda att, r: tracker.chunk_retry(1, r),
++                        )
++                        tracker.chunk_success(1, record_request=False)
++                        tracker.complete("Topic Discovery completata.")
++                        if chk_store is not None:
++                            try:
++                                chk_store.save_chunk(
++                                    document_id=document.document_id,
++                                    document_fingerprint=doc_fp,
++                                    config_fingerprint=cfg_fp,
++                                    chunk_idx=0,
++                                    result=disc_res,
++                                    total_planned_chunks=1,
++                                    analysis_type="discovery",
++                                    model_id=resolved_model,
++                                    prompt_version="discovery_operational",
++                                )
++                            except Exception as chk_err:
++                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
++                    except FATAL_BACKEND_ERRORS as fatal_err:
++                        if (
++                            isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
++                            and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
++                            and len(chunks[0].bundles) > 1
++                        ):
++                            tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
++                            sub_outs, sub_res = self._process_subchunks_discovery(
++                                chunk=chunks[0],
++                                analyzer=analyzer,
++                                resolved_model=resolved_model,
++                                eff_temp=eff_temp,
++                                eff_seed=eff_seed,
++                                chunk_target_topics=eff_max_topics,
++                                tracker=tracker,
++                                chunk_idx_1based=1,
++                            )
++                            total_units = len(sub_outs)
++                            completed_count = len(sub_res)
++                            failed_count = total_units - completed_count
++                            if completed_count == total_units:
++                                disc_res = aggregate_topic_discovery(
++                                    chunk_results=sub_res,
++                                    parent_document_id=document.document_id,
++                                    max_topics=eff_max_topics,
++                                )
++                                tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
++                                disc_status = "COMPLETE"
++                            elif completed_count > 0:
++                                disc_res = aggregate_topic_discovery(
++                                    chunk_results=sub_res,
++                                    parent_document_id=document.document_id,
++                                    max_topics=eff_max_topics,
++                                )
++                                tracker.partial(f"Topic Discovery parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
++                                disc_status = "PARTIAL"
++                            else:
++                                tracker.chunk_failed(1, str(fatal_err))
++                                tracker.fail(str(fatal_err))
++                                raise
++                        else:
++                            tracker.chunk_failed(1, str(fatal_err))
++                            tracker.fail(str(fatal_err))
++                            raise
++                    except Exception as exc:
++                        tracker.chunk_failed(1, str(exc))
++                        tracker.fail(str(exc))
++                        raise OperationalAnalysisFailedError(
++                            f"Inferenza di Topic Discovery fallita sul documento: {exc}"
++                        ) from exc
++
++                latency = round(time.perf_counter() - start_time, 3)
++                now_ts = datetime.now(timezone.utc).isoformat()
++                run_meta = TopicAnalysisRunMetadata(
++                    run_id=run_id,
++                    origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
++                    model=resolved_model,
++                    requested_model=(model_name or "").strip() or self.default_model,
++                    latency_seconds=latency,
++                    prompt_version=disc_res.metadata.get("prompt_version", "topic_discovery_operational_v2"),
++                    strategy="DIRECT_MULTILINGUAL",
+                     temperature=eff_temp,
+                     seed=eff_seed,
+-                    timeout_seconds=self.timeout_seconds,
+-                    max_topics=eff_max_topics,
++                    chunk_count=int(total_units),
++                    completed_chunk_count=int(completed_count),
++                    failed_chunk_count=int(failed_count),
++                    reduction_strategy="none",
++                    data_classification=classification,
++                    timestamp=now_ts,
++                    document_id=document.document_id,
++                    analysis_type="DISCOVERY",
++                    resolved_model_key=(
++                        getattr(target_client, "_active_binding", None).resolved_model_key
++                        if getattr(target_client, "_active_binding", None)
++                        else (getattr(target_client, "_last_loaded_model_key", None) or (model_name or self.default_model))
++                    ),
++                    loaded_instance_id=(
++                        getattr(target_client, "_loaded_instance_id", None)
++                        or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
++                        or "UNKNOWN (not provided by LM Studio)"
++                    ),
++                    api_identifier=getattr(target_client, "model_id", resolved_model),
++                    response_model=disc_res.metadata.get("model") or resolved_model,
++                    context_length=self.context_length,
+                     max_tokens=eff_max_tokens,
+-                    operational_mode=True,
++                    start_timestamp=start_iso,
++                    end_timestamp=now_ts,
++                    status=disc_status,
++                    error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
+                 )
+-                chunk_outcomes.append(
+-                    DiscoveryChunkOutcome(
+-                        chunk_id=chunk.document_id,
+-                        status="SUCCESS",
+-                        result=res,
++
++                meta = dict(disc_res.metadata)
++                meta.update(run_meta.to_dict())
++                meta["chunk_count"] = int(total_units)
++                meta["completed_chunk_count"] = int(completed_count)
++                meta["failed_chunk_count"] = int(failed_count)
++                if not should_preserve_raw and "raw_response" in meta:
++                    del meta["raw_response"]
++
++                final_res = TopicDiscoveryResult(
++                    topics=disc_res.topics,
++                    provenance_document_id=document.document_id,
++                    metadata=meta,
++                )
++                if isinstance(target_client, LmStudioClient):
++                    self._authoritative_live_run_ids.add(run_id)
++                self._record_authoritative_discovery_run(document.document_id, final_res)
++                return final_res
++
++            # Multi-chunk discovery con tracking esplicito
++            chunk_outcomes: list[DiscoveryChunkOutcome] = []
++            successful_results: list[TopicDiscoveryResult] = []
++
++            chunk_target_topics = min(eff_max_topics, max(5, min(8, eff_max_topics)))
++
++            for idx, chunk in enumerate(chunks):
++                current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
++                if idx in cached_discovery_results:
++                    res = cached_discovery_results[idx]
++                    chunk_outcomes.append(
++                        DiscoveryChunkOutcome(
++                            chunk_id=chunk.document_id,
++                            status="SUCCESS",
++                            result=res,
++                        )
+                     )
++                    successful_results.append(res)
++                    tracker.chunk_success(current_tracker_idx, record_request=False)
++                    continue
++
++                tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
++                chunk_tokens = calculate_discovery_max_tokens(
++                    max_topics=chunk_target_topics,
++                    user_max_tokens=max_tokens,
++                    context_length=self.context_length,
+                 )
+-                successful_results.append(res)
+-            except FATAL_BACKEND_ERRORS:
+-                raise
+-            except Exception as exc:
+-                chunk_outcomes.append(
+-                    DiscoveryChunkOutcome(
+-                        chunk_id=chunk.document_id,
+-                        status="FAILED",
+-                        result=None,
+-                        error_type=type(exc).__name__,
+-                        safe_error_code="CHUNK_DISCOVERY_ERROR",
++                try:
++                    res = analyzer.discover_topics(
++                        document=chunk,
++                        model_id=resolved_model,
++                        temperature=eff_temp,
++                        seed=eff_seed,
++                        timeout_seconds=self.timeout_seconds,
++                        max_topics=chunk_target_topics,
++                        max_tokens=chunk_tokens,
++                        operational_mode=True,
++                        context_length=self.context_length,
++                        on_retry_callback=lambda att, r: tracker.chunk_retry(current_tracker_idx, r),
++                    )
++                    chunk_outcomes.append(
++                        DiscoveryChunkOutcome(
++                            chunk_id=chunk.document_id,
++                            status="SUCCESS",
++                            result=res,
++                        )
+                     )
++                    successful_results.append(res)
++                    tracker.chunk_success(current_tracker_idx, record_request=False)
++                    if chk_store is not None:
++                        try:
++                            chk_store.save_chunk(
++                                document_id=document.document_id,
++                                document_fingerprint=doc_fp,
++                                config_fingerprint=cfg_fp,
++                                chunk_idx=idx,
++                                result=res,
++                                total_planned_chunks=len(chunks),
++                                analysis_type="discovery",
++                                model_id=resolved_model,
++                                prompt_version="discovery_operational",
++                            )
++                        except Exception as chk_err:
++                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
++                except FATAL_BACKEND_ERRORS as fatal_err:
++                    # Se è un CONTEXT_OVERFLOW recuperabile su chunk con più di un bundle, tenta suddivisione
++                    if (
++                        isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
++                        and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
++                        and len(chunk.bundles) > 1
++                    ):
++                        tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
++                        sub_outs, sub_res = self._process_subchunks_discovery(
++                            chunk=chunk,
++                            analyzer=analyzer,
++                            resolved_model=resolved_model,
++                            eff_temp=eff_temp,
++                            eff_seed=eff_seed,
++                            chunk_target_topics=chunk_target_topics,
++                            tracker=tracker,
++                            chunk_idx_1based=current_tracker_idx,
++                        )
++                        chunk_outcomes.extend(sub_outs)
++                        successful_results.extend(sub_res)
++                    else:
++                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
++                        tracker.fail(str(fatal_err))
++                        raise
++                except Exception as exc:
++                    tracker.chunk_failed(current_tracker_idx, str(exc))
++                    chunk_outcomes.append(
++                        DiscoveryChunkOutcome(
++                            chunk_id=chunk.document_id,
++                            status="FAILED",
++                            result=None,
++                            error_type=type(exc).__name__,
++                            safe_error_code="CHUNK_DISCOVERY_ERROR",
++                        )
++                    )
++
++            total_units = len(chunk_outcomes)
++            completed_count = len(successful_results)
++            failed_count = total_units - completed_count
++
++            if not successful_results:
++                tracker.fail(f"Tutti i {total_units} blocchi di Topic Discovery sono falliti.")
++                raise OperationalAnalysisFailedError(
++                    f"Tutti i {total_units} chunk di Topic Discovery sono falliti durante l'inferenza."
+                 )
+ 
+-        if not successful_results:
+-            raise OperationalAnalysisFailedError(
+-                f"Tutti i {len(chunks)} chunk di Topic Discovery sono falliti durante l'inferenza."
++            tracker.start_consolidation()
++            aggregated = aggregate_topic_discovery(
++                chunk_results=successful_results,
++                parent_document_id=document.document_id,
++                max_topics=eff_max_topics,
+             )
+-
+-        aggregated = aggregate_topic_discovery(
+-            chunk_results=successful_results,
+-            parent_document_id=document.document_id,
+-            max_topics=eff_max_topics,
+-        )
++            if failed_count == 0:
++                tracker.complete(f"Topic Discovery completata: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
++                disc_status = "COMPLETE"
++                if chk_store is not None:
++                    try:
++                        chk_store.clear_checkpoint(doc_fp, cfg_fp)
++                    except Exception:
++                        pass
++            else:
++                tracker.partial(f"Topic Discovery completata parzialmente: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
++                disc_status = "PARTIAL"
++        finally:
++            try:
++                target_client.request_listener = old_listener
++            except Exception:
++                pass
+ 
+         latency = round(time.perf_counter() - start_time, 3)
+-        completed_count = len(successful_results)
+-        failed_count = len(chunks) - completed_count
+         now_ts = datetime.now(timezone.utc).isoformat()
+ 
+         run_meta = TopicAnalysisRunMetadata(
+@@ -802,11 +1650,11 @@ class LocalTopicAnalysisService:
+             model=resolved_model,
+             requested_model=(model_name or "").strip() or self.default_model,
+             latency_seconds=latency,
+-            prompt_version="topic_discovery_v1",
++            prompt_version="topic_discovery_operational_v2",
+             strategy="DIRECT_MULTILINGUAL",
+             temperature=eff_temp,
+             seed=eff_seed,
+-            chunk_count=int(len(chunks)),
++            chunk_count=int(total_units),
+             completed_chunk_count=int(completed_count),
+             failed_chunk_count=int(failed_count),
+             reduction_strategy=aggregated.metadata.get("reduction_strategy", "none"),
+@@ -830,20 +1678,17 @@ class LocalTopicAnalysisService:
+             max_tokens=eff_max_tokens,
+             start_timestamp=start_iso,
+             end_timestamp=now_ts,
+-            status="PARTIAL" if failed_count > 0 else "COMPLETE",
++            status=disc_status,
+             error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
+         )
+ 
+         meta = dict(aggregated.metadata)
+         meta.update(run_meta.to_dict())
+-        meta["chunk_count"] = int(len(chunks))
+-        meta["expected_chunk_count"] = int(len(chunks))
++        meta["chunk_count"] = int(total_units)
++        meta["expected_chunk_count"] = int(total_units)
+         meta["completed_chunk_count"] = int(completed_count)
+         meta["failed_chunk_count"] = int(failed_count)
+-        if failed_count > 0:
+-            meta["status"] = "PARTIAL"
+-        else:
+-            meta["status"] = "COMPLETE"
++        meta["status"] = disc_status
+ 
+         if not should_preserve_raw and "raw_response" in meta:
+             del meta["raw_response"]
+@@ -870,6 +1715,7 @@ class LocalTopicAnalysisService:
+         temperature: float | None = None,
+         seed: int | None = None,
+         preserve_raw_response: bool = False,
++        progress_callback: Any = None,
+     ) -> tuple[TopicDetectionResult, ConsistencyResult]:
+         """
+         Esegue la 'Prova del Nove':
+@@ -1048,6 +1894,7 @@ class LocalTopicAnalysisService:
+             temperature=temperature,
+             seed=seed,
+             preserve_raw_response=preserve_raw_response,
++            progress_callback=progress_callback,
+         )
+ 
+         # Validazione degli evidence_ids restituiti dalla detection rispetto al documento
+@@ -1058,6 +1905,21 @@ class LocalTopicAnalysisService:
+                     f"non appartiene al documento '{document.document_id}'."
+                 )
+ 
++        det_meta = dict(det_result.metadata)
++        det_meta["origin_flow"] = "DISCOVERY_VERIFICATION"
++        det_meta["query_mode"] = "LABEL_AND_DESCRIPTION"
++        det_meta["verified_discovery_run_id"] = eff_discovery_run_id
++        det_meta["input_label"] = actual_topic.label
++        det_meta["input_description"] = actual_topic.short_description
++        det_result = TopicDetectionResult(
++            topic=det_result.topic,
++            decision=det_result.decision,
++            evidence_ids=det_result.evidence_ids,
++            rationale=det_result.rationale,
++            provenance_document_id=det_result.provenance_document_id,
++            metadata=det_meta,
++        )
++
+         det_run_id = (
+             det_result.metadata.get("run_id")
+             if isinstance(det_result.metadata, Mapping)
+diff --git a/tests/unit/test_apptest_flows.py b/tests/unit/test_apptest_flows.py
+index f0f0909..79211a3 100644
+--- a/tests/unit/test_apptest_flows.py
++++ b/tests/unit/test_apptest_flows.py
+@@ -43,6 +43,18 @@ from ui.models import (
+ APP_PATH = str(Path(__file__).resolve().parents[2] / "app.py")
+ 
+ 
++@pytest.fixture(autouse=True)
++def clean_checkpoints():
++    chk_dir = Path(".checkpoints")
++    if chk_dir.exists():
++        import shutil
++        shutil.rmtree(chk_dir, ignore_errors=True)
++    yield
++    if chk_dir.exists():
++        import shutil
++        shutil.rmtree(chk_dir, ignore_errors=True)
++
++
+ class MockAppLlmClient(BaseLlmClient):
+     """Client di test per Streamlit AppTest con risposte preconfigurate."""
+ 
+diff --git a/tests/unit/test_packaging_release.py b/tests/unit/test_packaging_release.py
+index 1ef5a1a..50e391f 100644
+--- a/tests/unit/test_packaging_release.py
++++ b/tests/unit/test_packaging_release.py
+@@ -42,13 +42,14 @@ def test_packaging_wheel_contains_analysis_and_core_packages():
+         dist_dir = Path(tmp_dir) / "dist"
+         dist_dir.mkdir(parents=True, exist_ok=True)
+ 
+-        # 1. Costruzione wheel tramite pip wheel --no-deps
++        # 1. Costruzione wheel tramite pip wheel --no-deps --no-build-isolation
+         cmd = [
+             sys.executable,
+             "-m",
+             "pip",
+             "wheel",
+             "--no-deps",
++            "--no-build-isolation",
+             "--wheel-dir",
+             str(dist_dir),
+             str(REPO_ROOT),
+@@ -70,6 +71,8 @@ def test_packaging_wheel_contains_analysis_and_core_packages():
+                 "analysis/models.py",
+                 "analysis/consistency.py",
+                 "analysis/service.py",
++                "analysis/checkpoint.py",
++                "analysis/progress.py",
+             ]
+             for req_file in required_analysis_files:
+                 assert req_file in namelist, f"File obbligatorio mancante nella wheel: {req_file}"
+diff --git a/ui/application.py b/ui/application.py
+index 084090c..028180b 100644
+--- a/ui/application.py
++++ b/ui/application.py
+@@ -14,6 +14,7 @@ Principi architetturali:
+ from __future__ import annotations
+ 
+ import hashlib
++from pathlib import Path
+ import re
+ from typing import Iterable, Mapping, MutableMapping, MutableSet, Optional, Sequence
+ 
+@@ -335,24 +336,31 @@ def build_topic_query(
+ ) -> TopicQuery:
+     """
+     Costruisce un TopicQuery deterministico e validato.
+-    Se description è vuota o None, viene utilizzata la label come descrizione.
++    Se description è vuota o None, viene utilizzata la label come descrizione e impostato is_label_only=True.
+     Se topic_id non è specificato, viene generato un identificativo deterministico basato su slug e hash.
+     """
+     if not isinstance(label, str) or not label.strip():
+         raise ValueError("L'argomento (label) deve essere una stringa non vuota.")
+ 
+     clean_label = label.strip()
++    is_label_only = False
+     if description is not None and isinstance(description, str) and description.strip():
+         clean_desc = description.strip()
+     else:
+         clean_desc = clean_label
++        is_label_only = True
+ 
+     if not topic_id:
+         slug = re.sub(r"[^a-zA-Z0-9_]+", "_", clean_label.lower()).strip("_")[:24] or "topic"
+         h = hashlib.sha256(f"{clean_label}::{clean_desc}".encode("utf-8")).hexdigest()[:8]
+         topic_id = f"custom_{slug}_{h}"
+ 
+-    return TopicQuery(topic_id=topic_id, label=clean_label, description=clean_desc)
++    return TopicQuery(
++        topic_id=topic_id,
++        label=clean_label,
++        description=clean_desc,
++        is_label_only=is_label_only,
++    )
+ 
+ 
+ def check_lm_studio_status(
+@@ -406,13 +414,20 @@ def get_operational_analysis_service(
+     timeout_seconds: float = DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+     discovery_run_store: MutableMapping[str, dict[str, Any]] | None = None,
+     authoritative_live_run_ids: MutableSet[str] | None = None,
++    profile: Any = None,
++    checkpoint_store: Any = None,
++    enable_checkpointing: bool = True,
++    checkpoint_dir: Path | str | None = None,
+ ) -> Any:
+     """
+     Factory per ottenere l'istanza autoritativa di LocalTopicAnalysisService.
+-    Garantisce configurazione coerente tra tutte le operazioni applicative della UI
+-    e inietta il run store document-scoped persistente della sessione.
++    Garantisce configurazione coerente tra tutte le operazioni applicative della UI,
++    iniezione del profilo operativo esplicito e abilitazione del checkpointing con persistenza protetta.
+     """
+     from analysis.service import LocalTopicAnalysisService
++    from analysis.checkpoint import AnalysisCheckpointStore
++    from analysis.models import OperationalProfile
++
+     if discovery_run_store is None:
+         try:
+             from ui import state
+@@ -425,12 +440,41 @@ def get_operational_analysis_service(
+             authoritative_live_run_ids = state.get_authoritative_live_run_ids()
+         except Exception:
+             authoritative_live_run_ids = None
++
++    resolved_profile = profile
++    if resolved_profile is None:
++        try:
++            from ui import state
++            resolved_profile = state.get_operational_profile()
++        except Exception:
++            resolved_profile = OperationalProfile.BALANCED
++
++    resolved_checkpoint_store = checkpoint_store
++    if resolved_checkpoint_store is None and enable_checkpointing:
++        try:
++            from ui import state
++            resolved_checkpoint_store = state.get_checkpoint_store()
++        except Exception:
++            resolved_checkpoint_store = None
++        if resolved_checkpoint_store is None:
++            resolved_checkpoint_store = AnalysisCheckpointStore(
++                checkpoint_dir=checkpoint_dir or Path(".checkpoints")
++            )
++            try:
++                from ui import state
++                state.set_checkpoint_store(resolved_checkpoint_store)
++            except Exception:
++                pass
++
+     return LocalTopicAnalysisService(
+         base_url=base_url,
+         default_model=model_id or DEFAULT_OPERATIONAL_MODEL,
+         timeout_seconds=timeout_seconds,
+         discovery_run_store=discovery_run_store,
+         authoritative_live_run_ids=authoritative_live_run_ids,
++        profile=resolved_profile,
++        checkpoint_store=resolved_checkpoint_store,
++        enable_checkpointing=enable_checkpointing and (resolved_checkpoint_store is not None),
+     )
+ 
+ 
+@@ -447,6 +491,11 @@ def execute_manual_topic_detection(
+     max_tokens: int | None = DEFAULT_OPERATIONAL_MAX_TOKENS,
+     operational_mode: bool = True,
+     preserve_raw_response: bool = False,
++    session_state: MutableMapping[str, Any] | None = None,
++    progress_callback: Any = None,
++    profile: Any = None,
++    checkpoint_store: Any = None,
++    enable_checkpointing: bool = True,
+ ) -> TopicDetectionResult:
+     """
+     Esegue Topic Detection sulla conversazione corrente tramite LocalTopicAnalysisService.
+@@ -456,8 +505,11 @@ def execute_manual_topic_detection(
+         base_url=base_url,
+         model_id=model_id,
+         timeout_seconds=timeout_seconds,
++        profile=profile,
++        checkpoint_store=checkpoint_store,
++        enable_checkpointing=enable_checkpointing,
+     )
+-    return service.run_topic_detection(
++    res = service.run_topic_detection(
+         document=document,
+         topic=topic,
+         client=client,
+@@ -468,7 +520,18 @@ def execute_manual_topic_detection(
+         max_tokens=max_tokens,
+         operational_mode=operational_mode,
+         preserve_raw_response=preserve_raw_response,
++        progress_callback=progress_callback,
+     )
++    if session_state is not None:
++        try:
++            from ui import state
++            doc_analysis = state.get_document_analysis_state(document.document_id, state=session_state)
++            existing = list(doc_analysis.detection_runs)
++            existing.append(res)
++            doc_analysis.detection_runs = tuple(existing)
++        except Exception:
++            pass
++    return res
+ 
+ 
+ def execute_topic_discovery(
+@@ -481,6 +544,10 @@ def execute_topic_discovery(
+     seed: int | None = 42,
+     preserve_raw_response: bool = False,
+     session_state: MutableMapping[str, Any] | None = None,
++    progress_callback: Any = None,
++    profile: Any = None,
++    checkpoint_store: Any = None,
++    enable_checkpointing: bool = True,
+ ) -> TopicDiscoveryResult:
+     """
+     Esegue Topic Discovery LIVE sulla conversazione corrente tramite LocalTopicAnalysisService.
+@@ -494,6 +561,9 @@ def execute_topic_discovery(
+         model_id=model_id,
+         discovery_run_store=disc_store,
+         authoritative_live_run_ids=auth_ids,
++        profile=profile,
++        checkpoint_store=checkpoint_store,
++        enable_checkpointing=enable_checkpointing,
+     )
+     res = service.run_topic_discovery(
+         document=document,
+@@ -503,6 +573,7 @@ def execute_topic_discovery(
+         temperature=temperature,
+         seed=seed,
+         preserve_raw_response=preserve_raw_response,
++        progress_callback=progress_callback,
+     )
+     # Aggiorna lo stato scoped del documento per persistenza di sessione
+     try:
+@@ -529,16 +600,21 @@ def execute_discovery_verification(
+     temperature: float = DEFAULT_OPERATIONAL_TEMPERATURE,
+     seed: int | None = 42,
+     preserve_raw_response: bool = False,
++    session_state: MutableMapping[str, Any] | None = None,
++    progress_callback: Any = None,
++    profile: Any = None,
++    checkpoint_store: Any = None,
++    enable_checkpointing: bool = True,
+ ) -> tuple[TopicDetectionResult, Any]:
+     """
+     Esegue la "Prova del Nove":
+     Seconda inferenza indipendente di Topic Detection per verificare il topic emerso da Topic Discovery.
+     Restituisce (TopicDetectionResult, ConsistencyResult).
+     """
++    from ui import state
+     if discovery_result is None:
+-        from ui import state
+-        doc_analysis = state.get_document_analysis_state(document.document_id)
+-        candidate_runs = list(doc_analysis.discovery_runs) + list(state.get_discovery_results())
++        doc_analysis = state.get_document_analysis_state(document.document_id, state=session_state)
++        candidate_runs = list(doc_analysis.discovery_runs) + list(state.get_discovery_results(state=session_state))
+         for r in candidate_runs:
+             if getattr(r, "provenance_document_id", None) == document.document_id:
+                 r_id = r.metadata.get("run_id") if isinstance(r.metadata, Mapping) else None
+@@ -556,11 +632,18 @@ def execute_discovery_verification(
+                             discovery_run_id = str(r_id)
+                             break
+ 
++    disc_store = state.get_discovery_run_store(session_state)
++    auth_ids = state.get_authoritative_live_run_ids(session_state)
+     service = get_operational_analysis_service(
+         base_url=base_url,
+         model_id=model_id,
++        discovery_run_store=disc_store,
++        authoritative_live_run_ids=auth_ids,
++        profile=profile,
++        checkpoint_store=checkpoint_store,
++        enable_checkpointing=enable_checkpointing,
+     )
+-    return service.verify_discovered_topic(
++    det_res, cons_res = service.verify_discovered_topic(
+         document=document,
+         discovered_topic=discovered_topic,
+         discovery_result=discovery_result,
+@@ -571,7 +654,15 @@ def execute_discovery_verification(
+         temperature=temperature,
+         seed=seed,
+         preserve_raw_response=preserve_raw_response,
++        progress_callback=progress_callback,
+     )
++    if session_state is not None:
++        try:
++            state.add_detection_result(det_res, state=session_state)
++            state.add_consistency_result(cons_res, state=session_state)
++        except Exception:
++            pass
++    return det_res, cons_res
+ 
+ 
+ def execute_local_media_processing(
+diff --git a/ui/presentation.py b/ui/presentation.py
+index 81516a2..9509b02 100644
+--- a/ui/presentation.py
++++ b/ui/presentation.py
+@@ -41,8 +41,11 @@ from ai.lmstudio import (
+     SUPPORTED_OPERATIONAL_MODELS,
+     get_model_display_name,
+ )
++from pathlib import Path
++
+ from ai.models import TopicDecision
+-from analysis.models import ConsistencyStatus
++from analysis.models import ConsistencyStatus, OperationalProfile, resolve_operational_profile
++from analysis.checkpoint import AnalysisCheckpointStore
+ from search.models import MatchMode
+ from search.service import SearchService
+ from ui import state
+@@ -78,6 +81,195 @@ from ui.models import (
+     SourceFormat,
+     TopicFilterDecision,
+ )
++from typing import Any
++from ai.chunking import profile_document_for_analysis
++from analysis.progress import AnalysisProgressEvent
++
++
++def create_streamlit_progress_callback(container: Any, title: str = "ANALISI IN CORSO") -> Any:
++    """
++    Crea un callback thread-safe compatibile con Streamlit per aggiornare
++    in tempo reale il pannello di avanzamento e i contatori di inferenza.
++    Garantisce piena visibilità della separazione tra ciclo di vita chunk e chiamate HTTP.
++    """
++    def _callback(event: AnalysisProgressEvent) -> None:
++        try:
++            with container.container():
++                st.markdown(f"#### ⏳ {title}")
++                st.markdown(f"**Fase:** {event.phase}")
++                progress_val = max(0.0, min(1.0, event.percentage / 100.0))
++                st.progress(progress_val, text=f"Progresso fase corrente: {event.percentage:.1f}%")
++
++                c1, c2, c3 = st.columns(3)
++                with c1:
++                    st.metric("Blocchi completati", f"{event.completed_chunks} / {event.total_chunks}")
++                    st.metric("Blocco attuale", f"{event.current_chunk_index} di {event.total_chunks}")
++                with c2:
++                    st.metric("Blocchi rimanenti", f"{event.remaining_chunks}")
++                    sent_txt = f"{event.requests_sent}"
++                    if event.requests_in_flight > 0:
++                        sent_txt += f" ({event.requests_in_flight} in volo)"
++                    st.metric("Richieste inviate", sent_txt)
++                with c3:
++                    st.metric("Richieste riuscite", f"{event.requests_successful}")
++                    st.metric("Retry / Fallite", f"{event.retries_count} / {event.requests_failed}")
++
++                diag_parts = []
++                if event.http_errors_count > 0:
++                    diag_parts.append(f"HTTP Error: {event.http_errors_count}")
++                if event.timeouts_count > 0:
++                    diag_parts.append(f"Timeout: {event.timeouts_count}")
++                if event.protocol_errors_count > 0:
++                    diag_parts.append(f"Protocollo/JSON: {event.protocol_errors_count}")
++                if event.split_count > 0:
++                    diag_parts.append(f"Suddivisioni dinamiche: {event.split_count}")
++
++                diag_str = f" | Contabilità: {', '.join(diag_parts)}" if diag_parts else ""
++                st.caption(
++                    f"⏱️ **Tempo trascorso:** `{event.elapsed_formatted}` | "
++                    f"**Stato:** {event.status_message}{diag_str}"
++                )
++                if "recuperati" in event.phase.casefold():
++                    st.info(f"💾 **Stato Checkpoint:** {event.phase}")
++                elif "consolidamento" in event.phase.casefold():
++                    st.info(f"🔄 **Fase:** {event.phase}")
++        except Exception:
++            pass
++
++    return _callback
++
++
++def render_operational_profile_selector(doc: Any) -> OperationalProfile:
++    """
++    Rende disponibili nell'app profili operativi espliciti:
++    - Prudente (2500 token).
++    - Bilanciato (4200 token).
++    - Prestazioni elevate (5200 token).
++    Verifica la sicurezza rispetto al context budget (context length 8192) e consente
++    il ritorno immediato alla configurazione prudente. Mostra i limiti effettivi utilizzati.
++    Offre controlli di gestione del checkpointing persistente.
++    """
++    current_prof = state.get_operational_profile()
++    profile_options = [
++        ("BALANCED", "Bilanciato (4200 token - Consigliato)"),
++        ("PRUDENT", "Prudente (2500 token - Massima sicurezza)"),
++        ("PERFORMANCE", "Prestazioni elevate (5200 token - Sperimentale)"),
++    ]
++    profile_keys = [p[0] for p in profile_options]
++    current_key = current_prof.value if isinstance(current_prof, OperationalProfile) else str(current_prof)
++    if current_key not in profile_keys:
++        current_key = "BALANCED"
++    default_idx = profile_keys.index(current_key)
++
++    with st.expander("⚙️ Profilo Operativo & Gestione Checkpoint", expanded=False):
++        c_prof, c_chk = st.columns([2, 1])
++        with c_prof:
++            choice = st.radio(
++                "Profilo Operativo di Analisi:",
++                options=profile_keys,
++                index=default_idx,
++                format_func=lambda k: dict(profile_options)[k],
++                key="operational_profile_radio",
++                help="Bilanciato riduce il numero di chunk del 40% rispetto al profilo prudente, preservando la sicurezza.",
++            )
++            requested_enum = OperationalProfile(choice)
++            try:
++                effective_enum, t_lim, c_lim = resolve_operational_profile(requested_enum, context_length=8192)
++                if effective_enum != requested_enum:
++                    st.warning(
++                        f"⚠️ Il profilo '{requested_enum.value}' non è sicuro per il context headroom attuale. "
++                        f"Ripiegato automaticamente sul profilo sicuro '{effective_enum.value}'."
++                    )
++            except InsufficientContextHeadroomError as err:
++                st.error(f"⚠️ Spazio di contesto insufficiente per il profilo: {err}")
++                effective_enum, t_lim, c_lim = OperationalProfile.PRUDENT, 2500, 12000
++
++            state.set_operational_profile(effective_enum)
++
++            st.caption(
++                f"📊 **Limiti effettivi:** Budget token chunk: `{t_lim}` | "
++                f"Budget caratteri: `{c_lim:,}` | Margine di sicurezza: `1000` token"
++            )
++
++        with c_chk:
++            st.markdown("**💾 Checkpoint Permanente**")
++            st.caption("Salvataggio progressivo e ripresa senza ripetizione dei chunk già validati.")
++            chk_store = state.get_checkpoint_store()
++            if chk_store is None:
++                chk_store = AnalysisCheckpointStore(checkpoint_dir=Path(".checkpoints"))
++                state.set_checkpoint_store(chk_store)
++
++            if doc is not None and getattr(doc, "document_id", None):
++                doc_id = doc.document_id
++                if st.button("🗑️ Cancella Checkpoint Documento", key=f"btn_clear_chk_{doc_id}"):
++                    try:
++                        cleared = chk_store.clear_for_document(doc)
++                        if cleared > 0:
++                            st.success(f"Cancellati con successo {cleared} checkpoint per '{doc_id}'.")
++                        else:
++                            st.info(f"Nessun checkpoint presente per '{doc_id}'.")
++                    except Exception as exc:
++                        st.error(f"Errore durante la cancellazione dei checkpoint: {exc}")
++
++    return state.get_operational_profile()
++
++
++def render_pre_analysis_profile(document: Any, service: Any = None, max_topics: int | None = None) -> None:
++    """
++    Visualizza il profilo quantitativo preventivo del documento e la stima dei chunk prima dell'analisi.
++    Utilizza la configurazione effettiva del servizio locale per garantire perfetta coerenza operativa.
++    Riflette dinamicamente il numero massimo di topic impostato (es. 3, 10, 25 topic).
++    """
++    if document is None:
++        return
++    if service is None:
++        try:
++            from ui.application import get_operational_analysis_service
++            service = get_operational_analysis_service()
++        except Exception:
++            service = None
++
++    eff_max_topics = max_topics or (st.session_state.get("disc_max_topics", 10) if hasattr(st, "session_state") else 10)
++
++    prof = profile_document_for_analysis(document, service=service, analysis_type="detection")
++    prof_disc = profile_document_for_analysis(document, service=service, analysis_type="discovery", max_topics=int(eff_max_topics))
++
++    with st.expander("📊 Profilo Preventivo Dataset & Stima Inferenze", expanded=False):
++        c1, c2, c3, c4 = st.columns(4)
++        c1.metric("Messaggi Totali", f"{prof.total_messages:,}")
++        c2.metric("Evidenze Testuali", f"{prof.total_evidence_sections:,}")
++        c3.metric("Caratteri / Token Stimati", f"{prof.total_text_characters:,} / ~{prof.estimated_text_tokens:,}")
++        if prof.estimated_chunks == prof_disc.estimated_chunks:
++            c4.metric("Blocchi Previsti", f"{prof.estimated_chunks:,}")
++        else:
++            c4.metric("Blocchi Previsti", f"{prof.estimated_chunks} (Det) / {prof_disc.estimated_chunks} (Disc {eff_max_topics}t)")
++        if prof.has_multimodal_evidence:
++            st.caption("ℹ️ Il dataset include evidenze multimodali (trascrizioni audio o analisi immagini).")
++
++
++def render_backend_error_details(exc: Exception) -> None:
++    """
++    Mostra all'utente una spiegazione chiara e priva di dati sensibili per errori AI backend.
++    """
++    if isinstance(exc, AiBackendRequestError):
++        st.error(f"⚠️ {exc.safe_reason}")
++        with st.expander("🔍 Diagnostica Tecnica Sicura (Senza Dati Sensibili)", expanded=False):
++            st.write(f"- **Categoria Errore:** `{exc.error_category or 'NON_CLASSIFICATO'}`")
++            if exc.status_code:
++                st.write(f"- **Codice HTTP:** `{exc.status_code}`")
++            if exc.model_id:
++                st.write(f"- **Modello:** `{exc.model_id}`")
++            if exc.request_id:
++                st.write(f"- **Request ID:** `{exc.request_id}`")
++            if exc.prompt_tokens_estimate is not None:
++                st.write(f"- **Token Input Stimati:** `{exc.prompt_tokens_estimate}`")
++            if exc.max_tokens_requested is not None:
++                st.write(f"- **Token Output Richiesti:** `{exc.max_tokens_requested}`")
++            if exc.technical_details:
++                st.caption(f"Dettaglio backend: `{exc.technical_details}`")
++    else:
++        st.error(f"Errore di comunicazione con LM Studio: {type(exc).__name__}: {exc}")
++
+ 
+ 
+ def render_overview() -> None:
+@@ -654,6 +846,9 @@ def render_topics() -> None:
+             discovery_results=state.get_discovery_results(),
+         )
+ 
++    selected_profile = render_operational_profile_selector(doc)
++    render_pre_analysis_profile(doc)
++
+     tab_det, tab_disc = st.tabs(["Topic Detection (Verifica Mirata)", "Topic Discovery (Argomenti Emersi)"])
+ 
+     with tab_det:
+@@ -710,9 +905,10 @@ def render_topics() -> None:
+                 if q is not None:
+                     client = state.get_lm_studio_client()
+                     raw_model_choice = model_input.strip() if model_input.strip() else (state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL)
+-                    status_placeholder = st.empty()
++                    progress_placeholder = st.empty()
++                    prog_cb = create_streamlit_progress_callback(progress_placeholder, title="TOPIC DETECTION IN CORSO")
+                     try:
+-                        status_placeholder.info("Preparazione ed esecuzione analisi locale...")
++                        progress_placeholder.info("Preparazione ed esecuzione analisi locale...")
+                         with st.spinner("Analisi locale in corso..."):
+                             det_res = execute_manual_topic_detection(
+                                 document=doc,
+@@ -721,47 +917,49 @@ def render_topics() -> None:
+                                 model_id=raw_model_choice,
+                                 timeout_seconds=DEFAULT_OPERATIONAL_TIMEOUT_SECONDS,
+                                 max_tokens=DEFAULT_OPERATIONAL_MAX_TOKENS,
++                                progress_callback=prog_cb,
++                                profile=selected_profile,
+                             )
+-                        status_placeholder.empty()
++                        progress_placeholder.empty()
+                         state.add_detection_result(det_res)
+                         state.set_last_manual_detection(det_res)
+                         state.set_custom_topic_label(topic_input)
+                         state.set_custom_topic_description(desc_input)
+                         state.set_lm_studio_model(det_res.metadata.get("model", raw_model_choice))
+-                        st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
++                        d_meta_res = getattr(det_res, "metadata", {}) or {}
++                        chunk_c_res = d_meta_res.get("chunk_count", 1)
++                        comp_c_res = d_meta_res.get("completed_chunk_count", 1)
++                        fail_c_res = d_meta_res.get("failed_chunk_count", 0)
++                        det_st = d_meta_res.get("status", "SUCCESS")
++                        if det_st == "PARTIAL" or fail_c_res > 0:
++                            st.warning(f"⚠️ Topic Detection parziale (PARTIAL): {comp_c_res}/{chunk_c_res} blocchi completati (falliti: {fail_c_res}). Esito parziale: {det_res.decision.value}")
++                        else:
++                            st.success(f"Topic Detection completata! Esito: {det_res.decision.value}")
++                        if chunk_c_res > 1 and det_st != "PARTIAL":
++                            st.info(f"Diagnostica blocchi: {comp_c_res}/{chunk_c_res} completati con successo (falliti: {fail_c_res}).")
+                     except LmStudioUnavailableError:
+-                        status_placeholder.empty()
++                        progress_placeholder.empty()
+                         st.error(
+                             "LM Studio non raggiungibile su http://127.0.0.1:1234. "
+                             "Verificare che il server locale di LM Studio sia attivo."
+                         )
+-                    except AiModelNotInstalledError as ni_err:
+-                        status_placeholder.empty()
++                    except (
++                        AiModelNotInstalledError,
++                        AiModelAmbiguousError,
++                        AiModelLoadError,
++                        AiBackendTimeoutError,
++                        AiModelMismatchError,
++                        AiInvalidEvidenceCitationError,
++                        AiStructuredOutputError,
++                    ) as ni_err:
++                        progress_placeholder.empty()
+                         st.error(str(ni_err))
+-                    except AiModelAmbiguousError as amb_err:
+-                        status_placeholder.empty()
+-                        st.error(str(amb_err))
+-                    except AiModelLoadError as l_err:
+-                        status_placeholder.empty()
+-                        st.error(f"Errore durante il caricamento del modello in LM Studio: {l_err}")
+-                    except AiBackendTimeoutError as t_err:
+-                        status_placeholder.empty()
+-                        st.error(f"Timeout durante l'operazione con LM Studio: {t_err}")
+-                    except AiModelMismatchError as m_err:
+-                        status_placeholder.empty()
+-                        st.error(f"Disallineamento modello LM Studio: {m_err}")
+-                    except AiInvalidEvidenceCitationError as c_err:
+-                        status_placeholder.empty()
+-                        st.error(f"Errore citazione evidenze: {c_err}")
+-                    except AiStructuredOutputError as s_err:
+-                        status_placeholder.empty()
+-                        st.error(f"Errore schema strutturato: {s_err}")
+                     except (AiBackendRequestError, AiBackendProtocolError) as b_err:
+-                        status_placeholder.empty()
+-                        st.error(f"Errore di comunicazione con LM Studio: {b_err}")
++                        progress_placeholder.empty()
++                        render_backend_error_details(b_err)
+                     except Exception as exc:
+-                        status_placeholder.empty()
+-                        st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}")
++                        progress_placeholder.empty()
++                        st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}: {exc}")
+ 
+         # Visualizzazione del risultato per la verifica
+         last_det = state.get_last_manual_detection()
+@@ -781,16 +979,31 @@ def render_topics() -> None:
+                 with b_col:
+                     st.markdown(f"**Esito:** {badge}")
+ 
+-                if last_det.topic.description and last_det.topic.description != last_det.topic.label:
++                meta = last_det.metadata or {}
++                is_label_only = (
++                    meta.get("query_mode") == "LABEL_ONLY"
++                    or getattr(last_det.topic, "is_label_only", False)
++                    or (last_det.topic.description.strip().casefold() == last_det.topic.label.strip().casefold())
++                )
++                input_mode_str = "🏷️ Sola Label (titolo argomento)" if is_label_only else "📝 Label + Descrizione specifica"
++                origin_flow = meta.get("origin_flow", "MANUAL_DETECTION")
++                origin_flow_str = "🔬 Verifica automatica (da Topic Discovery)" if origin_flow == "DISCOVERY_VERIFICATION" else "🎯 Topic Detection manuale"
++
++                if not is_label_only and last_det.topic.description:
+                     st.markdown(f"**Descrizione Topic:** {last_det.topic.description}")
+ 
+                 st.info(f"**Motivazione AI (Rationale):** {last_det.rationale}")
+ 
+-                meta = last_det.metadata
+                 mod_name = meta.get("model", "n/a")
+                 lat = meta.get("latency_seconds")
+                 lat_str = f"{lat:.2f}s" if isinstance(lat, (int, float)) else "n/a"
+-                st.caption(f"Modello: `{mod_name}` | Latenza: `{lat_str}` | Provenance: `{last_det.provenance_document_id}`")
++                run_id_val = meta.get("run_id", "n/a")
++                chunk_c = meta.get("chunk_count", 1)
++                comp_c = meta.get("completed_chunk_count", 1)
++                fail_c = meta.get("failed_chunk_count", 0)
++
++                st.caption(f"Run ID: `{run_id_val}` | Flusso: `{origin_flow_str}` | Input: `{input_mode_str}` | Provenance: `{last_det.provenance_document_id}`")
++                st.caption(f"Modello: `{mod_name}` | Latenza: `{lat_str}` | Chunk analizzati: `{comp_c}/{chunk_c}` (falliti: {fail_c})")
+ 
+                 st.write(
+                     f"**Evidenze collegate:** {len(last_det.evidence_ids)} sezioni "
+@@ -815,6 +1028,35 @@ def render_topics() -> None:
+                                 disabled=True,
+                             )
+ 
++                # Controllo storico e correlazione inferenze precedenti per questo topic
++                doc_analysis = state.get_document_analysis_state(doc.document_id)
++                prior_runs = [
++                    r for r in doc_analysis.detection_runs
++                    if r.topic.label.strip().casefold() == last_det.topic.label.strip().casefold()
++                    and r.metadata.get("run_id") != run_id_val
++                ]
++                if prior_runs:
++                    with st.expander(f"📜 Storico inferenze per '{last_det.topic.label}' ({len(prior_runs)} precedenti in sessione)"):
++                        for p_idx, prev_r in enumerate(reversed(prior_runs), start=1):
++                            p_meta = prev_r.metadata or {}
++                            p_flow = "Discovery Verification" if p_meta.get("origin_flow") == "DISCOVERY_VERIFICATION" else "Detection Manuale"
++                            p_mode = "Sola label" if p_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
++                            st.markdown(
++                                f"- **Run #{p_idx}:** `{p_meta.get('run_id', 'n/a')}` | **Flusso:** {p_flow} | **Input:** {p_mode} | **Esito:** `{prev_r.decision.value}`"
++                            )
++
++                # Se presente una verifica da discovery con esito diverso, mostra chiarimento esplicito
++                disc_verifs = [r for r in prior_runs if r.metadata.get("origin_flow") == "DISCOVERY_VERIFICATION"]
++                if disc_verifs and origin_flow == "MANUAL_DETECTION":
++                    last_v = disc_verifs[-1]
++                    if last_v.decision != last_det.decision:
++                        st.info(
++                            f"ℹ️ **Discrepanza tra inferenze indipendenti**: Una precedente verifica da Topic Discovery (Run `{last_v.metadata.get('run_id')}`) "
++                            f"ha prodotto **{last_v.decision.value}** (utilizzando come input la descrizione estratta da Discovery), "
++                            f"mentre questa Detection manuale (Run `{run_id_val}`, input: {input_mode_str}) "
++                            f"ha prodotto **{last_det.decision.value}**. Ciascuna inferenza riflette fedelmente il proprio input e rimane immutabile."
++                        )
++
+         # ==================================================
+         # AREA 2: Filtra risultati Detection già eseguiti
+         # ==================================================
+@@ -923,30 +1165,64 @@ def render_topics() -> None:
+                 key="disc_max_topics",
+             )
+ 
++        # Stima preventiva Discovery allineata dinamicamente al numero di topic
++        try:
++            from ui.application import get_operational_analysis_service
++            disc_svc = get_operational_analysis_service()
++            plan_disc = disc_svc.create_analysis_plan(
++                document=doc,
++                analysis_type="discovery",
++                max_topics=int(max_topics_val),
++                profile=selected_profile,
++            )
++            st.caption(
++                f"ℹ️ **Piano Discovery ({int(max_topics_val)} topic):** `{plan_disc.planned_chunks_count}` blocchi previsti | "
++                f"Budget chunk effettivo: `{plan_disc.chunk_token_budget}` token | "
++                f"Riserva output: `{plan_disc.output_token_budget}` token"
++            )
++        except Exception:
++            pass
++
+         run_discovery_btn = st.button("🚀 Esegui Topic Discovery (LIVE)", type="primary", key="btn_run_live_discovery")
+ 
+         if run_discovery_btn:
+             client = state.get_lm_studio_client()
+             raw_model = disc_model_input.strip() if disc_model_input.strip() else DEFAULT_OPERATIONAL_MODEL
+-            disc_status = st.empty()
++            progress_placeholder = st.empty()
++            prog_cb = create_streamlit_progress_callback(progress_placeholder, title="TOPIC DISCOVERY IN CORSO")
+             try:
+-                disc_status.info("Preparazione LM Studio per Topic Discovery...")
++                progress_placeholder.info("Preparazione LM Studio per Topic Discovery...")
+                 with st.spinner("Scansione aperta e scoperta argomenti in corso..."):
+                     disc_res = execute_topic_discovery(
+                         document=doc,
+                         client=client,
+                         model_id=raw_model,
+                         max_topics=int(max_topics_val),
++                        progress_callback=prog_cb,
++                        profile=selected_profile,
+                     )
+-                disc_status.empty()
++                progress_placeholder.empty()
+                 state.add_discovery_result(disc_res)
+                 state.set_lm_studio_model(raw_model)
+-                st.success(f"Topic Discovery completata! Emersi {len(disc_res.topics)} argomenti.")
++                d_meta_res = getattr(disc_res, "metadata", {}) or {}
++                chunk_c_res = d_meta_res.get("chunk_count", 1)
++                comp_c_res = d_meta_res.get("completed_chunk_count", 1)
++                fail_c_res = d_meta_res.get("failed_chunk_count", 0)
++                disc_st = d_meta_res.get("status", "COMPLETE")
++                if disc_st == "PARTIAL" or fail_c_res > 0:
++                    st.warning(f"⚠️ Topic Discovery parziale (PARTIAL): {comp_c_res}/{chunk_c_res} blocchi completati (falliti: {fail_c_res}). Emersi {len(disc_res.topics)} argomenti.")
++                else:
++                    st.success(f"Topic Discovery completata! Emersi {len(disc_res.topics)} argomenti.")
++                if chunk_c_res > 1 and disc_st != "PARTIAL":
++                    st.info(f"Diagnostica blocchi: {comp_c_res}/{chunk_c_res} completati con successo (falliti: {fail_c_res}).")
+             except LmStudioUnavailableError:
+-                disc_status.empty()
++                progress_placeholder.empty()
+                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
++            except (AiBackendRequestError, AiBackendProtocolError) as b_err:
++                progress_placeholder.empty()
++                render_backend_error_details(b_err)
+             except Exception as exc:
+-                disc_status.empty()
++                progress_placeholder.empty()
+                 st.error(f"Errore durante l'esecuzione di Topic Discovery: {type(exc).__name__}: {exc}")
+ 
+         st.divider()
+@@ -972,6 +1248,13 @@ def render_topics() -> None:
+             with st.container(border=True):
+                 st.markdown(f"### 💡 {hit.label}")
+                 st.markdown(f"**Sintesi AI:** {hit.description}")
++                d_meta = hit.metadata or {}
++                d_run_id = d_meta.get("run_id", "n/a")
++                d_chunk_c = d_meta.get("chunk_count", 1)
++                d_comp_c = d_meta.get("completed_chunk_count", 1)
++                d_fail_c = d_meta.get("failed_chunk_count", 0)
++                d_prov = d_meta.get("provenance_document_id", "n/a")
++                st.caption(f"Discovery Run ID: `{d_run_id}` | Chunk analizzati: `{d_comp_c}/{d_chunk_c}` (falliti: {d_fail_c}) | Provenance: `{d_prov}`")
+                 st.write(f"**Evidenze di supporto:** {len(hit.evidence_ids)} sezioni")
+ 
+                 if hit.matched_sections:
+@@ -1013,9 +1296,10 @@ def render_topics() -> None:
+                         else:
+                             client = state.get_lm_studio_client()
+                             raw_model = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
+-                            disc_status = st.empty()
++                            progress_placeholder = st.empty()
++                            prog_cb = create_streamlit_progress_callback(progress_placeholder, title="VERIFICA PROVA DEL NOVE IN CORSO")
+                             try:
+-                                disc_status.info("Preparazione seconda inferenza indipendente...")
++                                progress_placeholder.info("Preparazione seconda inferenza indipendente...")
+                                 with st.spinner("Seconda inferenza indipendente (Prova del Nove) in corso..."):
+                                     det_res, consistency_res = execute_discovery_verification(
+                                         document=doc,
+@@ -1023,8 +1307,10 @@ def render_topics() -> None:
+                                         discovery_run_id=hit.metadata.get("run_id"),
+                                         client=client,
+                                         model_id=raw_model,
++                                        progress_callback=prog_cb,
++                                        profile=selected_profile,
+                                     )
+-                                disc_status.empty()
++                                progress_placeholder.empty()
+                                 state.add_detection_result(det_res)
+                                 state.add_consistency_result(consistency_res)
+                                 state.set_last_manual_detection(det_res)
+@@ -1041,14 +1327,22 @@ def render_topics() -> None:
+                                 else:
+                                     st.warning(f"⚠️ INCERTO: Topic '{hit.label}' valutato UNCERTAIN in Topic Detection")
+                             except LmStudioUnavailableError:
+-                                disc_status.empty()
++                                progress_placeholder.empty()
+                                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
++                            except (AiBackendRequestError, AiBackendProtocolError) as b_err:
++                                progress_placeholder.empty()
++                                render_backend_error_details(b_err)
+                             except Exception as exc:
+-                                disc_status.empty()
++                                progress_placeholder.empty()
+                                 st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}: {exc}")
+ 
+                 # Visualizzazione dell'esito di verifica e consistency
+-                cons_list = [c for c in state.get_consistency_results(doc.document_id) if c.topic_label == hit.label]
++                target_run_id = hit.metadata.get("run_id")
++                cons_list = [
++                    c for c in state.get_consistency_results(doc.document_id)
++                    if c.topic_label.strip().casefold() == hit.label.strip().casefold()
++                    and (target_run_id is None or c.metadata.get("discovery_run_id") == target_run_id or c.metadata.get("discovery_run_id") is None)
++                ]
+                 if cons_list:
+                     latest_cons = cons_list[-1]
+                     with st.container(border=True):
+@@ -1078,6 +1372,24 @@ def render_topics() -> None:
+                         overlap_str = ", ".join(latest_cons.overlap_evidence_ids) if latest_cons.overlap_evidence_ids else "Nessuna evidenza in comune"
+                         st.caption(f"Evidenze condivise in overlap: `{overlap_str}`")
+ 
++                # Controllo correlazione se esiste una detection manuale separata per questo topic
++                doc_analysis = state.get_document_analysis_state(doc.document_id)
++                manual_dets = [
++                    r for r in doc_analysis.detection_runs
++                    if r.topic.label.strip().casefold() == hit.label.strip().casefold()
++                    and r.metadata.get("origin_flow") == "MANUAL_DETECTION"
++                ]
++                if manual_dets:
++                    latest_m = manual_dets[-1]
++                    m_meta = latest_m.metadata or {}
++                    m_mode = "Sola label" if m_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
++                    st.info(
++                        f"📌 **Nota di correlazione indipendente**: Nella sessione esiste anche una Detection manuale per '{hit.label}' "
++                        f"(Run `{m_meta.get('run_id')}`, input: {m_mode}) con esito **{latest_m.decision.value}**. "
++                        f"La verifica sopra visualizzata è ancorata unicamente alla specifica Discovery (Run `{target_run_id}`) "
++                        f"e non viene alterata da nuove inferenze indipendenti."
++                    )
++
+         # Sezione opzionale di riferimento per la modalità DEMO
+         if state.get_dataset_mode() == DatasetMode.DEMO:
+             ref_discoveries = state.get_demo_reference_discovery_results()
+diff --git a/ui/state.py b/ui/state.py
+index 5a8d467..a84c260 100644
+--- a/ui/state.py
++++ b/ui/state.py
+@@ -27,7 +27,7 @@ from ai.models import (
+     TopicDetectionResult,
+     TopicDiscoveryResult,
+ )
+-from analysis.models import ConsistencyResult, DocumentAnalysisState
++from analysis.models import ConsistencyResult, DocumentAnalysisState, OperationalProfile
+ from search.index import EvidenceIndex
+ from search.service import SearchService
+ from ui.demo import build_synthetic_demo_dataset
+@@ -62,6 +62,8 @@ KEY_SEARCH_SERVICE = "search_service"
+ KEY_MEDIA_REGISTRIES_BY_DOCUMENT = "media_registries_by_document"
+ KEY_DISCOVERY_RUN_STORE_BY_DOCUMENT = "discovery_run_store_by_document"
+ KEY_AUTHORITATIVE_LIVE_RUN_IDS = "authoritative_live_run_ids"
++KEY_OPERATIONAL_PROFILE = "operational_profile"
++KEY_CHECKPOINT_STORE = "checkpoint_store"
+ 
+ 
+ class _SessionStateAdapter:
+@@ -147,6 +149,10 @@ def init_session_state(state: MutableMapping[str, Any] | None = None) -> None:
+         target[KEY_DISCOVERY_RUN_STORE_BY_DOCUMENT] = {}
+     if KEY_AUTHORITATIVE_LIVE_RUN_IDS not in target:
+         target[KEY_AUTHORITATIVE_LIVE_RUN_IDS] = set()
++    if KEY_OPERATIONAL_PROFILE not in target:
++        target[KEY_OPERATIONAL_PROFILE] = OperationalProfile.BALANCED.value
++    if KEY_CHECKPOINT_STORE not in target:
++        target[KEY_CHECKPOINT_STORE] = None
+ 
+ 
+ def is_dataset_loaded(state: MutableMapping[str, Any] | None = None) -> bool:
+@@ -792,3 +798,45 @@ def get_consistency_results(
+     if target_id in analysis_map:
+         return analysis_map[target_id].consistency_results
+     return ()
++
++
++def get_operational_profile(
++    state: MutableMapping[str, Any] | None = None,
++) -> OperationalProfile:
++    """Restituisce il profilo operativo configurato nella sessione (default: BALANCED)."""
++    target = _get_target_state(state)
++    val = target.get(KEY_OPERATIONAL_PROFILE, OperationalProfile.BALANCED.value)
++    if isinstance(val, OperationalProfile):
++        return val
++    try:
++        return OperationalProfile(str(val).upper())
++    except Exception:
++        return OperationalProfile.BALANCED
++
++
++def set_operational_profile(
++    profile: OperationalProfile | str,
++    state: MutableMapping[str, Any] | None = None,
++) -> None:
++    """Imposta il profilo operativo nella sessione Streamlit."""
++    target = _get_target_state(state)
++    val = profile.value if isinstance(profile, OperationalProfile) else str(profile).upper()
++    target[KEY_OPERATIONAL_PROFILE] = val
++
++
++def get_checkpoint_store(
++    state: MutableMapping[str, Any] | None = None,
++) -> Any:
++    """Restituisce l'AnalysisCheckpointStore della sessione Streamlit."""
++    target = _get_target_state(state)
++    return target.get(KEY_CHECKPOINT_STORE)
++
++
++def set_checkpoint_store(
++    store: Any,
++    state: MutableMapping[str, Any] | None = None,
++) -> None:
++    """Imposta l'AnalysisCheckpointStore della sessione Streamlit."""
++    target = _get_target_state(state)
++    target[KEY_CHECKPOINT_STORE] = store
++
+
+diff --git a/scripts/generate_sqlite_legacy_hardening_patch_utf8.py b/scripts/generate_sqlite_legacy_hardening_patch_utf8.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/generate_sqlite_legacy_hardening_patch_utf8.py
+@@ -0,0 +1,48 @@
++"""
++scripts/generate_sqlite_legacy_hardening_patch_utf8.py
++------------------------------------------------------
++Genera la patch Git UTF-8 completa (git_diff_sqlite_legacy_hardening.patch)
++delle modifiche per la release di hardening finale della riconciliazione SQLite / JSON legacy.
++"""
++from __future__ import annotations
++
++import subprocess
++from pathlib import Path
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    patch_path = root / "git_diff_sqlite_legacy_hardening.patch"
++
++    # 1. Tracked changes vs HEAD
++    cmd = ["git", "diff", "HEAD"]
++    res = subprocess.run(cmd, cwd=root, capture_output=True, text=True, encoding="utf-8", errors="replace")
++    diff_text = res.stdout
++
++    # 2. Add relevant new files as unified diffs
++    untracked_files = [
++        "scripts/generate_sqlite_legacy_hardening_patch_utf8.py",
++        "scripts/package_sqlite_legacy_hardening_zip.py",
++    ]
++
++    for rel_path in untracked_files:
++        p = root / rel_path
++        if p.exists():
++            content = p.read_text(encoding="utf-8", errors="replace")
++            lines = content.splitlines(keepends=True)
++            diff_text += f"\ndiff --git a/{rel_path} b/{rel_path}\n"
++            diff_text += f"new file mode 100644\n"
++            diff_text += f"--- /dev/null\n"
++            diff_text += f"+++ b/{rel_path}\n"
++            diff_text += f"@@ -0,0 +1,{len(lines)} @@\n"
++            for line in lines:
++                diff_text += f"+{line}"
++            if lines and not lines[-1].endswith("\n"):
++                diff_text += "\n\\ No newline at end of file\n"
++
++    patch_path.write_text(diff_text, encoding="utf-8")
++    print(f"Patch salvata con successo in: {patch_path} ({len(diff_text):,} caratteri)")
++
++
++if __name__ == "__main__":
++    main()
+
+diff --git a/scripts/package_sqlite_legacy_hardening_zip.py b/scripts/package_sqlite_legacy_hardening_zip.py
+new file mode 100644
+--- /dev/null
++++ b/scripts/package_sqlite_legacy_hardening_zip.py
+@@ -0,0 +1,177 @@
++"""
++scripts/package_sqlite_legacy_hardening_zip.py
++----------------------------------------------
++Costruisce il pacchetto di release finale conforme all'audit:
++chatAnalysis_sqlite_legacy_reconciliation_hardening_audit_20261015.zip
++
++Include:
++- Repository sorgente completo aggiornato
++- Wheel aggiornata (in dist/)
++- Test unitari e di integrazione (inclusi i 29 test in test_checkpoint_integrity_scalability.py)
++- Log integrali (pytest_and_apptest.log)
++- Benchmark quantitativo SQLite vs JSON (benchmark_checkpoint_persistence_results.json)
++- Report tecnico completo (CHATANALYSIS_SQLITE_LEGACY_HARDENING_REPORT.md)
++- Git diff UTF-8 (git_diff_sqlite_legacy_hardening.patch)
++- Stato Git e Baseline (GIT_STATUS_AND_BASELINE.md)
++- Manifest SHA256 (MANIFEST_SHA256.txt)
++- Tre file scientifici congelati verificati (benchmark_frozen_sha256.txt)
++"""
++from __future__ import annotations
++
++import hashlib
++import os
++from pathlib import Path
++import shutil
++import zipfile
++
++ZIP_NAME = "chatAnalysis_sqlite_legacy_reconciliation_hardening_audit_20261015.zip"
++
++EXCLUDE_DIRS = {
++    ".git",
++    ".venv",
++    ".pytest_cache",
++    "__pycache__",
++    ".mypy_cache",
++    ".ruff_cache",
++    ".idea",
++    ".vscode",
++    "build",
++    ".checkpoints",
++}
++
++EXCLUDE_EXTENSIONS = {
++    ".pyc",
++    ".pyo",
++    ".pyd",
++}
++
++INCLUDE_ROOT_FILES = [
++    "pyproject.toml",
++    "README.md",
++    "app.py",
++    "run_benchmark.sh",
++    "benchmark_frozen_sha256.txt",
++    "pytest_and_apptest.log",
++    "benchmark_checkpoint_persistence_results.json",
++    "git_diff_sqlite_legacy_hardening.patch",
++    "CHATANALYSIS_SQLITE_LEGACY_HARDENING_REPORT.md",
++    "GIT_STATUS_AND_BASELINE.md",
++]
++
++INCLUDE_DIRS = [
++    "ai",
++    "analysis",
++    "core",
++    "entity_resolution",
++    "importer",
++    "multimodal",
++    "normalization",
++    "profiler",
++    "search",
++    "ui",
++    "unified",
++    "validation",
++    "tests",
++    "test_data",
++    "docs",
++    "scripts",
++    "dist",
++]
++
++
++def sha256_of_file(filepath: str) -> str:
++    h = hashlib.sha256()
++    with open(filepath, "rb") as f:
++        while chunk := f.read(65536):
++            h.update(chunk)
++    return h.hexdigest().upper()
++
++
++def collect_files() -> list[str]:
++    file_list = []
++
++    # Root files
++    for rf in INCLUDE_ROOT_FILES:
++        if os.path.isfile(rf):
++            file_list.append(rf)
++
++    # Directory trees
++    for d in INCLUDE_DIRS:
++        if not os.path.isdir(d):
++            continue
++        for root, dirs, files in os.walk(d):
++            dirs[:] = [sub for sub in dirs if sub not in EXCLUDE_DIRS and not sub.startswith("temp_dist_check")]
++            for file in files:
++                ext = os.path.splitext(file)[1].lower()
++                if ext in EXCLUDE_EXTENSIONS:
++                    continue
++                if file.endswith(".zip"):
++                    continue
++                rel_path = os.path.relpath(os.path.join(root, file), ".").replace("\\", "/")
++                file_list.append(rel_path)
++
++    # Rimuovi duplicati preservando l'ordine
++    seen = set()
++    unique_list = []
++    for f in sorted(file_list):
++        norm = f.replace("\\", "/")
++        if norm not in seen:
++            seen.add(norm)
++            unique_list.append(norm)
++
++    return unique_list
++
++
++def main():
++    root = Path(__file__).resolve().parents[1]
++    os.chdir(root)
++
++    # Pulizia preliminare .checkpoints e directory temporanee
++    shutil.rmtree(root / ".checkpoints", ignore_errors=True)
++    shutil.rmtree(root / "build", ignore_errors=True)
++    for tmp_p in root.glob("temp_dist_check*"):
++        shutil.rmtree(tmp_p, ignore_errors=True)
++
++    print(f"Raccolta file per il pacchetto: {ZIP_NAME}...")
++    files = collect_files()
++    print(f"File totali selezionati per il pacchetto: {len(files)}")
++
++    # 1. Genera MANIFEST_SHA256.txt
++    manifest_path = "MANIFEST_SHA256.txt"
++    manifest_entries = []
++    for f in files:
++        digest = sha256_of_file(f)
++        manifest_entries.append(f"{digest} *{f}")
++
++    with open(manifest_path, "w", encoding="utf-8") as mf:
++        mf.write("\n".join(manifest_entries) + "\n")
++    print(f"Manifest SHA256 scritto con successo ({len(manifest_entries)} voci).")
++
++    # Includi il manifest stesso
++    all_files_to_pack = files + [manifest_path]
++
++    # 2. Crea archivio ZIP
++    zip_path = root / ZIP_NAME
++    if zip_path.exists():
++        zip_path.unlink()
++
++    with zipfile.ZipFile(zip_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
++        for f in all_files_to_pack:
++            zf.write(f, arcname=f)
++
++    zip_size_mb = zip_path.stat().st_size / (1024 * 1024)
++    print(f"\nArchivio creato con successo: {zip_path.name}")
++    print(f"Dimensione archivio: {zip_size_mb:.2f} MB")
++    print(f"Numero totale file inclusi: {len(all_files_to_pack)}")
++
++    # 3. Verifica rapida integrita ZIP
++    with zipfile.ZipFile(zip_path, "r") as zf:
++        bad_file = zf.testzip()
++        if bad_file:
++            raise RuntimeError(f"Errore di integrità CRC nello ZIP: {bad_file}")
++        namelist = zf.namelist()
++        print(f"Verifica CRC ZIP: OK ({len(namelist)} file verificati)")
++
++
++if __name__ == "__main__":
++    main()

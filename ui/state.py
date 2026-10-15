@@ -27,7 +27,7 @@ from ai.models import (
     TopicDetectionResult,
     TopicDiscoveryResult,
 )
-from analysis.models import ConsistencyResult, DocumentAnalysisState
+from analysis.models import ConsistencyResult, DocumentAnalysisState, OperationalProfile
 from search.index import EvidenceIndex
 from search.service import SearchService
 from ui.demo import build_synthetic_demo_dataset
@@ -62,6 +62,8 @@ KEY_SEARCH_SERVICE = "search_service"
 KEY_MEDIA_REGISTRIES_BY_DOCUMENT = "media_registries_by_document"
 KEY_DISCOVERY_RUN_STORE_BY_DOCUMENT = "discovery_run_store_by_document"
 KEY_AUTHORITATIVE_LIVE_RUN_IDS = "authoritative_live_run_ids"
+KEY_OPERATIONAL_PROFILE = "operational_profile"
+KEY_CHECKPOINT_STORE = "checkpoint_store"
 
 
 class _SessionStateAdapter:
@@ -147,6 +149,10 @@ def init_session_state(state: MutableMapping[str, Any] | None = None) -> None:
         target[KEY_DISCOVERY_RUN_STORE_BY_DOCUMENT] = {}
     if KEY_AUTHORITATIVE_LIVE_RUN_IDS not in target:
         target[KEY_AUTHORITATIVE_LIVE_RUN_IDS] = set()
+    if KEY_OPERATIONAL_PROFILE not in target:
+        target[KEY_OPERATIONAL_PROFILE] = OperationalProfile.BALANCED.value
+    if KEY_CHECKPOINT_STORE not in target:
+        target[KEY_CHECKPOINT_STORE] = None
 
 
 def is_dataset_loaded(state: MutableMapping[str, Any] | None = None) -> bool:
@@ -792,3 +798,45 @@ def get_consistency_results(
     if target_id in analysis_map:
         return analysis_map[target_id].consistency_results
     return ()
+
+
+def get_operational_profile(
+    state: MutableMapping[str, Any] | None = None,
+) -> OperationalProfile:
+    """Restituisce il profilo operativo configurato nella sessione (default: BALANCED)."""
+    target = _get_target_state(state)
+    val = target.get(KEY_OPERATIONAL_PROFILE, OperationalProfile.BALANCED.value)
+    if isinstance(val, OperationalProfile):
+        return val
+    try:
+        return OperationalProfile(str(val).upper())
+    except Exception:
+        return OperationalProfile.BALANCED
+
+
+def set_operational_profile(
+    profile: OperationalProfile | str,
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Imposta il profilo operativo nella sessione Streamlit."""
+    target = _get_target_state(state)
+    val = profile.value if isinstance(profile, OperationalProfile) else str(profile).upper()
+    target[KEY_OPERATIONAL_PROFILE] = val
+
+
+def get_checkpoint_store(
+    state: MutableMapping[str, Any] | None = None,
+) -> Any:
+    """Restituisce l'AnalysisCheckpointStore della sessione Streamlit."""
+    target = _get_target_state(state)
+    return target.get(KEY_CHECKPOINT_STORE)
+
+
+def set_checkpoint_store(
+    store: Any,
+    state: MutableMapping[str, Any] | None = None,
+) -> None:
+    """Imposta l'AnalysisCheckpointStore della sessione Streamlit."""
+    target = _get_target_state(state)
+    target[KEY_CHECKPOINT_STORE] = store
+

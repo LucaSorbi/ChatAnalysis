@@ -106,7 +106,33 @@ class AiBackendProtocolError(AiBackendError):
 
 
 class AiBackendRequestError(AiBackendError):
-    """Sollevata per errori di richiesta HTTP (es. codici di stato 4xx o 5xx restituiti dal backend)."""
+    """
+    Sollevata per errori di richiesta HTTP (es. codici di stato 4xx o 5xx restituiti dal backend).
+    Include categorizzazione sicura per prevenire leak di dati sensibili nei log forensi.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        status_code: int | None = None,
+        error_category: str = "UNCLASSIFIED_HTTP_ERROR",
+        safe_reason: str | None = None,
+        technical_details: str = "",
+        model_id: str | None = None,
+        request_id: str | None = None,
+        prompt_tokens_estimate: int | None = None,
+        max_tokens_requested: int | None = None,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.error_category = error_category
+        self.safe_reason = safe_reason or message
+        self.technical_details = technical_details
+        self.model_id = model_id
+        self.request_id = request_id
+        self.prompt_tokens_estimate = prompt_tokens_estimate
+        self.max_tokens_requested = max_tokens_requested
+
 class AiModelAmbiguousError(AiModelNotSpecifiedError):
     """Sollevata quando più varianti compatibili del modello sono installate senza selezione univoca."""
     pass
