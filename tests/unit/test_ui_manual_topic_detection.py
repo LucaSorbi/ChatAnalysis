@@ -53,6 +53,18 @@ from ui.models import (
 )
 
 
+@pytest.fixture(autouse=True)
+def clean_checkpoints():
+    chk_dir = Path(".checkpoints")
+    if chk_dir.exists():
+        import shutil
+        shutil.rmtree(chk_dir, ignore_errors=True)
+    yield
+    if chk_dir.exists():
+        import shutil
+        shutil.rmtree(chk_dir, ignore_errors=True)
+
+
 class MockLlmClient(BaseLlmClient):
     """Client di test per simulare risposte deterministiche di LM Studio."""
 

@@ -548,6 +548,7 @@ def execute_topic_discovery(
     profile: Any = None,
     checkpoint_store: Any = None,
     enable_checkpointing: bool = True,
+    retry_failed_only: bool = False,
 ) -> TopicDiscoveryResult:
     """
     Esegue Topic Discovery LIVE sulla conversazione corrente tramite LocalTopicAnalysisService.
@@ -574,6 +575,7 @@ def execute_topic_discovery(
         seed=seed,
         preserve_raw_response=preserve_raw_response,
         progress_callback=progress_callback,
+        retry_failed_only=retry_failed_only,
     )
     # Aggiorna lo stato scoped del documento per persistenza di sessione
     try:

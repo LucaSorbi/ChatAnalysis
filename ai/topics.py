@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import Any, Mapping
 
 from ai.backend import (
+    AiInvalidEvidenceCitationError,
     AiModelMismatchError,
     AiStructuredOutputError,
     AnalysisInputTooLargeError,
@@ -451,6 +452,70 @@ OUTPUT RULES:
                 )
                 last_error = None
                 break
+            except AiInvalidEvidenceCitationError as cite_err:
+                last_error = cite_err
+                if attempt + 1 < max_attempts and is_op:
+                    correction_msg = (
+                        "CORRECTION DIRECTIVE: In your previous response, you cited invalid or hallucinated evidence_id values. "
+                        "Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in the evidence block provided above. "
+                        "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
+                        "Re-evaluate the topics and return the corrected JSON matching the schema."
+                    )
+                    # Candidato A: Retry contestuale con cronologia assistente
+                    candidate_msgs = list(messages)
+                    if response and getattr(response, "content", None):
+                        candidate_msgs.append({"role": "assistant", "content": response.content})
+                    candidate_msgs.append({"role": "user", "content": correction_msg})
+
+                    # Ricalcolo preventivo del budget token input
+                    reserved_out = max(256, min(current_max_tokens or 1024, current_topics * 120 + 256))
+                    cand_plan = calculate_token_budget_plan(
+                        context_length=context_length,
+                        messages=candidate_msgs,
+                        reserved_output_tokens=reserved_out,
+                        schema=TOPIC_DISCOVERY_SCHEMA,
+                    )
+
+                    if cand_plan.fits_in_context and cand_plan.available_headroom >= 256:
+                        messages = candidate_msgs
+                        input_est = cand_plan.estimated_input_tokens
+                        current_max_tokens = min(current_max_tokens or 1024, cand_plan.available_headroom)
+                    else:
+                        # Candidato B: Strategia alternativa compatta (single-turn) per prevenire context overflow / HTTP 400
+                        orig_user_content = messages[1].get("content", "") if len(messages) > 1 else ""
+                        compact_msgs = [
+                            messages[0],
+                            {
+                                "role": "user",
+                                "content": f"{orig_user_content}\n\n[DIRETTIVA CORRETTIVA DI PRECISIONE FORENSE]\n{correction_msg}",
+                            },
+                        ]
+                        compact_plan = calculate_token_budget_plan(
+                            context_length=context_length,
+                            messages=compact_msgs,
+                            reserved_output_tokens=reserved_out,
+                            schema=TOPIC_DISCOVERY_SCHEMA,
+                        )
+                        if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
+                            messages = compact_msgs
+                            input_est = compact_plan.estimated_input_tokens
+                            current_max_tokens = min(current_max_tokens or 1024, compact_plan.available_headroom)
+                        else:
+                            # Neppure la strategia compatta rientra nella finestra di contesto:
+                            # solleva AnalysisInputTooLargeError per evitare un HTTP 400 da LM Studio
+                            raise AnalysisInputTooLargeError(
+                                f"Impossibile eseguire il retry correttivo per citazioni: "
+                                f"il prompt con correzione richiede {compact_plan.estimated_input_tokens} token "
+                                f"a fronte di un context_length di {context_length}. Blocco fallito per context overflow."
+                            )
+
+                    if on_retry_callback:
+                        try:
+                            on_retry_callback(attempt + 1, "invalid_evidence_citation")
+                        except Exception:
+                            pass
+                    continue
+                raise
             except AiStructuredOutputError as parse_err:
                 last_error = parse_err
                 err_msg = str(parse_err)
@@ -499,6 +564,8 @@ OUTPUT RULES:
             "temperature": temperature,
             "seed": seed,
             "retries": attempt_used,
+            "finish_reason": finish_reason,
+            "http_status": 200,
             "operational_mode": is_op,
         }
 

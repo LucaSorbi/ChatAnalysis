@@ -323,14 +323,346 @@ class TopicAnalysisRunMetadata:
         return d
 
 
-@dataclass(frozen=True)
-class DiscoveryChunkOutcome:
-    """Esito dell'esecuzione di Topic Discovery su un singolo chunk."""
+class ChunkLifecycleStatus(str, Enum):
+    """Stati del ciclo di vita per singolo blocco di analisi tematica."""
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCESS = "SUCCESS"
+    FAILED = "FAILED"
+    RECOVERED_FROM_CHECKPOINT = "RECOVERED_FROM_CHECKPOINT"
+
+
+class ChunkDiagnosticCategory(str, Enum):
+    """
+    Categorie diagnostiche standardizzate per i fallimenti di chunk (Sezione 8).
+    Codici stabili e comprensibili conformi all'audit.
+    """
+    HTTP_CONTEXT_OVERFLOW = "HTTP_CONTEXT_OVERFLOW"
+    HTTP_INVALID_PARAMETERS = "HTTP_INVALID_PARAMETERS"
+    HTTP_SCHEMA_REJECTED = "HTTP_SCHEMA_REJECTED"
+    TIMEOUT = "TIMEOUT"
+    JSON_DECODE_ERROR = "JSON_DECODE_ERROR"
+    OUTPUT_TRUNCATED = "OUTPUT_TRUNCATED"
+    SCHEMA_VALIDATION_ERROR = "SCHEMA_VALIDATION_ERROR"
+    INVALID_EVIDENCE_ID = "INVALID_EVIDENCE_ID"
+    DUPLICATE_EVIDENCE_ID = "DUPLICATE_EVIDENCE_ID"
+    EMPTY_EVIDENCE = "EMPTY_EVIDENCE"
+    EXCESS_TOPICS = "EXCESS_TOPICS"
+    PROVENANCE_MISMATCH = "PROVENANCE_MISMATCH"
+    CHECKPOINT_SAVE_ERROR = "CHECKPOINT_SAVE_ERROR"
+    MODEL_MISMATCH = "MODEL_MISMATCH"
+    INTERNAL_VALIDATION_ERROR = "INTERNAL_VALIDATION_ERROR"
+    UNKNOWN_ERROR = "UNKNOWN_ERROR"
+    NONE = "NONE"
+
+
+@dataclass
+class ChunkDiagnosticRecord:
+    """
+    Tracciamento diagnostico persistente e sicuro per singolo blocco di analisi (Sezione 8).
+    Non contiene il testo delle conversazioni né dati investigativi sensibili.
+    """
+    chunk_index: int
     chunk_id: str
-    status: str  # "SUCCESS" | "FAILED"
+    run_id: str = ""
+    status: str = ChunkLifecycleStatus.PENDING.value
+    attempts: int = 1
+    duration_seconds: float = 0.0
+    model: str = ""
+    model_id: str | None = None
+    http_status: int | None = None
+    finish_reason: str | None = None
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    exception_class: str | None = None
+    error_type: str | None = None
+    diagnostic_category: str = ChunkDiagnosticCategory.NONE.value
+    failure_phase: str = "completed"  # inference, json_parsing, schema_validation, evidence_validation, checkpoint_save, completed, recovered
+    json_validation_ok: bool | None = None
+    json_valid: bool | None = None
+    schema_validation_ok: bool | None = None
+    schema_valid: bool | None = None
+    evidence_validation_ok: bool | None = None
+    evidence_valid: bool | None = None
+    checkpoint_save_ok: bool | None = None
+    checkpoint_saved: bool | None = None
+    details: str | None = None
+    error_detail: str | None = None
+    request_correlation_id: str | None = None
+    timestamp: str | None = None
+
+    def __post_init__(self) -> None:
+        if not self.model and self.model_id:
+            self.model = self.model_id
+        elif not self.model_id and self.model:
+            self.model_id = self.model
+
+        if not self.exception_class and self.error_type:
+            self.exception_class = self.error_type
+        elif not self.error_type and self.exception_class:
+            self.error_type = self.exception_class
+
+        if not self.details and self.error_detail:
+            self.details = self.error_detail
+        elif not self.error_detail and self.details:
+            self.error_detail = self.details
+
+        if self.json_validation_ok is None and self.json_valid is not None:
+            self.json_validation_ok = self.json_valid
+        elif self.json_valid is None and self.json_validation_ok is not None:
+            self.json_valid = self.json_validation_ok
+
+        if self.schema_validation_ok is None and self.schema_valid is not None:
+            self.schema_validation_ok = self.schema_valid
+        elif self.schema_valid is None and self.schema_validation_ok is not None:
+            self.schema_valid = self.schema_validation_ok
+
+        if self.evidence_validation_ok is None and self.evidence_valid is not None:
+            self.evidence_validation_ok = self.evidence_valid
+        elif self.evidence_valid is None and self.evidence_validation_ok is not None:
+            self.evidence_valid = self.evidence_validation_ok
+
+        if self.checkpoint_save_ok is None and self.checkpoint_saved is not None:
+            self.checkpoint_save_ok = self.checkpoint_saved
+        elif self.checkpoint_saved is None and self.checkpoint_save_ok is not None:
+            self.checkpoint_saved = self.checkpoint_save_ok
+
+    def to_dict(self) -> dict[str, Any]:
+        return {
+            "chunk_index": self.chunk_index,
+            "chunk_id": self.chunk_id,
+            "run_id": self.run_id,
+            "status": self.status,
+            "attempts": self.attempts,
+            "duration_seconds": self.duration_seconds,
+            "model": self.model,
+            "model_id": self.model,
+            "http_status": self.http_status,
+            "finish_reason": self.finish_reason,
+            "prompt_tokens": self.prompt_tokens,
+            "completion_tokens": self.completion_tokens,
+            "total_tokens": self.total_tokens,
+            "exception_class": self.exception_class,
+            "error_type": self.exception_class,
+            "diagnostic_category": self.diagnostic_category,
+            "failure_phase": self.failure_phase,
+            "json_validation_ok": self.json_validation_ok,
+            "json_valid": self.json_validation_ok,
+            "schema_validation_ok": self.schema_validation_ok,
+            "schema_valid": self.schema_validation_ok,
+            "evidence_validation_ok": self.evidence_validation_ok,
+            "evidence_valid": self.evidence_validation_ok,
+            "checkpoint_save_ok": self.checkpoint_save_ok,
+            "checkpoint_saved": self.checkpoint_save_ok,
+            "details": self.details,
+            "error_detail": self.details,
+            "request_correlation_id": self.request_correlation_id,
+            "timestamp": self.timestamp,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> ChunkDiagnosticRecord:
+        return cls(
+            chunk_index=int(data.get("chunk_index", 0)),
+            chunk_id=str(data.get("chunk_id", "")),
+            run_id=str(data.get("run_id", "")),
+            status=str(data.get("status", ChunkLifecycleStatus.PENDING.value)),
+            attempts=int(data.get("attempts", 1)),
+            duration_seconds=float(data.get("duration_seconds", 0.0)),
+            model=str(data.get("model") or data.get("model_id") or ""),
+            http_status=data.get("http_status"),
+            finish_reason=data.get("finish_reason"),
+            prompt_tokens=data.get("prompt_tokens"),
+            completion_tokens=data.get("completion_tokens"),
+            total_tokens=data.get("total_tokens"),
+            exception_class=data.get("exception_class") or data.get("error_type"),
+            diagnostic_category=str(data.get("diagnostic_category", ChunkDiagnosticCategory.NONE.value)),
+            failure_phase=str(data.get("failure_phase", "completed")),
+            json_validation_ok=data.get("json_validation_ok") if "json_validation_ok" in data else data.get("json_valid"),
+            schema_validation_ok=data.get("schema_validation_ok") if "schema_validation_ok" in data else data.get("schema_valid"),
+            evidence_validation_ok=data.get("evidence_validation_ok") if "evidence_validation_ok" in data else data.get("evidence_valid"),
+            checkpoint_save_ok=data.get("checkpoint_save_ok") if "checkpoint_save_ok" in data else data.get("checkpoint_saved"),
+            details=data.get("details") or data.get("error_detail"),
+            request_correlation_id=data.get("request_correlation_id"),
+            timestamp=data.get("timestamp"),
+        )
+
+
+@dataclass
+class DiscoveryChunkOutcome:
+    """Esito dell'esecuzione di Topic Discovery su un singolo chunk con tracciamento diagnostico."""
+    chunk_id: str
+    status: str  # "SUCCESS" | "FAILED" | "RECOVERED_FROM_CHECKPOINT"
     result: TopicDiscoveryResult | None = None
     error_type: str | None = None
     safe_error_code: str | None = None
+    chunk_index: int = 0
+    diagnostic_record: ChunkDiagnosticRecord | None = None
+    diagnostic: ChunkDiagnosticRecord | None = None
+    attempts: int = 1
+    duration_seconds: float = 0.0
+    evidence_ids: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        if self.diagnostic_record is None and self.diagnostic is not None:
+            self.diagnostic_record = self.diagnostic
+        elif self.diagnostic is None and self.diagnostic_record is not None:
+            self.diagnostic = self.diagnostic_record
+
+    def to_dict(self) -> dict[str, Any]:
+        diag = self.diagnostic_record or self.diagnostic
+        return {
+            "chunk_id": self.chunk_id,
+            "chunk_index": self.chunk_index,
+            "status": self.status,
+            "error_type": self.error_type,
+            "safe_error_code": self.safe_error_code,
+            "attempts": self.attempts,
+            "duration_seconds": self.duration_seconds,
+            "evidence_ids": list(self.evidence_ids),
+            "diagnostic_record": diag.to_dict() if diag else None,
+            "diagnostic": diag.to_dict() if diag else None,
+        }
+
+
+def classify_discovery_exception(
+    exc: Exception,
+    http_status: int | None = None,
+    finish_reason: str | None = None,
+) -> tuple[str, str, str]:
+    """
+    Classifica deterministicamente un'eccezione insorta durante Topic Discovery
+    in una delle categorie standard richieste dall'audit (Sezione 8), individuando la fase
+    esatta e producendo una descrizione sicura priva di dati personali o chat text.
+
+    Restituisce: (diagnostic_category, failure_phase, safe_details).
+    """
+    from ai.backend import (
+        AiBackendRequestError,
+        AiBackendTimeoutError,
+        AiInvalidEvidenceCitationError,
+        AiModelMismatchError,
+        AiStructuredOutputError,
+        AnalysisInputTooLargeError,
+    )
+
+    if isinstance(exc, AiInvalidEvidenceCitationError):
+        return (
+            ChunkDiagnosticCategory.INVALID_EVIDENCE_ID.value,
+            "evidence_validation",
+            "Citazione di evidence_id inesistente o estraneo al blocco corrente",
+        )
+
+    if isinstance(exc, AiStructuredOutputError):
+        msg = str(exc).lower()
+        if "duplicat" in msg:
+            return (
+                ChunkDiagnosticCategory.DUPLICATE_EVIDENCE_ID.value,
+                "evidence_validation",
+                "Presenza di evidence_ids duplicati all'interno di un argomento",
+            )
+        if "almeno un evidence_id" in msg or "vuota" in msg:
+            return (
+                ChunkDiagnosticCategory.EMPTY_EVIDENCE.value,
+                "evidence_validation",
+                "Argomento scoperto privo di evidence_ids validi di supporto",
+            )
+        if "superando il limite" in msg or "limite consentito" in msg:
+            return (
+                ChunkDiagnosticCategory.EXCESS_TOPICS.value,
+                "schema_validation",
+                "Numero di argomenti generati superiore al limite consentito",
+            )
+        if (
+            "jsondecodeerror" in msg
+            or "unterminated string" in msg
+            or "non conforme a json" in msg
+            or "oggetto json" in msg
+        ):
+            return (
+                ChunkDiagnosticCategory.JSON_DECODE_ERROR.value,
+                "json_parsing",
+                "Sintassi JSON non valida o testo di risposta malformato",
+            )
+        if "length" in msg or finish_reason == "length":
+            return (
+                ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value,
+                "inference",
+                "Risposta del modello troncata per superamento del limite max_tokens",
+            )
+        return (
+            ChunkDiagnosticCategory.SCHEMA_VALIDATION_ERROR.value,
+            "schema_validation",
+            "Violazione dello schema strutturato (campi mancanti o tipi non conformi)",
+        )
+
+    if isinstance(exc, AiBackendTimeoutError):
+        return (
+            ChunkDiagnosticCategory.TIMEOUT.value,
+            "inference",
+            "Timeout durante la richiesta HTTP al backend LLM",
+        )
+
+    if isinstance(exc, (AiBackendRequestError, AnalysisInputTooLargeError)):
+        err_cat = getattr(exc, "error_category", None)
+        if err_cat == "CONTEXT_OVERFLOW":
+            return (
+                ChunkDiagnosticCategory.HTTP_CONTEXT_OVERFLOW.value,
+                "inference",
+                "Dimensione del prompt eccede la finestra di contesto del modello",
+            )
+        if err_cat == "SCHEMA_REJECTED":
+            return (
+                ChunkDiagnosticCategory.HTTP_SCHEMA_REJECTED.value,
+                "inference",
+                "Schema JSON rifiutato dal server locale LM Studio",
+            )
+        if err_cat == "INVALID_PARAMS" or http_status == 400 or getattr(exc, "status_code", None) == 400:
+            return (
+                ChunkDiagnosticCategory.HTTP_INVALID_PARAMETERS.value,
+                "inference",
+                "Parametri di richiesta HTTP non validi o rifiutati (HTTP 400)",
+            )
+        return (
+            ChunkDiagnosticCategory.HTTP_INVALID_PARAMETERS.value,
+            "inference",
+            f"Errore nella richiesta HTTP verso LM Studio ({type(exc).__name__})",
+        )
+
+    if isinstance(exc, AiModelMismatchError):
+        return (
+            ChunkDiagnosticCategory.MODEL_MISMATCH.value,
+            "inference",
+            "Identificatore del modello restituito non corrispondente a quello richiesto",
+        )
+
+    if isinstance(exc, TopicProvenanceError):
+        return (
+            ChunkDiagnosticCategory.PROVENANCE_MISMATCH.value,
+            "evidence_validation",
+            "Discrepanza di provenienza documentale tra blocco e documento padre",
+        )
+
+    if type(exc).__name__ == "CheckpointSaveError":
+        return (
+            ChunkDiagnosticCategory.CHECKPOINT_SAVE_ERROR.value,
+            "checkpoint_save",
+            "Errore durante la persistenza del blocco nel database SQLite dei checkpoint",
+        )
+
+    if isinstance(exc, (ValueError, TypeError, KeyError)):
+        return (
+            ChunkDiagnosticCategory.INTERNAL_VALIDATION_ERROR.value,
+            "schema_validation",
+            f"Errore di validazione interna ({type(exc).__name__})",
+        )
+
+    return (
+        ChunkDiagnosticCategory.UNKNOWN_ERROR.value,
+        "inference",
+        f"Errore non classificato ({type(exc).__name__})",
+    )
 
 
 @dataclass(frozen=True)

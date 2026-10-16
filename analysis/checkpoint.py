@@ -48,7 +48,7 @@ from ai.models import (
     TopicDiscoveryResult,
     TopicQuery,
 )
-from analysis.models import OperationalAnalysisConfig
+from analysis.models import OperationalAnalysisConfig, ChunkDiagnosticRecord
 
 
 def compute_document_fingerprint(document: ConversationEvidenceDocument) -> str:
@@ -250,6 +250,39 @@ def validate_checkpoint_evidence_references(
                 for eid in t["evidence_ids"]:
                     if eid not in allowed_eids:
                         return False
+
+    # Rivalidazione rigorosa dei sotto-blocchi persistiti
+    for sub in checkpoint.subchunks:
+        p_idx = sub.get("parent_chunk_index")
+        if not isinstance(p_idx, int) or p_idx < 0 or p_idx >= checkpoint.total_planned_chunks:
+            return False
+        if chunks is not None:
+            if p_idx >= len(chunks):
+                return False
+            allowed_sub_eids = {sec.evidence_id for sec in chunks[p_idx].all_evidence_sections}
+        else:
+            allowed_sub_eids = valid_doc_eids
+
+        declared_sub_eids = set(sub.get("evidence_ids", []))
+        if not declared_sub_eids.issubset(allowed_sub_eids):
+            return False
+
+        sub_res = sub.get("serialized_result", {})
+        if not isinstance(sub_res, dict):
+            return False
+        sub_topics = sub_res.get("topics", [])
+        if not isinstance(sub_topics, (list, tuple)):
+            return False
+        for t in sub_topics:
+            if not isinstance(t, dict) or not t.get("label"):
+                return False
+            t_eids = t.get("evidence_ids", [])
+            if not isinstance(t_eids, (list, tuple)):
+                return False
+            for eid in t_eids:
+                if eid not in declared_sub_eids:
+                    return False
+
     return True
 
 
@@ -270,6 +303,7 @@ class AnalysisCheckpoint:
     serialized_results: Mapping[str, Any]
     created_at: str
     updated_at: str
+    subchunks: tuple[dict[str, Any], ...] = ()
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -284,6 +318,7 @@ class AnalysisCheckpoint:
             "serialized_results": dict(self.serialized_results),
             "created_at": self.created_at,
             "updated_at": self.updated_at,
+            "subchunks": list(self.subchunks),
         }
 
 
@@ -456,6 +491,61 @@ class AnalysisCheckpointStore:
                 conn.execute("""
                     CREATE INDEX IF NOT EXISTS idx_checkpoints_doc_id
                     ON checkpoints (document_id);
+                """)
+
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS checkpoint_chunk_diagnostics (
+                        document_fingerprint TEXT NOT NULL,
+                        config_fingerprint TEXT NOT NULL,
+                        chunk_index INTEGER NOT NULL,
+                        chunk_id TEXT NOT NULL,
+                        status TEXT NOT NULL,
+                        attempts INTEGER NOT NULL DEFAULT 1,
+                        duration_seconds REAL NOT NULL DEFAULT 0.0,
+                        model_id TEXT NOT NULL DEFAULT '',
+                        http_status INTEGER,
+                        finish_reason TEXT,
+                        prompt_tokens INTEGER,
+                        completion_tokens INTEGER,
+                        error_type TEXT,
+                        diagnostic_category TEXT NOT NULL DEFAULT 'NONE',
+                        failure_phase TEXT,
+                        error_detail TEXT,
+                        json_valid INTEGER NOT NULL DEFAULT 0,
+                        schema_valid INTEGER NOT NULL DEFAULT 0,
+                        evidence_valid INTEGER NOT NULL DEFAULT 0,
+                        checkpoint_saved INTEGER NOT NULL DEFAULT 0,
+                        updated_at TEXT NOT NULL,
+                        PRIMARY KEY (document_fingerprint, config_fingerprint, chunk_index)
+                    );
+                """)
+
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_diagnostics_doc_cfg
+                    ON checkpoint_chunk_diagnostics (document_fingerprint, config_fingerprint);
+                """)
+
+                conn.execute("""
+                    CREATE TABLE IF NOT EXISTS checkpoint_subchunks (
+                        document_fingerprint TEXT NOT NULL,
+                        config_fingerprint TEXT NOT NULL,
+                        parent_chunk_index INTEGER NOT NULL,
+                        subchunk_index INTEGER NOT NULL,
+                        subchunk_id TEXT NOT NULL,
+                        total_subchunks INTEGER NOT NULL,
+                        serialized_result TEXT NOT NULL,
+                        evidence_ids TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        PRIMARY KEY (document_fingerprint, config_fingerprint, parent_chunk_index, subchunk_index),
+                        FOREIGN KEY (document_fingerprint, config_fingerprint)
+                            REFERENCES checkpoints (document_fingerprint, config_fingerprint)
+                            ON DELETE CASCADE
+                    );
+                """)
+
+                conn.execute("""
+                    CREATE INDEX IF NOT EXISTS idx_subchunks_parent
+                    ON checkpoint_subchunks (document_fingerprint, config_fingerprint, parent_chunk_index);
                 """)
 
             if self.db_path.exists():
@@ -849,14 +939,17 @@ class AnalysisCheckpointStore:
         return self.checkpoint_dir / safe_name
 
     def has_checkpoint(self, document_fingerprint: str, config_fingerprint: str) -> bool:
-        """Verifica la presenza di un checkpoint con almeno un blocco salvato."""
+        """Verifica la presenza di un checkpoint con almeno un blocco o sotto-blocco salvato."""
         try:
             with self._connect() as conn:
                 cur = conn.execute("""
                     SELECT 1 FROM checkpoint_chunks
                     WHERE document_fingerprint = ? AND config_fingerprint = ?
+                    UNION ALL
+                    SELECT 1 FROM checkpoint_subchunks
+                    WHERE document_fingerprint = ? AND config_fingerprint = ?
                     LIMIT 1;
-                """, (document_fingerprint, config_fingerprint))
+                """, (document_fingerprint, config_fingerprint, document_fingerprint, config_fingerprint))
                 if cur.fetchone() is not None:
                     return True
         except Exception:
@@ -899,7 +992,17 @@ class AnalysisCheckpointStore:
                     ORDER BY chunk_index ASC;
                 """, (document_fingerprint, config_fingerprint))
                 chunk_rows = chunk_cur.fetchall()
-                if not chunk_rows:
+
+                sub_cur = conn.execute("""
+                    SELECT parent_chunk_index, subchunk_index, subchunk_id, total_subchunks,
+                           serialized_result, evidence_ids, created_at
+                    FROM checkpoint_subchunks
+                    WHERE document_fingerprint = ? AND config_fingerprint = ?
+                    ORDER BY parent_chunk_index ASC, subchunk_index ASC;
+                """, (document_fingerprint, config_fingerprint))
+                sub_rows = sub_cur.fetchall()
+
+                if not chunk_rows and not sub_rows:
                     return None
 
                 completed_indices = []
@@ -907,6 +1010,23 @@ class AnalysisCheckpointStore:
                 for c_idx, s_raw in chunk_rows:
                     completed_indices.append(int(c_idx))
                     serialized_results[str(c_idx)] = json.loads(s_raw)
+
+                parsed_subs = []
+                for s_row in sub_rows:
+                    try:
+                        p_res = json.loads(s_row[4])
+                        p_eids = json.loads(s_row[5]) if s_row[5] else []
+                    except Exception:
+                        continue
+                    parsed_subs.append({
+                        "parent_chunk_index": int(s_row[0]),
+                        "subchunk_index": int(s_row[1]),
+                        "subchunk_id": str(s_row[2]),
+                        "total_subchunks": int(s_row[3]),
+                        "serialized_result": p_res,
+                        "evidence_ids": list(p_eids),
+                        "created_at": str(s_row[6]),
+                    })
 
                 return AnalysisCheckpoint(
                     document_id=str(doc_id),
@@ -920,6 +1040,7 @@ class AnalysisCheckpointStore:
                     serialized_results=serialized_results,
                     created_at=str(c_at),
                     updated_at=str(u_at),
+                    subchunks=tuple(parsed_subs),
                 )
         except Exception:
             return None
@@ -1092,12 +1213,326 @@ class AnalysisCheckpointStore:
         except Exception as exc:
             raise CheckpointSaveError(f"Impossibile salvare il chunk {chunk_idx} in SQLite: {exc}") from exc
 
+    def save_subchunk(
+        self,
+        document_id: str,
+        document_fingerprint: str,
+        config_fingerprint: str,
+        parent_chunk_index: int,
+        subchunk_index: int,
+        total_subchunks: int,
+        result: TopicDiscoveryResult,
+        subchunk_id: str,
+        evidence_ids: Sequence[str],
+        total_planned_chunks: int = 1,
+        analysis_type: str = "discovery",
+        model_id: str = "",
+        prompt_version: str = "",
+    ) -> None:
+        """
+        Salva incrementalmente un sotto-blocco validato in SQLite preservando la relazione parent/child.
+        """
+        serialized_chunk = serialize_discovery_result_for_checkpoint(result)
+        serialized_json = json.dumps(serialized_chunk, ensure_ascii=False)
+        eids_json = json.dumps(list(evidence_ids), ensure_ascii=False)
+        now_iso = datetime.now(timezone.utc).isoformat()
+
+        try:
+            with self._lock:
+                with self._connect() as conn:
+                    conn.execute("""
+                        INSERT INTO checkpoints (
+                            document_fingerprint, config_fingerprint, document_id,
+                            analysis_type, model_id, prompt_version, total_planned_chunks,
+                            created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
+                            updated_at = excluded.updated_at;
+                    """, (
+                        document_fingerprint, config_fingerprint, document_id,
+                        analysis_type, model_id, prompt_version, total_planned_chunks,
+                        now_iso, now_iso,
+                    ))
+
+                    conn.execute("""
+                        INSERT INTO checkpoint_subchunks (
+                            document_fingerprint, config_fingerprint, parent_chunk_index,
+                            subchunk_index, subchunk_id, total_subchunks,
+                            serialized_result, evidence_ids, created_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(document_fingerprint, config_fingerprint, parent_chunk_index, subchunk_index) DO UPDATE SET
+                            subchunk_id = excluded.subchunk_id,
+                            total_subchunks = excluded.total_subchunks,
+                            serialized_result = excluded.serialized_result,
+                            evidence_ids = excluded.evidence_ids;
+                    """, (
+                        document_fingerprint, config_fingerprint, parent_chunk_index,
+                        subchunk_index, subchunk_id, total_subchunks,
+                        serialized_json, eids_json, now_iso,
+                    ))
+        except Exception as exc:
+            raise CheckpointSaveError(
+                f"Impossibile salvare il sotto-blocco ({parent_chunk_index}, {subchunk_index}) in SQLite: {exc}"
+            ) from exc
+
+    def get_subchunks(
+        self,
+        document_fingerprint: str,
+        config_fingerprint: str,
+        parent_chunk_index: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """
+        Recupera i sotto-blocchi validati salvati per (document_fingerprint, config_fingerprint),
+        opzionalmente filtrati per parent_chunk_index.
+        """
+        subchunks: list[dict[str, Any]] = []
+        try:
+            with self._connect() as conn:
+                if parent_chunk_index is not None:
+                    cur = conn.execute("""
+                        SELECT parent_chunk_index, subchunk_index, subchunk_id, total_subchunks,
+                               serialized_result, evidence_ids, created_at
+                        FROM checkpoint_subchunks
+                        WHERE document_fingerprint = ? AND config_fingerprint = ? AND parent_chunk_index = ?
+                        ORDER BY subchunk_index ASC;
+                    """, (document_fingerprint, config_fingerprint, parent_chunk_index))
+                else:
+                    cur = conn.execute("""
+                        SELECT parent_chunk_index, subchunk_index, subchunk_id, total_subchunks,
+                               serialized_result, evidence_ids, created_at
+                        FROM checkpoint_subchunks
+                        WHERE document_fingerprint = ? AND config_fingerprint = ?
+                        ORDER BY parent_chunk_index ASC, subchunk_index ASC;
+                    """, (document_fingerprint, config_fingerprint))
+
+                for row in cur.fetchall():
+                    try:
+                        parsed_res = json.loads(row[4])
+                        parsed_eids = json.loads(row[5]) if row[5] else []
+                    except Exception:
+                        continue
+                    subchunks.append({
+                        "parent_chunk_index": int(row[0]),
+                        "subchunk_index": int(row[1]),
+                        "subchunk_id": str(row[2]),
+                        "total_subchunks": int(row[3]),
+                        "serialized_result": parsed_res,
+                        "evidence_ids": list(parsed_eids),
+                        "created_at": str(row[6]),
+                    })
+        except Exception as e:
+            logger.warning("Impossibile recuperare sotto-blocchi da SQLite: %s", type(e).__name__)
+        return subchunks
+
+    def get_subchunk(
+        self,
+        document_fingerprint: str,
+        config_fingerprint: str,
+        parent_chunk_index: int,
+        subchunk_index: int,
+    ) -> dict[str, Any] | None:
+        """Recupera un singolo sotto-blocco specificato da indici genitore e figlio."""
+        subs = self.get_subchunks(document_fingerprint, config_fingerprint, parent_chunk_index=parent_chunk_index)
+        for s in subs:
+            if s["subchunk_index"] == subchunk_index:
+                return s
+        return None
+
+    def save_chunk_diagnostic(
+        self,
+        document_id: str,
+        document_fingerprint: str,
+        config_fingerprint: str,
+        diagnostic: ChunkDiagnosticRecord,
+        total_planned_chunks: int = 1,
+        analysis_type: str = "discovery",
+        model_id: str = "",
+        prompt_version: str = "",
+    ) -> None:
+        """
+        Salva la diagnostica dettagliata del singolo chunk nel database SQLite.
+        Persiste anche in caso di fallimento o rifiuto della validazione.
+        """
+        now_iso = datetime.now(timezone.utc).isoformat()
+        try:
+            with self._lock:
+                with self._connect() as conn:
+                    # Inserisce o aggiorna la testata checkpoint se non presente
+                    conn.execute("""
+                        INSERT INTO checkpoints (
+                            document_fingerprint, config_fingerprint, document_id,
+                            analysis_type, model_id, prompt_version, total_planned_chunks,
+                            created_at, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
+                            updated_at = excluded.updated_at;
+                    """, (
+                        document_fingerprint, config_fingerprint, document_id,
+                        analysis_type, model_id, prompt_version, total_planned_chunks,
+                        now_iso, now_iso,
+                    ))
+
+                    conn.execute("""
+                        INSERT INTO checkpoint_chunk_diagnostics (
+                            document_fingerprint, config_fingerprint, chunk_index,
+                            chunk_id, status, attempts, duration_seconds, model_id,
+                            http_status, finish_reason, prompt_tokens, completion_tokens,
+                            error_type, diagnostic_category, failure_phase, error_detail,
+                            json_valid, schema_valid, evidence_valid, checkpoint_saved, updated_at
+                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                        ON CONFLICT(document_fingerprint, config_fingerprint, chunk_index) DO UPDATE SET
+                            status = excluded.status,
+                            attempts = excluded.attempts,
+                            duration_seconds = excluded.duration_seconds,
+                            model_id = excluded.model_id,
+                            http_status = excluded.http_status,
+                            finish_reason = excluded.finish_reason,
+                            prompt_tokens = excluded.prompt_tokens,
+                            completion_tokens = excluded.completion_tokens,
+                            error_type = excluded.error_type,
+                            diagnostic_category = excluded.diagnostic_category,
+                            failure_phase = excluded.failure_phase,
+                            error_detail = excluded.error_detail,
+                            json_valid = excluded.json_valid,
+                            schema_valid = excluded.schema_valid,
+                            evidence_valid = excluded.evidence_valid,
+                            checkpoint_saved = excluded.checkpoint_saved,
+                            updated_at = excluded.updated_at;
+                    """, (
+                        document_fingerprint,
+                        config_fingerprint,
+                        diagnostic.chunk_index,
+                        diagnostic.chunk_id,
+                        diagnostic.status,
+                        diagnostic.attempts,
+                        diagnostic.duration_seconds,
+                        diagnostic.model_id,
+                        diagnostic.http_status,
+                        diagnostic.finish_reason,
+                        diagnostic.prompt_tokens,
+                        diagnostic.completion_tokens,
+                        diagnostic.error_type,
+                        diagnostic.diagnostic_category,
+                        diagnostic.failure_phase,
+                        diagnostic.error_detail,
+                        1 if diagnostic.json_valid else 0,
+                        1 if diagnostic.schema_valid else 0,
+                        1 if diagnostic.evidence_valid else 0,
+                        1 if diagnostic.checkpoint_saved else 0,
+                        now_iso,
+                    ))
+        except Exception as exc:
+            logger.warning("Impossibile salvare diagnostica chunk %s in SQLite: %s", diagnostic.chunk_id, exc)
+            raise CheckpointSaveError(f"Impossibile salvare diagnostica chunk {diagnostic.chunk_id}: {exc}") from exc
+
+    def get_chunk_diagnostics(
+        self,
+        document_fingerprint: str,
+        config_fingerprint: str,
+    ) -> list[ChunkDiagnosticRecord]:
+        """Recupera la cronologia diagnostica di tutti i chunk salvati per la run."""
+        diagnostics: list[ChunkDiagnosticRecord] = []
+        try:
+            with self._connect() as conn:
+                cur = conn.execute("""
+                    SELECT chunk_index, chunk_id, status, attempts, duration_seconds,
+                           model_id, http_status, finish_reason, prompt_tokens,
+                           completion_tokens, error_type, diagnostic_category,
+                           failure_phase, error_detail, json_valid, schema_valid,
+                           evidence_valid, checkpoint_saved
+                    FROM checkpoint_chunk_diagnostics
+                    WHERE document_fingerprint = ? AND config_fingerprint = ?
+                    ORDER BY chunk_index ASC;
+                """, (document_fingerprint, config_fingerprint))
+                for row in cur.fetchall():
+                    diagnostics.append(
+                        ChunkDiagnosticRecord(
+                            chunk_index=int(row[0]),
+                            chunk_id=str(row[1]),
+                            status=str(row[2]),
+                            attempts=int(row[3]),
+                            duration_seconds=float(row[4]),
+                            model_id=str(row[5]),
+                            http_status=row[6],
+                            finish_reason=row[7],
+                            prompt_tokens=row[8],
+                            completion_tokens=row[9],
+                            error_type=row[10],
+                            diagnostic_category=str(row[11]),
+                            failure_phase=row[12],
+                            error_detail=row[13],
+                            json_valid=bool(row[14]),
+                            schema_valid=bool(row[15]),
+                            evidence_valid=bool(row[16]),
+                            checkpoint_saved=bool(row[17]),
+                        )
+                    )
+        except Exception as e:
+            logger.warning("Impossibile recuperare diagnostica chunk da SQLite: %s", type(e).__name__)
+        return diagnostics
+
+    def get_latest_checkpoint_metadata_for_document(
+        self,
+        document_id: str,
+        document_fingerprint: str | None = None,
+        analysis_type: str = "discovery",
+        model_id: str | None = None,
+    ) -> dict[str, Any] | None:
+        """
+        Recupera i metadati dell'ultimo checkpoint SQLite registrato per il documento e tipo di analisi.
+        Consente alla UI e al servizio di ripristinare stato e diagnostica anche dopo un riavvio completo di Streamlit.
+        Se model_id è specificato, filtra rigorosamente per quel modello.
+        """
+        try:
+            with self._connect() as conn:
+                clauses = ["document_id = ?", "analysis_type = ?"]
+                params: list[Any] = [document_id, analysis_type]
+                if document_fingerprint:
+                    clauses.append("document_fingerprint = ?")
+                    params.append(document_fingerprint)
+                if model_id:
+                    clauses.append("model_id = ?")
+                    params.append(model_id)
+
+                where_sql = " AND ".join(clauses)
+                sql = f"""
+                    SELECT document_fingerprint, config_fingerprint, document_id,
+                           analysis_type, model_id, prompt_version, total_planned_chunks,
+                           created_at, updated_at
+                    FROM checkpoints
+                    WHERE {where_sql}
+                    ORDER BY updated_at DESC
+                    LIMIT 1;
+                """
+                cur = conn.execute(sql, tuple(params))
+                row = cur.fetchone()
+                if not row:
+                    return None
+                return {
+                    "document_fingerprint": str(row[0]),
+                    "config_fingerprint": str(row[1]),
+                    "document_id": str(row[2]),
+                    "analysis_type": str(row[3]),
+                    "model_id": str(row[4]),
+                    "prompt_version": str(row[5]),
+                    "total_planned_chunks": int(row[6]),
+                    "created_at": str(row[7]),
+                    "updated_at": str(row[8]),
+                }
+        except Exception as e:
+            logger.warning("Impossibile recuperare metadati checkpoint per document_id '%s': %s", document_id, e)
+            return None
+
     def clear_checkpoint(self, document_fingerprint: str, config_fingerprint: str) -> bool:
         """Elimina il checkpoint una volta conclusa con successo l'analisi complessiva."""
         deleted = False
         try:
             with self._lock:
                 with self._connect() as conn:
+                    conn.execute("""
+                        DELETE FROM checkpoint_subchunks
+                        WHERE document_fingerprint = ? AND config_fingerprint = ?;
+                    """, (document_fingerprint, config_fingerprint))
                     cur = conn.execute("""
                         DELETE FROM checkpoints
                         WHERE document_fingerprint = ? AND config_fingerprint = ?;
@@ -1157,6 +1592,10 @@ class AnalysisCheckpointStore:
         try:
             with self._lock:
                 with self._connect() as conn:
+                    conn.execute("""
+                        DELETE FROM checkpoint_subchunks
+                        WHERE document_fingerprint = ?;
+                    """, (doc_fp,))
                     cur = conn.execute("""
                         DELETE FROM checkpoints
                         WHERE document_fingerprint = ?;

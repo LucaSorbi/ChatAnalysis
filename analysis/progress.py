@@ -378,13 +378,17 @@ class AnalysisProgressTracker:
         chunk_idx_1based: int,
         error_msg: str = "",
         record_request: bool = True,
+        is_protocol_or_validation: bool = False,
     ) -> AnalysisProgressEvent:
         """Registra il fallimento definitivo di un chunk documentale."""
         with self._lock:
             if record_request and self.requests_in_flight > 0:
                 self.requests_in_flight = max(0, self.requests_in_flight - 1)
                 self.requests_failed += 1
-                self.http_errors_count += 1
+                if is_protocol_or_validation:
+                    self.protocol_errors_count += 1
+                else:
+                    self.http_errors_count += 1
             self.failed_chunks += 1
             detail = f": {error_msg}" if error_msg else ""
             msg = f"Blocco {chunk_idx_1based} di {self.total_chunks} fallito{detail}."

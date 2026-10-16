@@ -18,20 +18,25 @@ from __future__ import annotations
 from datetime import datetime, timezone
 import hashlib
 import json
+import logging
 import re
 import time
 import uuid
 from typing import Any, Mapping, MutableMapping, MutableSet, Sequence
 
+logger = logging.getLogger(__name__)
+
 from ai.backend import (
     AiBackendProtocolError,
     AiBackendRequestError,
     AiBackendTimeoutError,
+    AiInvalidEvidenceCitationError,
     AiModelAmbiguousError,
     AiModelLoadError,
     AiModelMismatchError,
     AiModelNotInstalledError,
     AiModelNotSpecifiedError,
+    AiStructuredOutputError,
     AnalysisInputTooLargeError,
     BaseLlmClient,
     BaseLocalLlmClient,
@@ -99,6 +104,9 @@ from analysis.models import (
     AnalysisNoEvidenceError,
     AnalysisOrigin,
     AnalysisPlan,
+    ChunkDiagnosticCategory,
+    ChunkDiagnosticRecord,
+    ChunkLifecycleStatus,
     ConsistencyResult,
     DiscoveredTopicRef,
     DiscoveryChunkOutcome,
@@ -107,6 +115,7 @@ from analysis.models import (
     OperationalProfile,
     TopicAnalysisRunMetadata,
     TopicProvenanceError,
+    classify_discovery_exception,
     resolve_operational_profile,
 )
 
@@ -120,6 +129,14 @@ FATAL_BACKEND_ERRORS = (
     AiBackendTimeoutError,
     AiBackendRequestError,
     AnalysisInputTooLargeError,
+)
+
+SYSTEMIC_BACKEND_ERRORS = (
+    LmStudioUnavailableError,
+    AiModelNotInstalledError,
+    AiModelAmbiguousError,
+    AiModelLoadError,
+    AiModelMismatchError,
 )
 
 
@@ -714,8 +731,14 @@ class LocalTopicAnalysisService:
         chunk_target_topics: int,
         tracker: AnalysisProgressTracker,
         chunk_idx_1based: int,
+        chk_store: Any = None,
+        doc_fp: str = "",
+        cfg_fp: str = "",
+        parent_chunk_index: int = 0,
+        parent_document_id: str = "",
+        total_planned_chunks: int = 1,
     ) -> tuple[list[DiscoveryChunkOutcome], list[TopicDiscoveryResult]]:
-        """Esegue suddivisione controllata di un blocco di discovery oversize."""
+        """Esegue suddivisione controllata di un blocco di discovery oversize con persistenza incrementale e recupero dei sotto-blocchi."""
         mid = len(chunk.bundles) // 2
         sub1 = ConversationEvidenceDocument(
             document_id=f"{chunk.document_id}::sub::0",
@@ -731,9 +754,88 @@ class LocalTopicAnalysisService:
         )
         outcomes: list[DiscoveryChunkOutcome] = []
         results: list[TopicDiscoveryResult] = []
-        for s_idx, sub in enumerate((sub1, sub2), start=1):
-            sub_display_idx = chunk_idx_1based + (s_idx - 1)
-            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/2", record_request=False)
+        subs = (sub1, sub2)
+        total_subs = len(subs)
+
+        for s_idx, sub in enumerate(subs, start=1):
+            sub_idx_0based = s_idx - 1
+            sub_display_idx = chunk_idx_1based + sub_idx_0based
+            sub_eids = tuple(s.evidence_id for s in sub.all_evidence_sections)
+
+            # Controllo recupero da checkpoint se abilitato
+            cached_sub = None
+            if chk_store is not None and doc_fp and cfg_fp:
+                try:
+                    cached_sub = chk_store.get_subchunk(
+                        document_fingerprint=doc_fp,
+                        config_fingerprint=cfg_fp,
+                        parent_chunk_index=parent_chunk_index,
+                        subchunk_index=sub_idx_0based,
+                    )
+                except Exception as c_err:
+                    logger.warning("Errore interrogazione sotto-blocco da checkpoint: %s", c_err)
+                    cached_sub = None
+
+            # Rivalidazione forense del sotto-blocco recuperato
+            valid_cached_res = None
+            if cached_sub is not None:
+                try:
+                    cand_res = deserialize_discovery_result_from_checkpoint(cached_sub["serialized_result"])
+                    cand_prov = getattr(cand_res, "provenance_document_id", None)
+                    if cand_prov in (parent_document_id, chunk.document_id, sub.document_id):
+                        all_sub_eids_set = set(sub_eids)
+                        eids_valid = True
+                        for t in cand_res.topics:
+                            if not set(t.evidence_ids).issubset(all_sub_eids_set):
+                                eids_valid = False
+                                break
+                        if eids_valid:
+                            valid_cached_res = cand_res
+                except Exception as val_c_err:
+                    logger.warning("Rivalidazione sotto-blocco fallita: %s", val_c_err)
+                    valid_cached_res = None
+
+            if valid_cached_res is not None:
+                obs_finish = valid_cached_res.metadata.get("finish_reason")
+                sub_diag = ChunkDiagnosticRecord(
+                    chunk_index=sub_display_idx - 1,
+                    chunk_id=sub.document_id,
+                    status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
+                    attempts=0,
+                    duration_seconds=0.0,
+                    model_id=resolved_model,
+                    http_status=None,
+                    finish_reason=obs_finish,
+                    prompt_tokens=valid_cached_res.metadata.get("prompt_tokens"),
+                    completion_tokens=valid_cached_res.metadata.get("completion_tokens"),
+                    error_type=None,
+                    diagnostic_category="NONE",
+                    failure_phase="recovered",
+                    error_detail="Recuperato con successo da checkpoint SQLite",
+                    json_valid=True,
+                    schema_valid=True,
+                    evidence_valid=True,
+                    checkpoint_saved=True,
+                )
+                outcomes.append(
+                    DiscoveryChunkOutcome(
+                        chunk_id=sub.document_id,
+                        status="RECOVERED_FROM_CHECKPOINT",
+                        result=valid_cached_res,
+                        evidence_ids=sub_eids,
+                        diagnostic=sub_diag,
+                        chunk_index=sub_display_idx - 1,
+                        attempts=0,
+                        duration_seconds=0.0,
+                    )
+                )
+                results.append(valid_cached_res)
+                tracker.chunk_success(sub_display_idx, record_request=False)
+                continue
+
+            # Esecuzione inferenza sul sotto-blocco mancante
+            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/{total_subs}", record_request=False)
+            t_sub_start = time.perf_counter()
             try:
                 res = analyzer.discover_topics(
                     document=sub,
@@ -746,26 +848,124 @@ class LocalTopicAnalysisService:
                     context_length=self.context_length,
                     on_retry_callback=lambda att, r: tracker.chunk_retry(sub_display_idx, f"sub{s_idx}:{r}"),
                 )
+                dur = round(time.perf_counter() - t_sub_start, 3)
+                chk_saved = False
+                if chk_store is not None and doc_fp and cfg_fp:
+                    try:
+                        chk_store.save_subchunk(
+                            document_id=parent_document_id or chunk.document_id,
+                            document_fingerprint=doc_fp,
+                            config_fingerprint=cfg_fp,
+                            parent_chunk_index=parent_chunk_index,
+                            subchunk_index=sub_idx_0based,
+                            total_subchunks=total_subs,
+                            result=res,
+                            subchunk_id=sub.document_id,
+                            evidence_ids=sub_eids,
+                            total_planned_chunks=total_planned_chunks,
+                            analysis_type="discovery",
+                            model_id=resolved_model,
+                            prompt_version="discovery_operational",
+                        )
+                        chk_saved = True
+                    except Exception as s_save_err:
+                        logger.warning("Salvataggio sotto-blocco %s su SQLite non riuscito: %s", sub.document_id, s_save_err)
+
+                obs_finish = res.metadata.get("finish_reason")
+                sub_diag = ChunkDiagnosticRecord(
+                    chunk_index=sub_display_idx - 1,
+                    chunk_id=sub.document_id,
+                    status=ChunkLifecycleStatus.SUCCESS.value,
+                    attempts=int(res.metadata.get("retries", 0)) + 1,
+                    duration_seconds=dur,
+                    model_id=str(res.metadata.get("model") or resolved_model),
+                    http_status=200,
+                    finish_reason=obs_finish,
+                    prompt_tokens=res.metadata.get("prompt_tokens"),
+                    completion_tokens=res.metadata.get("completion_tokens"),
+                    error_type=None,
+                    diagnostic_category="NONE",
+                    failure_phase="completed",
+                    error_detail=None,
+                    json_valid=True,
+                    schema_valid=True,
+                    evidence_valid=True,
+                    checkpoint_saved=chk_saved,
+                )
                 outcomes.append(
                     DiscoveryChunkOutcome(
                         chunk_id=sub.document_id,
                         status="SUCCESS",
                         result=res,
+                        evidence_ids=sub_eids,
+                        diagnostic=sub_diag,
+                        chunk_index=sub_display_idx - 1,
+                        attempts=int(res.metadata.get("retries", 0)) + 1,
+                        duration_seconds=dur,
                     )
                 )
                 results.append(res)
                 tracker.chunk_success(sub_display_idx, record_request=False)
             except Exception as s_exc:
-                tracker.chunk_failed(sub_display_idx, str(s_exc))
+                cat, phase, safe_desc = classify_discovery_exception(s_exc)
+                is_val_err = isinstance(s_exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
+                tracker.chunk_failed(sub_display_idx, str(s_exc), is_protocol_or_validation=is_val_err)
+                sub_diag = ChunkDiagnosticRecord(
+                    chunk_index=sub_display_idx - 1,
+                    chunk_id=sub.document_id,
+                    status=ChunkLifecycleStatus.FAILED.value,
+                    attempts=1,
+                    duration_seconds=0.0,
+                    model_id=resolved_model,
+                    http_status=getattr(s_exc, "status_code", None),
+                    finish_reason=None,
+                    prompt_tokens=None,
+                    completion_tokens=None,
+                    error_type=type(s_exc).__name__,
+                    diagnostic_category=cat,
+                    failure_phase=phase,
+                    error_detail=safe_desc,
+                    json_valid=(cat not in (ChunkDiagnosticCategory.JSON_DECODE_ERROR.value, ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value)),
+                    schema_valid=False,
+                    evidence_valid=False,
+                    checkpoint_saved=False,
+                )
                 outcomes.append(
                     DiscoveryChunkOutcome(
                         chunk_id=sub.document_id,
                         status="FAILED",
                         result=None,
+                        evidence_ids=sub_eids,
                         error_type=type(s_exc).__name__,
-                        safe_error_code="SUBCHUNK_DISCOVERY_ERROR",
+                        safe_error_code=cat,
+                        diagnostic=sub_diag,
+                        chunk_index=sub_display_idx - 1,
+                        attempts=1,
+                        duration_seconds=0.0,
                     )
                 )
+
+        if len(results) == total_subs and chk_store is not None and doc_fp and cfg_fp:
+            try:
+                aggregated_parent = aggregate_topic_discovery(
+                    chunk_results=results,
+                    parent_document_id=parent_document_id or chunk.document_id,
+                    max_topics=chunk_target_topics,
+                )
+                chk_store.save_chunk(
+                    document_id=parent_document_id or chunk.document_id,
+                    document_fingerprint=doc_fp,
+                    config_fingerprint=cfg_fp,
+                    chunk_idx=parent_chunk_index,
+                    result=aggregated_parent,
+                    total_planned_chunks=total_planned_chunks,
+                    analysis_type="discovery",
+                    model_id=resolved_model,
+                    prompt_version="discovery_operational",
+                )
+            except Exception as agg_save_err:
+                logger.warning("Salvataggio aggregato blocco padre %d non riuscito: %s", parent_chunk_index, agg_save_err)
+
         return outcomes, results
 
     def run_topic_detection(
@@ -1245,6 +1445,8 @@ class LocalTopicAnalysisService:
         max_tokens: int | None = None,
         preserve_raw_response: bool = False,
         progress_callback: AnalysisProgressCallback | None = None,
+        retry_failed_only: bool = False,
+        tracker: AnalysisProgressTracker | None = None,
     ) -> TopicDiscoveryResult:
         """
         Esegue Topic Discovery LIVE con supporto trasparente al chunking multi-chunk e progress callback.
@@ -1253,6 +1455,10 @@ class LocalTopicAnalysisService:
             raise AnalysisNoEvidenceError(
                 f"Il documento '{document.document_id}' non contiene sezioni di evidenza analizzabili."
             )
+
+        total_evidence_ids = {s.evidence_id for s in document.all_evidence_sections}
+        total_evidence_count = len(total_evidence_ids)
+        analyzed_evidence_ids: set[str] = set()
 
         eff_max_topics = max_topics if max_topics is not None else self.config.max_topics
         eff_temp = temperature if temperature is not None else self.config.temperature
@@ -1286,11 +1492,12 @@ class LocalTopicAnalysisService:
         chunks = list(plan.chunks)
         eff_chunk_tokens = plan.chunk_token_budget
 
-        tracker = AnalysisProgressTracker(
-            total_chunks=len(chunks),
-            callback=progress_callback,
-            initial_phase="Analisi dei messaggi",
-        )
+        if tracker is None:
+            tracker = AnalysisProgressTracker(
+                total_chunks=len(chunks),
+                callback=progress_callback,
+                initial_phase="Analisi dei messaggi",
+            )
 
         is_synthetic = self._is_synthetic_document(document)
         should_preserve_raw = preserve_raw_response or is_synthetic
@@ -1351,6 +1558,38 @@ class LocalTopicAnalysisService:
                 if rec_count > 0:
                     tracker.phase = f"Risultati precedenti recuperati: {rec_count} chunk | Chunk ancora da elaborare: {rem_count}"
 
+        # Validazione e gestione semantica rigorosa di retry_failed_only
+        if retry_failed_only:
+            if chk_store is None:
+                raise OperationalAnalysisFailedError(
+                    "Impossibile eseguire la riprova selettiva: il sistema di checkpointing non è abilitato o configurato. "
+                    "È necessario avviare una nuova Topic Discovery completa."
+                )
+            if checkpoint is None:
+                raise OperationalAnalysisFailedError(
+                    f"Impossibile eseguire la riprova selettiva: nessun checkpoint compatibile trovato per il documento "
+                    f"'{document.document_id}' (fingerprint: {doc_fp[:8] if doc_fp else 'N/D'}) "
+                    f"con la configurazione richiesta (model={resolved_model}). "
+                    f"È necessario avviare una nuova Topic Discovery completa."
+                )
+            existing_all_subchunks = chk_store.get_subchunks(doc_fp, cfg_fp) if chk_store else []
+            if not cached_discovery_results and not existing_all_subchunks:
+                raise OperationalAnalysisFailedError(
+                    f"Impossibile eseguire la riprova selettiva: il checkpoint per il documento '{document.document_id}' "
+                    f"non contiene alcun blocco o sotto-blocco precedentemente validato da recuperare. "
+                    f"È necessario avviare una nuova Topic Discovery completa."
+                )
+            succeeded_indices = set(cached_discovery_results.keys())
+            missing_indices = [i for i in range(len(chunks)) if i not in succeeded_indices]
+            if not missing_indices:
+                tracker.phase = f"Tutti i {len(chunks)} blocchi risultano già validati nel checkpoint. Consolidamento in corso..."
+            else:
+                missing_chunks_display = [i + 1 for i in missing_indices]
+                tracker.phase = (
+                    f"Piano di recupero selettivo: {len(succeeded_indices)}/{len(chunks)} blocchi validati da checkpoint, "
+                    f"{len(missing_indices)} blocchi mancanti da elaborare ({missing_chunks_display})."
+                )
+
         old_listener = getattr(target_client, "request_listener", None)
         try:
             try:
@@ -1363,92 +1602,246 @@ class LocalTopicAnalysisService:
                 completed_count = 1
                 failed_count = 0
                 disc_status = "COMPLETE"
+                recovered_chunk_count = 0
+                chunk_outcomes: list[DiscoveryChunkOutcome] = []
+                all_chunk_diagnostics: list[ChunkDiagnosticRecord] = []
                 if 0 in cached_discovery_results:
                     disc_res = cached_discovery_results[0]
+                    recovered_chunk_count = 1
+                    analyzed_evidence_ids.update(total_evidence_ids)
+                    diag = ChunkDiagnosticRecord(
+                        chunk_index=0,
+                        chunk_id=chunks[0].document_id,
+                        status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
+                        attempts=0,
+                        duration_seconds=0.0,
+                        model_id=resolved_model,
+                        http_status=None,
+                        finish_reason=disc_res.metadata.get("finish_reason"),
+                        prompt_tokens=disc_res.metadata.get("prompt_tokens"),
+                        completion_tokens=disc_res.metadata.get("completion_tokens"),
+                        error_type=None,
+                        diagnostic_category="NONE",
+                        failure_phase="recovered",
+                        error_detail="Recuperato con successo da checkpoint SQLite",
+                        json_valid=True,
+                        schema_valid=True,
+                        evidence_valid=True,
+                        checkpoint_saved=True,
+                    )
+                    all_chunk_diagnostics.append(diag)
+                    chunk_outcomes.append(
+                        DiscoveryChunkOutcome(
+                            chunk_id=chunks[0].document_id,
+                            status="SUCCESS",
+                            result=disc_res,
+                            evidence_ids=tuple(total_evidence_ids),
+                            diagnostic=diag,
+                            attempts=0,
+                            duration_seconds=0.0,
+                        )
+                    )
                     tracker.chunk_success(1, record_request=False)
                     tracker.complete("Topic Discovery completata da checkpoint: 1/1 blocchi recuperati.")
                 else:
-                    tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
-                    try:
-                        disc_res = analyzer.discover_topics(
-                            document=chunks[0],
-                            model_id=resolved_model,
-                            temperature=eff_temp,
-                            seed=eff_seed,
-                            timeout_seconds=self.timeout_seconds,
-                            max_topics=eff_max_topics,
-                            max_tokens=eff_max_tokens,
-                            operational_mode=True,
-                            context_length=self.context_length,
-                            on_retry_callback=lambda att, r: tracker.chunk_retry(1, r),
+                    existing_sub0 = chk_store.get_subchunks(doc_fp, cfg_fp, parent_chunk_index=0) if chk_store else []
+                    if existing_sub0 and len(chunks[0].bundles) > 1:
+                        tracker.split_chunk(1, subchunks_count=2, failed_prior_request=False)
+                        sub_outs, sub_res = self._process_subchunks_discovery(
+                            chunk=chunks[0],
+                            analyzer=analyzer,
+                            resolved_model=resolved_model,
+                            eff_temp=eff_temp,
+                            eff_seed=eff_seed,
+                            chunk_target_topics=eff_max_topics,
+                            tracker=tracker,
+                            chunk_idx_1based=1,
+                            chk_store=chk_store,
+                            doc_fp=doc_fp,
+                            cfg_fp=cfg_fp,
+                            parent_chunk_index=0,
+                            parent_document_id=document.document_id,
+                            total_planned_chunks=1,
                         )
-                        tracker.chunk_success(1, record_request=False)
-                        tracker.complete("Topic Discovery completata.")
-                        if chk_store is not None:
-                            try:
-                                chk_store.save_chunk(
-                                    document_id=document.document_id,
-                                    document_fingerprint=doc_fp,
-                                    config_fingerprint=cfg_fp,
-                                    chunk_idx=0,
-                                    result=disc_res,
-                                    total_planned_chunks=1,
-                                    analysis_type="discovery",
-                                    model_id=resolved_model,
-                                    prompt_version="discovery_operational",
-                                )
-                            except Exception as chk_err:
-                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
-                    except FATAL_BACKEND_ERRORS as fatal_err:
-                        if (
-                            isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
-                            and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
-                            and len(chunks[0].bundles) > 1
-                        ):
-                            tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
-                            sub_outs, sub_res = self._process_subchunks_discovery(
-                                chunk=chunks[0],
-                                analyzer=analyzer,
-                                resolved_model=resolved_model,
-                                eff_temp=eff_temp,
-                                eff_seed=eff_seed,
-                                chunk_target_topics=eff_max_topics,
-                                tracker=tracker,
-                                chunk_idx_1based=1,
+                        chunk_outcomes.extend(sub_outs)
+                        for so in sub_outs:
+                            if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
+                                analyzed_evidence_ids.update(so.evidence_ids)
+                            if so.diagnostic:
+                                all_chunk_diagnostics.append(so.diagnostic)
+                        total_units = len(sub_outs)
+                        completed_count = len(sub_res)
+                        failed_count = total_units - completed_count
+                        if completed_count == total_units:
+                            disc_res = aggregate_topic_discovery(
+                                chunk_results=sub_res,
+                                parent_document_id=document.document_id,
+                                max_topics=eff_max_topics,
                             )
-                            total_units = len(sub_outs)
-                            completed_count = len(sub_res)
-                            failed_count = total_units - completed_count
-                            if completed_count == total_units:
-                                disc_res = aggregate_topic_discovery(
-                                    chunk_results=sub_res,
-                                    parent_document_id=document.document_id,
-                                    max_topics=eff_max_topics,
+                            tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
+                            disc_status = "COMPLETE"
+                        elif completed_count > 0:
+                            disc_res = aggregate_topic_discovery(
+                                chunk_results=sub_res,
+                                parent_document_id=document.document_id,
+                                max_topics=eff_max_topics,
+                            )
+                            tracker.partial(f"Topic Discovery parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
+                            disc_status = "PARTIAL"
+                        else:
+                            tracker.chunk_failed(1, "Elaborazione sotto-blocchi fallita")
+                            tracker.fail("Elaborazione sotto-blocchi fallita")
+                            raise OperationalAnalysisFailedError("Tutti i sotto-blocchi sono falliti")
+                    else:
+                        tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
+                        t_single_start = time.perf_counter()
+                        try:
+                            disc_res = analyzer.discover_topics(
+                                document=chunks[0],
+                                model_id=resolved_model,
+                                temperature=eff_temp,
+                                seed=eff_seed,
+                                timeout_seconds=self.timeout_seconds,
+                                max_topics=eff_max_topics,
+                                max_tokens=eff_max_tokens,
+                                operational_mode=True,
+                                context_length=self.context_length,
+                                on_retry_callback=lambda att, r: tracker.chunk_retry(1, r),
+                            )
+                            dur = round(time.perf_counter() - t_single_start, 3)
+                            analyzed_evidence_ids.update(total_evidence_ids)
+                            tracker.chunk_success(1, record_request=False)
+                            tracker.complete("Topic Discovery completata.")
+                            chk_saved = False
+                            if chk_store is not None:
+                                try:
+                                    chk_store.save_chunk(
+                                        document_id=document.document_id,
+                                        document_fingerprint=doc_fp,
+                                        config_fingerprint=cfg_fp,
+                                        chunk_idx=0,
+                                        result=disc_res,
+                                        total_planned_chunks=1,
+                                        analysis_type="discovery",
+                                        model_id=resolved_model,
+                                        prompt_version="discovery_operational",
+                                    )
+                                    chk_saved = True
+                                except Exception as chk_err:
+                                    tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
+
+                            diag = ChunkDiagnosticRecord(
+                                chunk_index=0,
+                                chunk_id=chunks[0].document_id,
+                                status=ChunkLifecycleStatus.SUCCESS.value,
+                                attempts=int(disc_res.metadata.get("retries", 0)) + 1,
+                                duration_seconds=dur,
+                                model_id=str(disc_res.metadata.get("model") or resolved_model),
+                                http_status=200,
+                                finish_reason=disc_res.metadata.get("finish_reason"),
+                                prompt_tokens=disc_res.metadata.get("prompt_tokens"),
+                                completion_tokens=disc_res.metadata.get("completion_tokens"),
+                                error_type=None,
+                                diagnostic_category="NONE",
+                                failure_phase="completed",
+                                error_detail=None,
+                                json_valid=True,
+                                schema_valid=True,
+                                evidence_valid=True,
+                                checkpoint_saved=chk_saved,
+                            )
+                            all_chunk_diagnostics.append(diag)
+                            chunk_outcomes.append(
+                                DiscoveryChunkOutcome(
+                                    chunk_id=chunks[0].document_id,
+                                    status="SUCCESS",
+                                    result=disc_res,
+                                    evidence_ids=tuple(total_evidence_ids),
+                                    diagnostic=diag,
+                                    attempts=diag.attempts,
+                                    duration_seconds=dur,
                                 )
-                                tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
-                                disc_status = "COMPLETE"
-                            elif completed_count > 0:
-                                disc_res = aggregate_topic_discovery(
-                                    chunk_results=sub_res,
+                            )
+                            if chk_store is not None:
+                                try:
+                                    chk_store.save_chunk_diagnostic(
+                                        document_id=document.document_id,
+                                        document_fingerprint=doc_fp,
+                                        config_fingerprint=cfg_fp,
+                                        diagnostic=diag,
+                                        total_planned_chunks=1,
+                                        analysis_type="discovery",
+                                        model_id=resolved_model,
+                                        prompt_version="discovery_operational",
+                                    )
+                                except Exception as diag_err:
+                                    logger.warning("Salvataggio diagnostica blocco 1 non riuscito: %s", diag_err)
+                                    tracker.phase = f"Avviso: Salvataggio diagnostica blocco 1 su SQLite non riuscito ({diag_err})"
+                        except FATAL_BACKEND_ERRORS as fatal_err:
+                            if (
+                                isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
+                                and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
+                                and len(chunks[0].bundles) > 1
+                            ):
+                                tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                                sub_outs, sub_res = self._process_subchunks_discovery(
+                                    chunk=chunks[0],
+                                    analyzer=analyzer,
+                                    resolved_model=resolved_model,
+                                    eff_temp=eff_temp,
+                                    eff_seed=eff_seed,
+                                    chunk_target_topics=eff_max_topics,
+                                    tracker=tracker,
+                                    chunk_idx_1based=1,
+                                    chk_store=chk_store,
+                                    doc_fp=doc_fp,
+                                    cfg_fp=cfg_fp,
+                                    parent_chunk_index=0,
                                     parent_document_id=document.document_id,
-                                    max_topics=eff_max_topics,
+                                    total_planned_chunks=1,
                                 )
-                                tracker.partial(f"Topic Discovery parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
-                                disc_status = "PARTIAL"
+                                chunk_outcomes.extend(sub_outs)
+                                for so in sub_outs:
+                                    if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
+                                        analyzed_evidence_ids.update(so.evidence_ids)
+                                    if so.diagnostic:
+                                        all_chunk_diagnostics.append(so.diagnostic)
+                                total_units = len(sub_outs)
+                                completed_count = len(sub_res)
+                                failed_count = total_units - completed_count
+                                if completed_count == total_units:
+                                    disc_res = aggregate_topic_discovery(
+                                        chunk_results=sub_res,
+                                        parent_document_id=document.document_id,
+                                        max_topics=eff_max_topics,
+                                    )
+                                    tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
+                                    disc_status = "COMPLETE"
+                                elif completed_count > 0:
+                                    disc_res = aggregate_topic_discovery(
+                                        chunk_results=sub_res,
+                                        parent_document_id=document.document_id,
+                                        max_topics=eff_max_topics,
+                                    )
+                                    tracker.partial(f"Topic Discovery parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
+                                    disc_status = "PARTIAL"
+                                else:
+                                    tracker.chunk_failed(1, str(fatal_err))
+                                    tracker.fail(str(fatal_err))
+                                    raise
                             else:
                                 tracker.chunk_failed(1, str(fatal_err))
                                 tracker.fail(str(fatal_err))
                                 raise
-                        else:
-                            tracker.chunk_failed(1, str(fatal_err))
-                            tracker.fail(str(fatal_err))
-                            raise
-                    except Exception as exc:
-                        tracker.chunk_failed(1, str(exc))
-                        tracker.fail(str(exc))
-                        raise OperationalAnalysisFailedError(
-                            f"Inferenza di Topic Discovery fallita sul documento: {exc}"
-                        ) from exc
+                        except Exception as exc:
+                            dur = round(time.perf_counter() - t_single_start, 3)
+                            cat, phase, safe_desc = classify_discovery_exception(exc)
+                            is_val_err = isinstance(exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
+                            tracker.chunk_failed(1, str(exc), is_protocol_or_validation=is_val_err)
+                            tracker.fail(str(exc))
+                            raise OperationalAnalysisFailedError(
+                                f"Inferenza di Topic Discovery fallita sul documento: {exc}"
+                            ) from exc
 
                 latency = round(time.perf_counter() - start_time, 3)
                 now_ts = datetime.now(timezone.utc).isoformat()
@@ -1493,8 +1886,16 @@ class LocalTopicAnalysisService:
                 meta = dict(disc_res.metadata)
                 meta.update(run_meta.to_dict())
                 meta["chunk_count"] = int(total_units)
+                meta["expected_chunk_count"] = int(total_units)
                 meta["completed_chunk_count"] = int(completed_count)
                 meta["failed_chunk_count"] = int(failed_count)
+                meta["recovered_chunk_count"] = int(recovered_chunk_count)
+                meta["status"] = disc_status
+                meta["chunk_outcomes"] = [o.to_dict() for o in chunk_outcomes]
+                meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
+                meta["total_evidence_count"] = int(total_evidence_count)
+                meta["analyzed_evidence_count"] = int(len(analyzed_evidence_ids))
+                meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
                 if not should_preserve_raw and "raw_response" in meta:
                     del meta["raw_response"]
 
@@ -1511,22 +1912,80 @@ class LocalTopicAnalysisService:
             # Multi-chunk discovery con tracking esplicito
             chunk_outcomes: list[DiscoveryChunkOutcome] = []
             successful_results: list[TopicDiscoveryResult] = []
+            all_chunk_diagnostics: list[ChunkDiagnosticRecord] = []
+            recovered_chunk_count = 0
 
             chunk_target_topics = min(eff_max_topics, max(5, min(8, eff_max_topics)))
 
             for idx, chunk in enumerate(chunks):
                 current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
+                chunk_eids = {s.evidence_id for s in chunk.all_evidence_sections}
                 if idx in cached_discovery_results:
                     res = cached_discovery_results[idx]
+                    diag = ChunkDiagnosticRecord(
+                        chunk_index=idx,
+                        chunk_id=chunk.document_id,
+                        status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
+                        attempts=0,
+                        duration_seconds=0.0,
+                        model_id=resolved_model,
+                        http_status=None,
+                        finish_reason=res.metadata.get("finish_reason"),
+                        prompt_tokens=res.metadata.get("prompt_tokens"),
+                        completion_tokens=res.metadata.get("completion_tokens"),
+                        error_type=None,
+                        diagnostic_category="NONE",
+                        failure_phase="recovered",
+                        error_detail="Recuperato con successo da checkpoint SQLite",
+                        json_valid=True,
+                        schema_valid=True,
+                        evidence_valid=True,
+                        checkpoint_saved=True,
+                    )
+                    all_chunk_diagnostics.append(diag)
                     chunk_outcomes.append(
                         DiscoveryChunkOutcome(
                             chunk_id=chunk.document_id,
                             status="SUCCESS",
                             result=res,
+                            evidence_ids=tuple(chunk_eids),
+                            diagnostic=diag,
+                            attempts=0,
+                            duration_seconds=0.0,
                         )
                     )
                     successful_results.append(res)
+                    analyzed_evidence_ids.update(chunk_eids)
+                    recovered_chunk_count += 1
                     tracker.chunk_success(current_tracker_idx, record_request=False)
+                    continue
+
+                existing_subs = chk_store.get_subchunks(doc_fp, cfg_fp, parent_chunk_index=idx) if chk_store else []
+                if existing_subs and len(chunk.bundles) > 1:
+                    tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=False)
+                    sub_outs, sub_res = self._process_subchunks_discovery(
+                        chunk=chunk,
+                        analyzer=analyzer,
+                        resolved_model=resolved_model,
+                        eff_temp=eff_temp,
+                        eff_seed=eff_seed,
+                        chunk_target_topics=chunk_target_topics,
+                        tracker=tracker,
+                        chunk_idx_1based=current_tracker_idx,
+                        chk_store=chk_store,
+                        doc_fp=doc_fp,
+                        cfg_fp=cfg_fp,
+                        parent_chunk_index=idx,
+                        parent_document_id=document.document_id,
+                        total_planned_chunks=len(chunks),
+                    )
+                    chunk_outcomes.extend(sub_outs)
+                    successful_results.extend(sub_res)
+                    for so in sub_outs:
+                        if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
+                            analyzed_evidence_ids.update(so.evidence_ids)
+                        if so.diagnostic:
+                            all_chunk_diagnostics.append(so.diagnostic)
                     continue
 
                 tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
@@ -1535,6 +1994,14 @@ class LocalTopicAnalysisService:
                     user_max_tokens=max_tokens,
                     context_length=self.context_length,
                 )
+                t_chunk_start = time.perf_counter()
+                chunk_attempts = 1
+
+                def _on_chunk_retry(att: int, reason: str):
+                    nonlocal chunk_attempts
+                    chunk_attempts = att + 1
+                    tracker.chunk_retry(current_tracker_idx, reason)
+
                 try:
                     res = analyzer.discover_topics(
                         document=chunk,
@@ -1546,17 +2013,10 @@ class LocalTopicAnalysisService:
                         max_tokens=chunk_tokens,
                         operational_mode=True,
                         context_length=self.context_length,
-                        on_retry_callback=lambda att, r: tracker.chunk_retry(current_tracker_idx, r),
+                        on_retry_callback=_on_chunk_retry,
                     )
-                    chunk_outcomes.append(
-                        DiscoveryChunkOutcome(
-                            chunk_id=chunk.document_id,
-                            status="SUCCESS",
-                            result=res,
-                        )
-                    )
-                    successful_results.append(res)
-                    tracker.chunk_success(current_tracker_idx, record_request=False)
+                    dur = round(time.perf_counter() - t_chunk_start, 3)
+                    chk_saved = False
                     if chk_store is not None:
                         try:
                             chk_store.save_chunk(
@@ -1570,10 +2030,65 @@ class LocalTopicAnalysisService:
                                 model_id=resolved_model,
                                 prompt_version="discovery_operational",
                             )
+                            chk_saved = True
                         except Exception as chk_err:
                             tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
+
+                    obs_finish = res.metadata.get("finish_reason")
+                    diag = ChunkDiagnosticRecord(
+                        chunk_index=idx,
+                        chunk_id=chunk.document_id,
+                        status=ChunkLifecycleStatus.SUCCESS.value,
+                        attempts=int(res.metadata.get("retries", 0)) + 1,
+                        duration_seconds=dur,
+                        model_id=str(res.metadata.get("model") or resolved_model),
+                        http_status=200,
+                        finish_reason=obs_finish,
+                        prompt_tokens=res.metadata.get("prompt_tokens"),
+                        completion_tokens=res.metadata.get("completion_tokens"),
+                        error_type=None,
+                        diagnostic_category="NONE",
+                        failure_phase="completed",
+                        error_detail=None,
+                        json_valid=True,
+                        schema_valid=True,
+                        evidence_valid=True,
+                        checkpoint_saved=chk_saved,
+                    )
+                    all_chunk_diagnostics.append(diag)
+                    chunk_outcomes.append(
+                        DiscoveryChunkOutcome(
+                            chunk_id=chunk.document_id,
+                            status="SUCCESS",
+                            result=res,
+                            evidence_ids=tuple(chunk_eids),
+                            diagnostic=diag,
+                            attempts=diag.attempts,
+                            duration_seconds=dur,
+                        )
+                    )
+                    successful_results.append(res)
+                    analyzed_evidence_ids.update(chunk_eids)
+                    tracker.chunk_success(current_tracker_idx, record_request=False)
+                    if chk_store is not None:
+                        try:
+                            chk_store.save_chunk_diagnostic(
+                                document_id=document.document_id,
+                                document_fingerprint=doc_fp,
+                                config_fingerprint=cfg_fp,
+                                diagnostic=diag,
+                                total_planned_chunks=len(chunks),
+                                analysis_type="discovery",
+                                model_id=resolved_model,
+                                prompt_version="discovery_operational",
+                            )
+                        except Exception as diag_err:
+                            logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
+                            tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
                 except FATAL_BACKEND_ERRORS as fatal_err:
-                    # Se è un CONTEXT_OVERFLOW recuperabile su chunk con più di un bundle, tenta suddivisione
+                    dur = round(time.perf_counter() - t_chunk_start, 3)
+                    cat, phase, safe_desc = classify_discovery_exception(fatal_err)
+                    is_val_err = isinstance(fatal_err, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
                     if (
                         isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
                         and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
@@ -1589,24 +2104,143 @@ class LocalTopicAnalysisService:
                             chunk_target_topics=chunk_target_topics,
                             tracker=tracker,
                             chunk_idx_1based=current_tracker_idx,
+                            chk_store=chk_store,
+                            doc_fp=doc_fp,
+                            cfg_fp=cfg_fp,
+                            parent_chunk_index=idx,
+                            parent_document_id=document.document_id,
+                            total_planned_chunks=len(chunks),
                         )
                         chunk_outcomes.extend(sub_outs)
                         successful_results.extend(sub_res)
-                    else:
-                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
+                        for so in sub_outs:
+                            if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
+                                analyzed_evidence_ids.update(so.evidence_ids)
+                            if so.diagnostic:
+                                all_chunk_diagnostics.append(so.diagnostic)
+                    elif isinstance(fatal_err, SYSTEMIC_BACKEND_ERRORS):
+                        tracker.chunk_failed(current_tracker_idx, str(fatal_err), is_protocol_or_validation=is_val_err)
                         tracker.fail(str(fatal_err))
                         raise
+                    else:
+                        tracker.chunk_failed(current_tracker_idx, str(fatal_err), is_protocol_or_validation=is_val_err)
+                        http_st = getattr(fatal_err, "status_code", None)
+                        obs_f_reason = getattr(fatal_err, "finish_reason", None)
+                        diag = ChunkDiagnosticRecord(
+                            chunk_index=idx,
+                            chunk_id=chunk.document_id,
+                            status=ChunkLifecycleStatus.FAILED.value,
+                            attempts=chunk_attempts,
+                            duration_seconds=dur,
+                            model_id=resolved_model,
+                            http_status=http_st,
+                            finish_reason=obs_f_reason,
+                            prompt_tokens=None,
+                            completion_tokens=None,
+                            error_type=type(fatal_err).__name__,
+                            diagnostic_category=cat,
+                            failure_phase=phase,
+                            error_detail=safe_desc,
+                            json_valid=False,
+                            schema_valid=False,
+                            evidence_valid=False,
+                            checkpoint_saved=False,
+                        )
+                        all_chunk_diagnostics.append(diag)
+                        chunk_outcomes.append(
+                            DiscoveryChunkOutcome(
+                                chunk_id=chunk.document_id,
+                                status="FAILED",
+                                result=None,
+                                error_type=type(fatal_err).__name__,
+                                safe_error_code=cat,
+                                chunk_index=idx,
+                                diagnostic=diag,
+                                attempts=chunk_attempts,
+                                duration_seconds=dur,
+                            )
+                        )
+                        if chk_store is not None:
+                            try:
+                                chk_store.save_chunk_diagnostic(
+                                    document_id=document.document_id,
+                                    document_fingerprint=doc_fp,
+                                    config_fingerprint=cfg_fp,
+                                    diagnostic=diag,
+                                    total_planned_chunks=len(chunks),
+                                    analysis_type="discovery",
+                                    model_id=resolved_model,
+                                    prompt_version="discovery_operational",
+                                )
+                            except Exception as diag_err:
+                                logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
+                                tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
                 except Exception as exc:
-                    tracker.chunk_failed(current_tracker_idx, str(exc))
+                    dur = round(time.perf_counter() - t_chunk_start, 3)
+                    cat, phase, safe_desc = classify_discovery_exception(exc)
+                    is_val_err = isinstance(exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
+                    tracker.chunk_failed(current_tracker_idx, str(exc), is_protocol_or_validation=is_val_err)
+                    http_st = getattr(exc, "status_code", None)
+                    if isinstance(exc, (AiInvalidEvidenceCitationError, AiStructuredOutputError)):
+                        http_st = 200
+                    if cat == ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value:
+                        f_reason = "length"
+                    else:
+                        f_reason = getattr(exc, "finish_reason", None)
+                    diag = ChunkDiagnosticRecord(
+                        chunk_index=idx,
+                        chunk_id=chunk.document_id,
+                        status=ChunkLifecycleStatus.FAILED.value,
+                        attempts=chunk_attempts,
+                        duration_seconds=dur,
+                        model_id=resolved_model,
+                        http_status=http_st,
+                        finish_reason=f_reason,
+                        prompt_tokens=None,
+                        completion_tokens=None,
+                        error_type=type(exc).__name__,
+                        diagnostic_category=cat,
+                        failure_phase=phase,
+                        error_detail=safe_desc,
+                        json_valid=(cat not in (ChunkDiagnosticCategory.JSON_DECODE_ERROR.value, ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value)),
+                        schema_valid=(cat not in (
+                            ChunkDiagnosticCategory.SCHEMA_VALIDATION_ERROR.value,
+                            ChunkDiagnosticCategory.EXCESS_TOPICS.value,
+                            ChunkDiagnosticCategory.INTERNAL_VALIDATION_ERROR.value,
+                            ChunkDiagnosticCategory.JSON_DECODE_ERROR.value,
+                            ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value,
+                        )),
+                        evidence_valid=False,
+                        checkpoint_saved=False,
+                    )
+                    all_chunk_diagnostics.append(diag)
                     chunk_outcomes.append(
                         DiscoveryChunkOutcome(
                             chunk_id=chunk.document_id,
                             status="FAILED",
                             result=None,
                             error_type=type(exc).__name__,
-                            safe_error_code="CHUNK_DISCOVERY_ERROR",
+                            safe_error_code=cat,
+                            diagnostic=diag,
+                            attempts=chunk_attempts,
+                            duration_seconds=dur,
                         )
                     )
+                    if chk_store is not None:
+                        try:
+                            chk_store.save_chunk_diagnostic(
+                                document_id=document.document_id,
+                                document_fingerprint=doc_fp,
+                                config_fingerprint=cfg_fp,
+                                diagnostic=diag,
+                                total_planned_chunks=len(chunks),
+                                analysis_type="discovery",
+                                model_id=resolved_model,
+                                prompt_version="discovery_operational",
+                            )
+                        except Exception as diag_err:
+                            logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
+                            tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
 
             total_units = len(chunk_outcomes)
             completed_count = len(successful_results)
@@ -1688,6 +2322,13 @@ class LocalTopicAnalysisService:
         meta["expected_chunk_count"] = int(total_units)
         meta["completed_chunk_count"] = int(completed_count)
         meta["failed_chunk_count"] = int(failed_count)
+        meta["recovered_chunk_count"] = int(recovered_chunk_count)
+        meta["status"] = disc_status
+        meta["chunk_outcomes"] = [o.to_dict() for o in chunk_outcomes]
+        meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
+        meta["total_evidence_count"] = int(total_evidence_count)
+        meta["analyzed_evidence_count"] = int(len(analyzed_evidence_ids))
+        meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
         meta["status"] = disc_status
 
         if not should_preserve_raw and "raw_response" in meta:
@@ -1702,6 +2343,171 @@ class LocalTopicAnalysisService:
             self._authoritative_live_run_ids.add(run_id)
         self._record_authoritative_discovery_run(document.document_id, final_res)
         return final_res
+
+    def load_persisted_discovery_result(
+        self,
+        document: ConversationEvidenceDocument,
+        model_name: str | None = None,
+        max_topics: int | None = None,
+        profile: OperationalProfile | None = None,
+        allow_incompatible_model: bool = False,
+    ) -> TopicDiscoveryResult | None:
+        """
+        Ripristina dal database SQLite lo stato e la diagnostica dell'ultima esecuzione di Topic Discovery
+        per il documento, consentendo alla UI Streamlit di mostrare risultati e diagnostica anche dopo riavvio.
+        Distingue rigorosamente lo storico compatibile con il modello richiesto da checkpoint eseguiti con altri modelli.
+        """
+        if not self.enable_checkpointing or self.checkpoint_store is None:
+            return None
+
+        chk_store = self.checkpoint_store
+        doc_fp = compute_document_fingerprint(document)
+
+        # Risoluzione modello richiesto se fornito
+        resolved_model = None
+        if model_name:
+            try:
+                _, resolved_model = self._prepare_client_and_model(None, model_name)
+            except Exception:
+                resolved_model = model_name.strip()
+
+        chk_meta = None
+        is_model_compatible = True
+        is_compatible_for_retry = True
+
+        if resolved_model:
+            chk_meta = chk_store.get_latest_checkpoint_metadata_for_document(
+                document_id=document.document_id,
+                document_fingerprint=doc_fp,
+                analysis_type="discovery",
+                model_id=resolved_model,
+            )
+
+        if chk_meta is None:
+            latest_any = chk_store.get_latest_checkpoint_metadata_for_document(
+                document_id=document.document_id,
+                document_fingerprint=doc_fp,
+                analysis_type="discovery",
+            )
+            if latest_any is None:
+                return None
+
+            if resolved_model and latest_any["model_id"] != resolved_model:
+                if not allow_incompatible_model:
+                    return None
+                is_model_compatible = False
+                is_compatible_for_retry = False
+            chk_meta = latest_any
+
+        cfg_fp = chk_meta["config_fingerprint"]
+        total_planned = chk_meta["total_planned_chunks"]
+        updated_at = chk_meta["updated_at"]
+        saved_model = chk_meta["model_id"]
+        saved_pver = chk_meta["prompt_version"]
+
+        eff_max_topics = max_topics if max_topics is not None else self.config.max_topics
+        plan = self.create_analysis_plan(
+            document=document,
+            analysis_type="discovery",
+            max_topics=eff_max_topics,
+            context_length=self.context_length,
+        )
+        chunks = list(plan.chunks)
+
+        checkpoint = chk_store.load_and_validate_checkpoint(
+            document=document,
+            config_fingerprint=cfg_fp,
+            chunks=chunks,
+            expected_analysis_type="discovery",
+        )
+
+        cached_discovery_results: dict[int, TopicDiscoveryResult] = {}
+        if checkpoint is not None:
+            for s_idx, s_data in checkpoint.serialized_results.items():
+                try:
+                    cached_discovery_results[int(s_idx)] = deserialize_discovery_result_from_checkpoint(s_data)
+                except Exception:
+                    pass
+
+        saved_subchunks = chk_store.get_subchunks(
+            document_fingerprint=doc_fp,
+            config_fingerprint=cfg_fp,
+        )
+
+        diagnostics = chk_store.get_chunk_diagnostics(
+            document_fingerprint=doc_fp,
+            config_fingerprint=cfg_fp,
+        )
+
+        if not cached_discovery_results and not saved_subchunks and not diagnostics:
+            return None
+
+        total_evidence_ids = {s.evidence_id for s in document.all_evidence_sections}
+        total_evidence_count = len(total_evidence_ids)
+        analyzed_evidence_ids: set[str] = set()
+
+        for c_idx, res in cached_discovery_results.items():
+            if c_idx < len(chunks):
+                analyzed_evidence_ids.update({s.evidence_id for s in chunks[c_idx].all_evidence_sections})
+
+        for sub in saved_subchunks:
+            analyzed_evidence_ids.update(sub.get("evidence_ids", []))
+
+        completed_count = len(cached_discovery_results)
+        failed_count = max(0, total_planned - completed_count)
+        status = "COMPLETE" if completed_count >= total_planned and total_planned > 0 else "PARTIAL"
+
+        all_topic_results = []
+        if cached_discovery_results:
+            all_topic_results.extend([cached_discovery_results[k] for k in sorted(cached_discovery_results.keys())])
+        elif saved_subchunks:
+            for sub in saved_subchunks:
+                try:
+                    s_res = deserialize_discovery_result_from_checkpoint(sub["serialized_result"])
+                    all_topic_results.append(s_res)
+                except Exception:
+                    pass
+
+        if all_topic_results:
+            aggregated = aggregate_topic_discovery(
+                chunk_results=all_topic_results,
+                parent_document_id=document.document_id,
+                max_topics=eff_max_topics,
+            )
+            topics = aggregated.topics
+        else:
+            topics = ()
+
+        meta = {
+            "run_id": f"persisted_{cfg_fp[:8]}",
+            "document_id": document.document_id,
+            "origin": "RECOVERED_CHECKPOINT",
+            "model": saved_model,
+            "historical_model": saved_model,
+            "requested_model": resolved_model or saved_model,
+            "is_model_compatible": is_model_compatible,
+            "is_compatible_for_retry": is_compatible_for_retry,
+            "prompt_version": saved_pver,
+            "timestamp": updated_at,
+            "chunk_count": total_planned,
+            "completed_chunk_count": completed_count,
+            "failed_chunk_count": failed_count,
+            "recovered_chunk_count": completed_count,
+            "status": status,
+            "total_evidence_count": total_evidence_count,
+            "analyzed_evidence_count": len(analyzed_evidence_ids),
+            "unanalyzed_evidence_count": max(0, total_evidence_count - len(analyzed_evidence_ids)),
+            "chunk_diagnostics": [d.to_dict() for d in diagnostics],
+            "is_persisted_recovery": True,
+        }
+
+        persisted_res = TopicDiscoveryResult(
+            topics=topics,
+            provenance_document_id=document.document_id,
+            metadata=meta,
+        )
+        self._record_authoritative_discovery_run(document.document_id, persisted_res)
+        return persisted_res
 
     def verify_discovered_topic(
         self,

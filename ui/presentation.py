@@ -17,6 +17,7 @@ Principi:
 from __future__ import annotations
 
 import inspect
+import json
 import streamlit as st
 
 from core.config import MAX_UPLOAD_SIZE_MB
@@ -825,6 +826,202 @@ def render_search() -> None:
                         st.write(f"- **Termini Riconosciuti**: `{', '.join(hit.matched_terms)}`")
 
 
+def render_discovery_diagnostics(
+    discovery_res: TopicDiscoveryResult | None,
+    document: ConversationEvidenceDocument,
+    profile: Any = None,
+    model_name: str | None = None,
+    max_topics_val: int = 10,
+) -> None:
+    """
+    Pannello persistente «Diagnostica analisi» per Topic Discovery.
+    Visualizza avvisi di copertura, metriche, tabella chunk con filtro, pulsante di recupero e download sicuro JSON/CSV.
+    """
+    if discovery_res is None:
+        return
+
+    meta = getattr(discovery_res, "metadata", {}) or {}
+    total_chunks = meta.get("chunk_count", 1)
+    completed_chunks = meta.get("completed_chunk_count", 1)
+    failed_chunks = meta.get("failed_chunk_count", 0)
+    recovered_chunks = meta.get("recovered_chunk_count", 0)
+    status = meta.get("status", "COMPLETE")
+    raw_diagnostics = meta.get("chunk_diagnostics", [])
+
+    with st.container(border=True):
+        st.markdown("### 📊 Diagnostica analisi")
+        ts_info = meta.get("timestamp") or meta.get("end_timestamp") or "N/D"
+        model_info = meta.get("model") or (model_name or "").strip() or "N/D"
+        st.caption(f"Data esecuzione: **{ts_info}** | Stato: **{status}** | Modello: **{model_info}**")
+
+        if meta.get("is_persisted_recovery"):
+            st.info(f"ℹ️ Stato e diagnostica ripristinati da SQLite per il documento '{document.document_id}'. Blocchi ancora mancanti: **{failed_chunks}/{total_chunks}**.")
+
+        if meta.get("is_model_compatible") is False:
+            hist_m = meta.get("historical_model", "N/D")
+            req_m = meta.get("requested_model", model_name or "N/D")
+            st.warning(
+                f"⚠️ **Storico da Modello Differente**: I dati visualizzati appartengono a un'analisi precedente "
+                f"con il modello **'{hist_m}'**, mentre il modello operativo selezionato è **'{req_m}'**. "
+                f"La ripresa selettiva è bloccata per incompatibilità di configurazione. "
+                f"Per analizzare il documento con '{req_m}', avviare una nuova Topic Discovery."
+            )
+
+        if status == "PARTIAL" or failed_chunks > 0:
+            st.warning(
+                f"⚠️ Topic Discovery parziale: {completed_chunks} blocchi completati su {total_chunks}. "
+                f"{failed_chunks} blocchi non sono stati validati. "
+                f"Gli argomenti visualizzati rappresentano soltanto la porzione analizzata."
+            )
+        else:
+            st.success(f"Topic Discovery completa: {completed_chunks}/{total_chunks} blocchi validati.")
+
+        # Metriche di esecuzione
+        m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)
+        m_col1.metric("Blocchi completati", f"{completed_chunks}/{total_chunks}")
+        m_col2.metric("Blocchi falliti", failed_chunks)
+        m_col3.metric("Recuperati da checkpoint", recovered_chunks)
+
+        tot_ev = meta.get("total_evidence_count")
+        an_ev = meta.get("analyzed_evidence_count")
+        unan_ev = meta.get("unanalyzed_evidence_count")
+        if tot_ev is not None and an_ev is not None:
+            m_col4.metric("Evidenze analizzate", f"{an_ev}/{tot_ev}")
+            m_col5.metric("Evidenze non analizzate", unan_ev if unan_ev is not None else max(0, tot_ev - an_ev))
+        else:
+            m_col4.metric("Stato", status)
+            pct = round((completed_chunks / total_chunks) * 100.0, 1) if total_chunks > 0 else 0.0
+            m_col5.metric("Copertura", f"{pct}%")
+
+        # Pulsante «Riprova solo i blocchi falliti»
+        if failed_chunks > 0:
+            if meta.get("is_compatible_for_retry") is False:
+                st.info("ℹ️ Riprova selettiva non disponibile: il modello dell'analisi salvata non corrisponde al modello attualmente selezionato.")
+            else:
+                retry_btn = st.button("🔄 Riprova solo i blocchi falliti", type="secondary", key="btn_retry_failed_chunks")
+                if retry_btn:
+                    client = state.get_lm_studio_client()
+                    raw_model = (model_name or "").strip() or DEFAULT_OPERATIONAL_MODEL
+                    progress_placeholder = st.empty()
+                    prog_cb = create_streamlit_progress_callback(progress_placeholder, title="RECUPERO BLOCCHI FALLITI")
+                    try:
+                        progress_placeholder.info("Recupero blocchi validati e rielaborazione blocchi falliti...")
+                        with st.spinner("Rielaborazione selettiva blocchi falliti in corso..."):
+                            new_res = execute_topic_discovery(
+                                document=document,
+                                client=client,
+                                model_id=raw_model,
+                                max_topics=int(max_topics_val),
+                                progress_callback=prog_cb,
+                                profile=profile,
+                                retry_failed_only=True,
+                            )
+                        progress_placeholder.empty()
+                        state.add_discovery_result(new_res)
+                        n_meta = getattr(new_res, "metadata", {}) or {}
+                        n_comp = n_meta.get("completed_chunk_count", 1)
+                        n_tot = n_meta.get("chunk_count", 1)
+                        n_fail = n_meta.get("failed_chunk_count", 0)
+                        if n_fail == 0:
+                            st.success(f"Tutti i blocchi completati con successo! ({n_comp}/{n_tot})")
+                        else:
+                            st.warning(f"Riprova completata parzialmente: {n_comp}/{n_tot} blocchi validati (falliti: {n_fail}).")
+                        st.rerun()
+                    except Exception as r_err:
+                        progress_placeholder.empty()
+                        st.error(f"Errore durante il recupero dei blocchi falliti: {type(r_err).__name__}: {r_err}")
+
+        # Filtro tabella chunk
+        filter_failed = st.checkbox("Mostra solo blocchi falliti", value=False, key="chk_filter_failed")
+
+        # Costruzione righe tabella
+        table_rows = []
+        for d in raw_diagnostics:
+            c_idx = d.get("chunk_index", 0) + 1
+            st_val = d.get("status", "UNKNOWN")
+            att = d.get("attempts", 1)
+            diag_cat = d.get("diagnostic_category", "NONE")
+            err_cat_label = "Nessuno" if (diag_cat == "NONE" and st_val in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT")) else diag_cat
+            phase = d.get("failure_phase") or ("Recuperato" if st_val == "RECOVERED_FROM_CHECKPOINT" else "Completato")
+            chk_status = "Salvato" if d.get("checkpoint_saved") else ("Presente" if st_val == "RECOVERED_FROM_CHECKPOINT" else "Non salvato")
+            detail = d.get("error_detail") or ("Nessun errore" if st_val in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT") else "Errore non specificato")
+
+            if filter_failed and st_val not in ("FAILED",):
+                continue
+
+            table_rows.append({
+                "Chunk": c_idx,
+                "Stato": st_val,
+                "Tentativi": att,
+                "Errore": err_cat_label,
+                "Fase": phase,
+                "Checkpoint": chk_status,
+                "Dettaglio Tecnico": detail,
+            })
+
+        if table_rows:
+            import pandas as pd
+            df_diag = pd.DataFrame(table_rows)
+            st.dataframe(df_diag, use_container_width=True, hide_index=True)
+        else:
+            if filter_failed:
+                st.info("Nessun blocco fallito presente.")
+            else:
+                st.info("Nessuna diagnostica di dettaglio disponibile per questa run.")
+
+        # Esportazione rapporto diagnostico privo di dati personali
+        exp_col1, exp_col2 = st.columns(2)
+        safe_export_data = []
+        for d in raw_diagnostics:
+            safe_export_data.append({
+                "chunk_index": d.get("chunk_index"),
+                "chunk_id": d.get("chunk_id"),
+                "status": d.get("status"),
+                "attempts": d.get("attempts"),
+                "duration_seconds": d.get("duration_seconds"),
+                "model_id": d.get("model_id"),
+                "http_status": d.get("http_status"),
+                "finish_reason": d.get("finish_reason"),
+                "prompt_tokens": d.get("prompt_tokens"),
+                "completion_tokens": d.get("completion_tokens"),
+                "error_type": d.get("error_type"),
+                "diagnostic_category": d.get("diagnostic_category"),
+                "failure_phase": d.get("failure_phase"),
+                "error_detail": d.get("error_detail"),
+                "json_valid": d.get("json_valid"),
+                "schema_valid": d.get("schema_valid"),
+                "evidence_valid": d.get("evidence_valid"),
+                "checkpoint_saved": d.get("checkpoint_saved"),
+            })
+
+        json_export_str = json.dumps(safe_export_data, indent=2)
+        import csv
+        import io
+        csv_buffer = io.StringIO()
+        if safe_export_data:
+            writer = csv.DictWriter(csv_buffer, fieldnames=list(safe_export_data[0].keys()))
+            writer.writeheader()
+            writer.writerows(safe_export_data)
+        csv_export_str = csv_buffer.getvalue()
+
+        with exp_col1:
+            st.download_button(
+                "📥 Esporta diagnostica (JSON)",
+                data=json_export_str,
+                file_name=f"diagnostica_discovery_{document.document_id}.json",
+                mime="application/json",
+                key="btn_download_diag_json",
+            )
+        with exp_col2:
+            st.download_button(
+                "📥 Esporta diagnostica (CSV)",
+                data=csv_export_str,
+                file_name=f"diagnostica_discovery_{document.document_id}.csv",
+                mime="text/csv",
+                key="btn_download_diag_csv",
+            )
+
+
 def render_topics() -> None:
     """Schermata Analisi Topic: visualizzazione deterministica di Detection e Discovery."""
     st.header("🏷️ Analisi Tematica (Local AI Results)")
@@ -1224,6 +1421,40 @@ def render_topics() -> None:
             except Exception as exc:
                 progress_placeholder.empty()
                 st.error(f"Errore durante l'esecuzione di Topic Discovery: {type(exc).__name__}: {exc}")
+
+        # Pannello persistente «Diagnostica analisi»
+        doc_analysis = state.get_document_analysis_state(doc.document_id)
+        latest_disc = doc_analysis.last_discovery
+        if latest_disc is None and state.get_discovery_results():
+            for r in reversed(state.get_discovery_results()):
+                if getattr(r, "provenance_document_id", None) == doc.document_id:
+                    latest_disc = r
+                    break
+        if latest_disc is None:
+            # Ripristino automatico da SQLite dopo riavvio Streamlit
+            try:
+                from ui.application import get_operational_analysis_service
+                op_svc = get_operational_analysis_service()
+                latest_disc = op_svc.load_persisted_discovery_result(
+                    document=doc,
+                    model_name=disc_model_input,
+                    max_topics=int(max_topics_val),
+                    profile=selected_profile,
+                    allow_incompatible_model=True,
+                )
+                if latest_disc is not None:
+                    doc_analysis.last_discovery = latest_disc
+                    state.add_discovery_result(latest_disc)
+            except Exception:
+                pass
+        if latest_disc is not None:
+            render_discovery_diagnostics(
+                discovery_res=latest_disc,
+                document=doc,
+                profile=selected_profile,
+                model_name=disc_model_input,
+                max_topics_val=int(max_topics_val),
+            )
 
         st.divider()
 
