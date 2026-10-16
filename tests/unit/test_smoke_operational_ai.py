@@ -129,8 +129,17 @@ class TestSmokeOperationalAiHardening:
         assert "verification_classification    : MOCK_VERIFIED" in captured
         assert "LIVE_VERIFIED" not in captured
 
-    def test_smoke_test_unreachable_lmstudio_returns_exit_2_not_verified(self, capsys: pytest.CaptureFixture[str]) -> None:
+    def test_smoke_test_unreachable_lmstudio_returns_exit_2_not_verified(
+        self, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
+    ) -> None:
         """8. LM Studio assente -> Exit Code 2, NOT_VERIFIED."""
+        import urllib.error
+        import urllib.request
+
+        def mock_urlopen(*args: Any, **kwargs: Any) -> Any:
+            raise urllib.error.URLError(ConnectionRefusedError(111, "Connection refused"))
+
+        monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
         exit_code = run_smoke_test(use_fake=False)
         captured = capsys.readouterr().out
         assert exit_code == 2
