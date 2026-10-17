@@ -103,8 +103,10 @@ class ConversationEvidenceDocument:
         if not isinstance(self.bundles, (tuple, list)):
             raise ValueError(f"bundles deve essere una sequenza, ricevuto {type(self.bundles)}")
 
-        validated_bundles: list[MessageEvidenceBundle] = []
+        is_already_tuple = isinstance(self.bundles, tuple)
+        validated_bundles = self.bundles if is_already_tuple else []
         seen_eids: set[str] = set()
+        total_evidence_count = 0
 
         for b in self.bundles:
             if not isinstance(b, MessageEvidenceBundle):
@@ -118,7 +120,9 @@ class ConversationEvidenceDocument:
                 )
 
             # G1: Evidence ID uniqueness across document
-            for sec in b.text_evidence_sections:
+            b_sections = b.text_evidence_sections
+            total_evidence_count += len(b_sections)
+            for sec in b_sections:
                 if sec.evidence_id in seen_eids:
                     raise ValueError(
                         f"Rilevata collisione di evidence_id nel documento '{self.document_id}': "
@@ -126,18 +130,26 @@ class ConversationEvidenceDocument:
                     )
                 seen_eids.add(sec.evidence_id)
 
-            validated_bundles.append(b)
+            if not is_already_tuple:
+                validated_bundles.append(b)
 
-        object.__setattr__(self, "bundles", tuple(validated_bundles))
+        if not is_already_tuple:
+            object.__setattr__(self, "bundles", tuple(validated_bundles))
         object.__setattr__(self, "metadata", freeze_structural(self.metadata))
+        object.__setattr__(self, "_cached_evidence_count", total_evidence_count)
 
     @property
     def all_evidence_sections(self) -> tuple[TextEvidenceSection, ...]:
         """Restituisce la tupla piatta di tutte le sezioni testuali presenti nei bundle in ordine di inserimento."""
+        cached = getattr(self, "_cached_all_evidence_sections", None)
+        if cached is not None:
+            return cached
         sections: list[TextEvidenceSection] = []
         for b in self.bundles:
             sections.extend(b.text_evidence_sections)
-        return tuple(sections)
+        res = tuple(sections)
+        object.__setattr__(self, "_cached_all_evidence_sections", res)
+        return res
 
     @property
     def message_count(self) -> int:
@@ -145,7 +157,20 @@ class ConversationEvidenceDocument:
 
     @property
     def evidence_count(self) -> int:
+        cnt = getattr(self, "_cached_evidence_count", None)
+        if cnt is not None:
+            return cnt
         return len(self.all_evidence_sections)
+
+    @property
+    def evidence_ids(self) -> frozenset[str]:
+        """Restituisce l'insieme immutabile di tutti gli evidence ID univoci presenti nel documento."""
+        cached = getattr(self, "_cached_evidence_ids", None)
+        if cached is not None:
+            return cached
+        res = frozenset(sec.evidence_id for sec in self.all_evidence_sections)
+        object.__setattr__(self, "_cached_evidence_ids", res)
+        return res
 
 
 @dataclass(frozen=True)

@@ -142,7 +142,50 @@ secrets/
 # =============================================================================
 
 # =============================================================================
-# Review Bundle temporaneo per revisione supervisore — MAI versionare
+# Review Bundle e Cartelle di Audit — MAI versionare
 # =============================================================================
 review_bundle/
+audit_bundle/
+blocker_repair_audit/
+context_binding_bundle/
+corrective_audit_bundle/
+discovery_run_immutability_bundle/
+final_audit/
+git_handoff_snapshot_bundle/
+last_blockers_bundle/
+lmstudio_compatibility_bundle/
+native_model_selection_bundle/
+pre_ubuntu_smoke_bundle/
+release_gate_reaudit_bundle/
+repair_bundle/
+strict_quantization_provenance_bundle/
+ubuntu_handoff_guardrails_bundle/
+ubuntu_live_gate_readiness_bundle/
+ubuntu_smoke_gate_bundle/
+*_bundle/
+*_audit/
+
+# =============================================================================
+# Checkpoint di analisi reali e dati diagnostici investigativi — MAI versionare
+# =============================================================================
+.checkpoints/
+*/.checkpoints/
+*checkpoint_chunk_diagnostics*
+*diagnostic*.csv
+*diagnostic*.json
+!tests/**/*.json
+!test_data/**/*.json
+
+# =============================================================================
+# Archivi temporanei di audit e release, patch e manifest obsoleti
+# NOTA: non escludere indiscriminatamente *.zip per preservare le fixture di test
+# =============================================================================
+chatAnalysis_*.zip
+*audit*.zip
+*.patch
+MANIFEST_SHA256.json
+MANIFEST_SHA256.txt
+
+# Eccezione esplicita per fixture di test nei dati sintetici
+!test_data/**/*.zip
 

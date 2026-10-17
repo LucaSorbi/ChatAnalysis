@@ -1896,6 +1896,7 @@ class LocalTopicAnalysisService:
                 meta["total_evidence_count"] = int(total_evidence_count)
                 meta["analyzed_evidence_count"] = int(len(analyzed_evidence_ids))
                 meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
+                meta["evidence_citation_protocol"] = "deterministic_alias_v1"
                 if not should_preserve_raw and "raw_response" in meta:
                     del meta["raw_response"]
 
@@ -2329,6 +2330,7 @@ class LocalTopicAnalysisService:
         meta["total_evidence_count"] = int(total_evidence_count)
         meta["analyzed_evidence_count"] = int(len(analyzed_evidence_ids))
         meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
+        meta["evidence_citation_protocol"] = "deterministic_alias_v1"
         meta["status"] = disc_status
 
         if not should_preserve_raw and "raw_response" in meta:

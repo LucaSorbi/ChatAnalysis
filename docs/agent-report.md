@@ -381,15 +381,15 @@ La validazione preliminare condotta in precedenza su endpoint cloud (Protocolli 
   - In `ui/application.py` (`get_system_status_info()`) e in `ui/presentation.py` (`render_system_status_page()`) erano presenti costanti e stringhe hardcoded relative al processore `AMD A8-7410` e al differimento sperimentale, anziché esporre contratti agnostici e portabili.
 
 ### 3. FILE DI CODICE MODIFICATI
-- [ai/backend.py](file:///c:/Users/lucas/Desktop/Tesi/ai/backend.py)
-- [ai/lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/ai/lmstudio.py)
-- [importer/whatsapp_export.py](file:///c:/Users/lucas/Desktop/Tesi/importer/whatsapp_export.py)
-- [ui/application.py](file:///c:/Users/lucas/Desktop/Tesi/ui/application.py)
-- [ui/ingestion.py](file:///c:/Users/lucas/Desktop/Tesi/ui/ingestion.py)
-- [ui/presentation.py](file:///c:/Users/lucas/Desktop/Tesi/ui/presentation.py)
-- [tests/unit/test_ai_lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_lmstudio.py)
-- [tests/unit/test_operational_model_management.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py)
-- [tests/unit/test_ui_manual_topic_detection.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_manual_topic_detection.py)
+- [ai/backend.py](../ai/backend.py)
+- [ai/lmstudio.py](../ai/lmstudio.py)
+- [importer/whatsapp_export.py](../importer/whatsapp_export.py)
+- [ui/application.py](../ui/application.py)
+- [ui/ingestion.py](../ui/ingestion.py)
+- [ui/presentation.py](../ui/presentation.py)
+- [tests/unit/test_ai_lmstudio.py](../tests/unit/test_ai_lmstudio.py)
+- [tests/unit/test_operational_model_management.py](../tests/unit/test_operational_model_management.py)
+- [tests/unit/test_ui_manual_topic_detection.py](../tests/unit/test_ui_manual_topic_detection.py)
 
 ### 4. FUNZIONI/CLASSI MODIFICATE
 - `ai.backend`:
@@ -456,15 +456,15 @@ La risoluzione deterministica in `resolve_operational_model_from_metadata` segue
 6. **Modello non presente**: se nessun modello compatibile è installato, viene sollevato `AiModelNotInstalledError` con il messaggio: `"Qwen2.5-7B-Instruct non è installato localmente in LM Studio."`. Nessun download automatico da remoto viene mai avviato.
 
 ### 8. WHATSAPP TXT/ZIP
-- **Enum**: `SourceFormat.WHATSAPP_EXPORT = "WhatsApp export chat (TXT / ZIP)"` in [ui/models.py](file:///c:/Users/lucas/Desktop/Tesi/ui/models.py).
-- **Importer**: [importer/whatsapp_export.py](file:///c:/Users/lucas/Desktop/Tesi/importer/whatsapp_export.py) implementa `WhatsAppExportImporter(BaseImporter)` con `source_name = "whatsapp_export"`.
+- **Enum**: `SourceFormat.WHATSAPP_EXPORT = "WhatsApp export chat (TXT / ZIP)"` in [ui/models.py](../ui/models.py).
+- **Importer**: [importer/whatsapp_export.py](../importer/whatsapp_export.py) implementa `WhatsAppExportImporter(BaseImporter)` con `source_name = "whatsapp_export"`.
   - Supporto transcript Android (`DD/MM/YYYY, HH:MM - Mittente: Testo`) e iOS (`[DD/MM/YYYY, HH:MM:SS] Mittente: Testo`).
   - Gestione timestamp 24h e 12h AM/PM, anni a 2 o 4 cifre, secondi opzionali, caratteri Unicode direzionali/invisibili (`\u200e`, ecc.), emoji.
   - Messaggi multilinea e messaggi di sistema multilingua.
   - Nomi o URL contenenti due punti (`:`).
   - Riferimenti ad allegati multimediali quando presenti come membri nello ZIP.
 - **Sicurezza ZIP**: impiego di `zipfile` standard con validazione stringente anti path-traversal (`..`, percorsi assoluti), protezione symlink, limite numero file (`10.000`), limite dimensione decompressa totale (`500 MB`) e rapporto di compressione (`100:1` ZIP bomb protection). Nessun file scritto indiscriminatamente su disco.
-- **Dispatch**: in [ui/ingestion.py](file:///c:/Users/lucas/Desktop/Tesi/ui/ingestion.py) `get_importer_for_format(SourceFormat.WHATSAPP_EXPORT)` restituisce `WhatsAppExportImporter()`.
+- **Dispatch**: in [ui/ingestion.py](../ui/ingestion.py) `get_importer_for_format(SourceFormat.WHATSAPP_EXPORT)` restituisce `WhatsAppExportImporter()`.
 - **UI Uploader**: `st.file_uploader` accetta `["txt", "zip"]` con didascalia esatta.
 - **Normalizer**: compatibilità completa con `normalize_records` per la produzione di `ConversationEvidenceDocument`.
 - **Zero AI**: l'ingestion non invoca alcun endpoint LM Studio né apre socket di rete.
@@ -482,12 +482,12 @@ La pagina di diagnostica espone ora parametri operativi portabili:
 - `Real File Ingestion: INTEGRATED`
 
 ### 10. TEST AGGIUNTI/MODIFICATI
-- [tests/unit/test_operational_model_management.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py): nuova suite esaustiva contenente i 43 test contrattuali obbligatori:
+- [tests/unit/test_operational_model_management.py](../tests/unit/test_operational_model_management.py): nuova suite esaustiva contenente i 43 test contrattuali obbligatori:
   - WhatsApp Export (test 1-19): enum, dispatch, Android TXT, iOS TXT, multilinea, messaggi sistema, Unicode/emoji, URL con `:`, ZIP in memoria, allegati ZIP, rifiuto ZIP ambiguo, protezione traversal `..`, protezione ZIP bomb, rifiuto file generici, pipeline integration SearchService, AppTest presenza UI, AppTest accettazione `.txt`/`.zip`, verifica zero AI durante ingestion.
   - LM Studio Model Management (test 20-39): parsing `GET /api/v1/models`, skip ricaricamento se già in memoria, `POST /api/v1/models/load` con payload conforme (`model`, `context_length`), assenza tassativa di `identifier`, `contextLength`, `gpu_offload`, `gpuOffload`, gestione modello assente, gestione ambiguità, server offline, gestione HTTP 400, timeout load, timeout inferenza, corrispondenza `model_id` istanza caricata, timeout configurato a 240s, divieto download automatici, divieto endpoint esterni non loopback, verifica assenza AI in ingestion.
   - System Status (test 40-43): assenza di `AMD A8-7410`, assenza di `Hardware Block`, assenza di `Rinvio Benchmark`, verifica contratto portabile e neutro.
-- [tests/unit/test_ai_lmstudio.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_lmstudio.py): aggiornamento test unitari `get_models_detailed`, `load_model` e `ensure_model_loaded` per il nuovo schema REST v1 e fallback trasparente.
-- [tests/unit/test_ui_manual_topic_detection.py](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_manual_topic_detection.py): aggiornamento mock per verificare il payload pulito privo di parametri GPU arbitrari.
+- [tests/unit/test_ai_lmstudio.py](../tests/unit/test_ai_lmstudio.py): aggiornamento test unitari `get_models_detailed`, `load_model` e `ensure_model_loaded` per il nuovo schema REST v1 e fallback trasparente.
+- [tests/unit/test_ui_manual_topic_detection.py](../tests/unit/test_ui_manual_topic_detection.py): aggiornamento mock per verificare il payload pulito privo di parametri GPU arbitrari.
 
 ### 11. RISULTATO PYTEST REALE
 Esecuzione completa dell'intera suite di test del progetto (`python -m pytest`):
@@ -520,15 +520,15 @@ Nessun commit effettuato. Nessun push effettuato.
 - **Nuovo limite operativo reale**: **2048 MB (2 GB)** configurato e vincolante a livello sia di server che di widget applicativi.
 
 ### 2. File Modificati e Creati
-1. [`.streamlit/config.toml`](file:///c:/Users/lucas/Desktop/Tesi/.streamlit/config.toml): configurazione esplicita di `server.maxUploadSize = 2048` e `server.maxMessageSize = 2048`, preservando integrità di loopback `127.0.0.1`, `gatherUsageStats = false`, CORS/XSRF e mascheramento errori.
-2. [`core/config.py`](file:///c:/Users/lucas/Desktop/Tesi/core/config.py): nuovo modulo di configurazione centralizzata forense per eliminare numeri magici sparsi (`MAX_UPLOAD_SIZE_MB = 2048`, `MAX_UPLOAD_SIZE_BYTES`, `DEFAULT_STREAM_CHUNK_SIZE = 1MB`, `MAX_ARCHIVE_UNCOMPRESSED_SIZE_MB = 4096`, `MAX_ARCHIVE_MEMBERS = 50000`, `MAX_COMPRESSION_RATIO = 100.0`, `MAX_SINGLE_FILE_SIZE_MB = 2048`).
-3. [`core/__init__.py`](file:///c:/Users/lucas/Desktop/Tesi/core/__init__.py): esportazione delle nuove costanti di configurazione.
-4. [`importer/whatsapp_export.py`](file:///c:/Users/lucas/Desktop/Tesi/importer/whatsapp_export.py): integrazione delle costanti centralizzate di sicurezza ZIP con alias retrocompatibili per i test preesistenti; aggiornamento limiti anti-zip-bomb per consentire archivi WhatsApp legittimi con video e media fino a 4 GB decompressi e file singoli fino a 2 GB.
-5. [`ui/ingestion.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/ingestion.py): riscrittura di `_compute_sha256_and_write` per elaborazione a chunk da 1 MB, verifica anticipata e durante lo streaming del limite a 2 GB, uso di `memoryview` per prevenire duplicazioni in RAM di byte bufferizzati, gestione controllata e sicura di memoria/disco insufficienti e stream interrotti senza leak di percorsi temporanei o traceback.
-6. [`ui/presentation.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/presentation.py): rimozione delle chiamate duplicate `.getvalue()` su `uploaded_file` e `companion_file`; passaggio diretto del file-like stream a `IngestionRequest`; passaggio esplicito del parametro `max_upload_size=2048` su entrambi gli uploader forensi (`primary_file_uploader` e `companion_wa_uploader`); aggiunta della nota discreta `"Dimensione massima file: 2 GB"` e per WhatsApp Export `"Gli archivi molto grandi possono richiedere più tempo per la verifica di integrità e l'importazione."`.
-7. [`tests/unit/test_ui_privacy_hardening.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ui_privacy_hardening.py): estensione dei test con verifica esplicita di `server.maxUploadSize == 2048` e `server.maxMessageSize == 2048` sia su file TOML che su opzioni runtime Streamlit.
-8. [`tests/unit/test_operational_model_management.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_operational_model_management.py): aggiunta asserzione su `uploader.proto.max_upload_size_mb == 2048`.
-9. [`tests/unit/test_large_file_upload.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_large_file_upload.py): nuova suite completa di 19 test unitari sintetici per la validazione di upload > 200 MB, streaming, chunking, limiti TOML, widget protobuf, zip security, cleanup e assenza AI.
+1. [`.streamlit/config.toml`](../.streamlit/config.toml): configurazione esplicita di `server.maxUploadSize = 2048` e `server.maxMessageSize = 2048`, preservando integrità di loopback `127.0.0.1`, `gatherUsageStats = false`, CORS/XSRF e mascheramento errori.
+2. [`core/config.py`](../core/config.py): nuovo modulo di configurazione centralizzata forense per eliminare numeri magici sparsi (`MAX_UPLOAD_SIZE_MB = 2048`, `MAX_UPLOAD_SIZE_BYTES`, `DEFAULT_STREAM_CHUNK_SIZE = 1MB`, `MAX_ARCHIVE_UNCOMPRESSED_SIZE_MB = 4096`, `MAX_ARCHIVE_MEMBERS = 50000`, `MAX_COMPRESSION_RATIO = 100.0`, `MAX_SINGLE_FILE_SIZE_MB = 2048`).
+3. [`core/__init__.py`](../core/__init__.py): esportazione delle nuove costanti di configurazione.
+4. [`importer/whatsapp_export.py`](../importer/whatsapp_export.py): integrazione delle costanti centralizzate di sicurezza ZIP con alias retrocompatibili per i test preesistenti; aggiornamento limiti anti-zip-bomb per consentire archivi WhatsApp legittimi con video e media fino a 4 GB decompressi e file singoli fino a 2 GB.
+5. [`ui/ingestion.py`](../ui/ingestion.py): riscrittura di `_compute_sha256_and_write` per elaborazione a chunk da 1 MB, verifica anticipata e durante lo streaming del limite a 2 GB, uso di `memoryview` per prevenire duplicazioni in RAM di byte bufferizzati, gestione controllata e sicura di memoria/disco insufficienti e stream interrotti senza leak di percorsi temporanei o traceback.
+6. [`ui/presentation.py`](../ui/presentation.py): rimozione delle chiamate duplicate `.getvalue()` su `uploaded_file` e `companion_file`; passaggio diretto del file-like stream a `IngestionRequest`; passaggio esplicito del parametro `max_upload_size=2048` su entrambi gli uploader forensi (`primary_file_uploader` e `companion_wa_uploader`); aggiunta della nota discreta `"Dimensione massima file: 2 GB"` e per WhatsApp Export `"Gli archivi molto grandi possono richiedere più tempo per la verifica di integrità e l'importazione."`.
+7. [`tests/unit/test_ui_privacy_hardening.py`](../tests/unit/test_ui_privacy_hardening.py): estensione dei test con verifica esplicita di `server.maxUploadSize == 2048` e `server.maxMessageSize == 2048` sia su file TOML che su opzioni runtime Streamlit.
+8. [`tests/unit/test_operational_model_management.py`](../tests/unit/test_operational_model_management.py): aggiunta asserzione su `uploader.proto.max_upload_size_mb == 2048`.
+9. [`tests/unit/test_large_file_upload.py`](../tests/unit/test_large_file_upload.py): nuova suite completa di 19 test unitari sintetici per la validazione di upload > 200 MB, streaming, chunking, limiti TOML, widget protobuf, zip security, cleanup e assenza AI.
 
 ### 3. Contenuto Reale di `.streamlit/config.toml`
 ```toml
@@ -623,24 +623,24 @@ L'indagine tecnica e diagnostica ha verificato la catena end-to-end:
    La UI presentava `st.success(...)` anche in caso di `ABSENT`, anziché evidenziare la discrepanza operativa Discovery → Detection e mostrare i metadati di comparazione tra le due analisi.
 
 ### 2. File Modificati
-1. [`ai/topics.py`](file:///c:/Users/lucas/Desktop/Tesi/ai/topics.py):
+1. [`ai/topics.py`](../ai/topics.py):
    - Aggiunta costante `PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v1"`.
    - Aggiunta direttiva operativa `OPERATIONAL_MULTIMODAL_DIRECTIVE` che istruisce esplicitamente il modello sulla rilevanza di tutte le fonti (`ORIGINAL_TEXT`, `STT_TRANSCRIPTION`, `OCR_TEXT`, `VISION_DESCRIPTION`, `VISION_OBSERVATION`) e sulla sufficienza della corrispondenza semantica senza richiedere lexical overlap letterale con la label.
    - Parametro `operational_mode: bool = False` su `TopicDetectionAnalyzer.__init__` e `detect_topic()`, garantendo isolamento totale del benchmark.
    - Conservazione di `raw_response` e `requested_model` nei metadati del risultato.
-2. [`ai/__init__.py`](file:///c:/Users/lucas/Desktop/Tesi/ai/__init__.py):
+2. [`ai/__init__.py`](../ai/__init__.py):
    - Esportazione di `PROMPT_VERSION_DETECTION_OPERATIONAL`.
-3. [`ui/application.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/application.py):
+3. [`ui/application.py`](../ui/application.py):
    - Creazione di `TopicProvenanceMismatchError(ValueError)`.
    - Creazione di `validate_discovery_provenance(discovery_provenance_id, active_document_id)`.
    - Parametro `operational_mode: bool = True` in `execute_manual_topic_detection()`.
-4. [`ui/presentation.py`](file:///c:/Users/lucas/Desktop/Tesi/ui/presentation.py):
+4. [`ui/presentation.py`](../ui/presentation.py):
    - Verifica di provenance bloccante prima della Detection con messaggio di errore controllato.
    - Segnalazione `⚠️ DISCREPANZA DISCOVERY → DETECTION` se l'esito è `ABSENT`.
    - Rendering card di verifica completa con 7 parametri: Discovery topic, Discovery evidence IDs, Detection decision, Detection evidence IDs, Detection rationale, Model, Consistency status.
    - Verifica e allerta su Model Mismatch (`requested_model != actual_model`).
    - Expander di debug diagnostico (`🔍 Diagnostica Debug (Raw Structured LLM Response)`) abilitato esclusivamente in modalità `DatasetMode.DEMO`.
-5. [`tests/unit/test_ai_detection_multimodal_diagnostics.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_detection_multimodal_diagnostics.py):
+5. [`tests/unit/test_ai_detection_multimodal_diagnostics.py`](../tests/unit/test_ai_detection_multimodal_diagnostics.py):
    - Nuova suite di 16 test unitari diagnostici esaustivi.
 
 ### 3. TopicQuery Realmente Inviato
@@ -678,7 +678,7 @@ L'indagine tecnica e diagnostica ha verificato la catena end-to-end:
 - **Nessuna Conversione di Errori in ABSENT**: Verificato che nessun errore di parsing, validazione di schema, timeout o citazione allucinata viene trasformato in `ABSENT`; tutti sollevano le relative eccezioni controllate (`AiStructuredOutputError`, `AiInvalidEvidenceCitationError`, `AiModelMismatchError`, ecc.).
 
 ### 7. Test Aggiunti
-Creato [`tests/unit/test_ai_detection_multimodal_diagnostics.py`](file:///c:/Users/lucas/Desktop/Tesi/tests/unit/test_ai_detection_multimodal_diagnostics.py) con 16 test mirati:
+Creato [`tests/unit/test_ai_detection_multimodal_diagnostics.py`](../tests/unit/test_ai_detection_multimodal_diagnostics.py) con 16 test mirati:
 1. `test_discovery_to_detection_label_exact`: label corretta dal Discovery (`"Logistica e Ispezione Depositi"`).
 2. `test_discovery_to_detection_short_description_exact`: short description non vuota nel prompt.
 3. `test_discovery_provenance_document_id_matches_active_document`: stesso document_id, blocco su disallineamento.

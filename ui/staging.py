@@ -67,6 +67,7 @@ class IngestionStagingStore:
         self._conn.execute("PRAGMA temp_store = MEMORY;")
         self._conn.execute("PRAGMA cache_size = -16000;")  # ~16 MB RAM cache
 
+        self._indexes_created = False
         self._create_tables()
 
     def _create_tables(self) -> None:
@@ -85,10 +86,16 @@ class IngestionStagingStore:
                     payload BLOB NOT NULL
                 );
             """)
+
+    def _ensure_indexes(self) -> None:
+        if self._indexes_created:
+            return
+        with self._conn:
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_staged_seq ON staged_records(seq_order);")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_staged_type ON staged_records(record_type);")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_staged_chat_seq ON staged_records(chat_key, seq_order);")
             self._conn.execute("CREATE INDEX IF NOT EXISTS idx_staged_dup ON staged_records(record_type, timeline_kind, timeline_value, text_content);")
+        self._indexes_created = True
 
     def stage_record(
         self,
@@ -179,6 +186,7 @@ class IngestionStagingStore:
     def count(self, record_type: str | None = None) -> int:
         """Restituisce il numero totale di record staged (o per record_type)."""
         self.flush()
+        self._ensure_indexes()
         cursor = self._conn.cursor()
         if record_type:
             cursor.execute("SELECT COUNT(*) FROM staged_records WHERE record_type = ?;", (record_type,))
@@ -190,6 +198,7 @@ class IngestionStagingStore:
     def iter_all_records(self, chunk_size: int = 1000) -> Iterator[NormalizedRecord]:
         """Itera su tutti i record staged in ordine sequenziale originario (seq_order)."""
         self.flush()
+        self._ensure_indexes()
         cursor = self._conn.cursor()
         cursor.execute("SELECT payload FROM staged_records ORDER BY seq_order ASC;")
         while True:
@@ -202,6 +211,7 @@ class IngestionStagingStore:
     def iter_records_by_type(self, record_type: str, chunk_size: int = 1000) -> Iterator[NormalizedRecord]:
         """Itera sui record dello specifico record_type in ordine seq_order."""
         self.flush()
+        self._ensure_indexes()
         cursor = self._conn.cursor()
         cursor.execute(
             "SELECT payload FROM staged_records WHERE record_type = ? ORDER BY seq_order ASC;",
@@ -220,6 +230,7 @@ class IngestionStagingStore:
         UNRESOLVED è sempre posizionato in coda se presente.
         """
         self.flush()
+        self._ensure_indexes()
         cursor = self._conn.cursor()
         cursor.execute("SELECT DISTINCT chat_key FROM staged_records WHERE record_type = 'message';")
         keys = [r[0] for r in cursor.fetchall() if r[0] is not None]
@@ -233,6 +244,7 @@ class IngestionStagingStore:
     def iter_records_for_chat(self, chat_key: str, chunk_size: int = 1000) -> Iterator[NormalizedRecord]:
         """Itera sui soli record di tipo 'message' appartenenti alla specifica chat."""
         self.flush()
+        self._ensure_indexes()
         cursor = self._conn.cursor()
         cursor.execute(
             "SELECT payload FROM staged_records WHERE record_type = 'message' AND chat_key = ? ORDER BY seq_order ASC;",
@@ -269,6 +281,7 @@ class IngestionStagingStore:
         Evita materializzazioni globali del dataset: carica solo i record che richiedono clustering.
         """
         self.flush()
+        self._ensure_indexes()
         cursor = self._conn.cursor()
         # Query diretta e indicizzata sui soli record aventi timeline e testo identici (COUNT > 1)
         cursor.execute("""
@@ -286,11 +299,11 @@ class IngestionStagingStore:
             return {}
 
         result: dict[tuple[str, tuple[str, str]], list[NormalizedRecord]] = {}
+        rec_cur = self._conn.cursor()
         for row in dup_groups:
             tz_kind = row["timeline_kind"]
             ts_val = row["timeline_value"]
             text_val = row["text_content"]
-            rec_cur = self._conn.cursor()
             rec_cur.execute("""
                 SELECT payload FROM staged_records
                 WHERE record_type = 'message'

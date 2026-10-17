@@ -57,6 +57,10 @@ def compute_document_fingerprint(document: ConversationEvidenceDocument) -> str:
     Include esplicitamente timestamp e ordine dei messaggi, sender, identificativi e testi delle evidenze.
     Garantisce che qualsiasi alterazione di testo, timestamp, ordine o metadati modifichi il fingerprint.
     """
+    cached_fp = getattr(document, "_cached_fingerprint", None)
+    if cached_fp is not None:
+        return cached_fp
+
     hasher = hashlib.sha256()
     hasher.update(document.document_id.encode("utf-8"))
     hasher.update(str(document.chat_id or "").encode("utf-8"))
@@ -74,7 +78,12 @@ def compute_document_fingerprint(document: ConversationEvidenceDocument) -> str:
             hasher.update(str(sec.language or "").encode("utf-8"))
             hasher.update(sec.text.encode("utf-8"))
 
-    return hasher.hexdigest()
+    fp = hasher.hexdigest()
+    try:
+        object.__setattr__(document, "_cached_fingerprint", fp)
+    except Exception:
+        pass
+    return fp
 
 
 def compute_run_config_hash(
@@ -172,7 +181,9 @@ def validate_checkpoint_evidence_references(
     if not isinstance(checkpoint.serialized_results, (dict, Mapping)):
         return False
 
-    valid_doc_eids = {sec.evidence_id for sec in document.all_evidence_sections}
+    valid_doc_eids = getattr(document, "evidence_ids", None)
+    if valid_doc_eids is None:
+        valid_doc_eids = {sec.evidence_id for sec in document.all_evidence_sections}
 
     for s_idx, s_data in checkpoint.serialized_results.items():
         try:
@@ -186,7 +197,10 @@ def validate_checkpoint_evidence_references(
         if chunks is not None:
             if chunk_num >= len(chunks):
                 return False
-            allowed_eids = {sec.evidence_id for sec in chunks[chunk_num].all_evidence_sections}
+            chk_obj = chunks[chunk_num]
+            allowed_eids = getattr(chk_obj, "evidence_ids", None)
+            if allowed_eids is None:
+                allowed_eids = {sec.evidence_id for sec in chk_obj.all_evidence_sections}
         else:
             allowed_eids = valid_doc_eids
 
@@ -259,7 +273,10 @@ def validate_checkpoint_evidence_references(
         if chunks is not None:
             if p_idx >= len(chunks):
                 return False
-            allowed_sub_eids = {sec.evidence_id for sec in chunks[p_idx].all_evidence_sections}
+            parent_chk = chunks[p_idx]
+            allowed_sub_eids = getattr(parent_chk, "evidence_ids", None)
+            if allowed_sub_eids is None:
+                allowed_sub_eids = {sec.evidence_id for sec in parent_chk.all_evidence_sections}
         else:
             allowed_sub_eids = valid_doc_eids
 

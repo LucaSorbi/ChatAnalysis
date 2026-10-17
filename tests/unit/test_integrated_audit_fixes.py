@@ -946,7 +946,7 @@ def test_operational_chunking_run_topic_discovery_service_path():
     def dynamic_resp(messages):
         user_content = messages[-1]["content"]
         import re
-        m = re.search(r"unified:whatsapp_audit:\d+::ORIGINAL_TEXT", user_content)
+        m = re.search(r"E\d{3}|unified:whatsapp_audit:\d+::ORIGINAL_TEXT", user_content)
         eid = m.group(0) if m else "unified:whatsapp_audit:1::ORIGINAL_TEXT"
         return {
             "content": json.dumps({"topics": [{"label": "Tema Comune", "short_description": "Descrizione", "evidence_ids": [eid]}]}),

@@ -147,10 +147,12 @@ def parse_and_validate_json(raw_text: str) -> dict[str, Any]:
 def validate_topic_detection_payload(
     raw_text: str,
     valid_evidence_ids: set[str],
+    alias_map: Mapping[str, str] | None = None,
 ) -> tuple[TopicDecision, tuple[str, ...], str]:
     """
     Valida la risposta per Topic Detection.
-    Verifica chiavi esatte, tipi rigidi, enum e che le citazioni appartengano a valid_evidence_ids.
+    Verifica chiavi esatte, tipi rigidi, enum e che le citazioni appartengano a valid_evidence_ids
+    (o alias_map se in modalità operativa con alias).
     """
     data = parse_and_validate_json(raw_text)
 
@@ -202,35 +204,63 @@ def validate_topic_detection_payload(
     if not rationale:
         raise AiStructuredOutputError("'rationale' non può essere una stringa vuota")
 
-    # Verifica allucinazioni: ogni evidence_id citato deve esistere nel documento
-    hallucinated = set(raw_eids) - valid_evidence_ids
-    if hallucinated:
-        raise AiInvalidEvidenceCitationError(
-            f"Il modello ha citato evidence_id inesistenti o allucinati: {sorted(hallucinated)}",
-            invalid_evidence_ids=tuple(sorted(hallucinated)),
-        )
+    # Verifica citazioni ed eventuale rimappatura alias deterministica
+    if alias_map is not None:
+        remapped_eids_list: list[str] = []
+        hallucinated: list[str] = []
+        for eid_val in raw_eids:
+            if eid_val in alias_map:
+                real_id = alias_map[eid_val]
+                if real_id in valid_evidence_ids:
+                    remapped_eids_list.append(real_id)
+                else:
+                    hallucinated.append(eid_val)
+            elif eid_val in valid_evidence_ids:
+                remapped_eids_list.append(eid_val)
+            else:
+                hallucinated.append(eid_val)
+
+        if hallucinated:
+            raise AiInvalidEvidenceCitationError(
+                f"Il modello ha citato evidence_id o alias inesistenti o non appartenenti al blocco: {sorted(hallucinated)}",
+                invalid_evidence_ids=tuple(sorted(hallucinated)),
+            )
+        final_eids = tuple(remapped_eids_list)
+    else:
+        hallucinated = set(raw_eids) - valid_evidence_ids
+        if hallucinated:
+            raise AiInvalidEvidenceCitationError(
+                f"Il modello ha citato evidence_id inesistenti o allucinati: {sorted(hallucinated)}",
+                invalid_evidence_ids=tuple(sorted(hallucinated)),
+            )
+        final_eids = tuple(raw_eids)
 
     # Invarianti per decisione
-    if decision == TopicDecision.PRESENT and len(raw_eids) == 0:
+    if decision == TopicDecision.PRESENT and len(final_eids) == 0:
         raise AiStructuredOutputError(
             "Il modello ha restituito decision=PRESENT ma la lista evidence_ids è vuota"
         )
-    if decision == TopicDecision.ABSENT and len(raw_eids) != 0:
+    if decision == TopicDecision.ABSENT and len(final_eids) != 0:
         raise AiStructuredOutputError(
-            f"Il modello ha restituito decision=ABSENT ma ha allegato evidence_ids: {raw_eids}. Per ABSENT deve essere vuota."
+            f"Il modello ha restituito decision=ABSENT ma ha allegato evidence_ids: {final_eids}. Per ABSENT deve essere vuota."
         )
 
-    return decision, tuple(raw_eids), rationale
+    return decision, final_eids, rationale
 
 
 def validate_topic_discovery_payload(
     raw_text: str,
     valid_evidence_ids: set[str],
     max_topics: int = 10,
+    alias_map: Mapping[str, str] | None = None,
 ) -> tuple[DiscoveredTopic, ...]:
     """
     Valida la risposta per Open Topic Discovery.
     Rifiuta output che superano max_topics senza alcun troncamento silente.
+    Se alias_map è fornita (es. {'E001': 'real_id_1', ...}), le citazioni del modello
+    possono corrispondere agli alias presentati nel blocco e vengono riconvertite
+    deterministicamente negli identificativi forensi reali.
+    Citazioni inesistenti, allucinate o appartenenti ad altri blocchi vengono rigorosamente rifiutate.
     """
     data = parse_and_validate_json(raw_text)
 
@@ -277,18 +307,43 @@ def validate_topic_discovery_payload(
         if len(eids_raw) != len(set(eids_raw)):
             raise AiStructuredOutputError(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}")
 
-        hallucinated = set(eids_raw) - valid_evidence_ids
-        if hallucinated:
-            raise AiInvalidEvidenceCitationError(
-                f"topic[{idx}] ('{item['label']}') cita evidence_id inesistenti: {sorted(hallucinated)}",
-                invalid_evidence_ids=tuple(sorted(hallucinated)),
-            )
+        if alias_map is not None:
+            # Rigoroso: l'identificativo citato deve essere un alias valido del blocco
+            # oppure un evidence_id forense valido appartenente al blocco corrente.
+            remapped_eids_list: list[str] = []
+            hallucinated: list[str] = []
+            for eid_val in eids_raw:
+                if eid_val in alias_map:
+                    real_id = alias_map[eid_val]
+                    if real_id in valid_evidence_ids:
+                        remapped_eids_list.append(real_id)
+                    else:
+                        hallucinated.append(eid_val)
+                elif eid_val in valid_evidence_ids:
+                    remapped_eids_list.append(eid_val)
+                else:
+                    hallucinated.append(eid_val)
+
+            if hallucinated:
+                raise AiInvalidEvidenceCitationError(
+                    f"topic[{idx}] ('{item['label']}') cita evidence_id o alias inesistenti o non appartenenti al blocco: {sorted(hallucinated)}",
+                    invalid_evidence_ids=tuple(sorted(hallucinated)),
+                )
+            final_eids = tuple(remapped_eids_list)
+        else:
+            hallucinated = set(eids_raw) - valid_evidence_ids
+            if hallucinated:
+                raise AiInvalidEvidenceCitationError(
+                    f"topic[{idx}] ('{item['label']}') cita evidence_id inesistenti: {sorted(hallucinated)}",
+                    invalid_evidence_ids=tuple(sorted(hallucinated)),
+                )
+            final_eids = tuple(eids_raw)
 
         discovered.append(
             DiscoveredTopic(
                 label=item["label"].strip(),
                 short_description=item["short_description"].strip(),
-                evidence_ids=tuple(eids_raw),
+                evidence_ids=final_eids,
             )
         )
 

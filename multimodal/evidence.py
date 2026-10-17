@@ -201,6 +201,7 @@ class MessageEvidenceBundle:
             _validate_evidence("image_vision", self.image_vision, VisionStatus.SUCCESS)
 
         object.__setattr__(self, "metadata", freeze_structural(self.metadata))
+        object.__setattr__(self, "_cached_sections", self._build_text_evidence_sections())
 
     @property
     def message_id(self) -> str:
@@ -233,6 +234,12 @@ class MessageEvidenceBundle:
         - Il testo restituito è ESATTAMENTE quello sorgente, senza modifiche, strip o alterazioni.
         - Nessuna sezione viene concatenata nel campo message.text_content.
         """
+        cached = getattr(self, "_cached_sections", None)
+        if cached is not None:
+            return cached
+        return self._build_text_evidence_sections()
+
+    def _build_text_evidence_sections(self) -> tuple[TextEvidenceSection, ...]:
         sections: list[TextEvidenceSection] = []
 
         # 1. Testo originale del messaggio

@@ -21,6 +21,8 @@ Principi architetturali (Fasi H, I):
 """
 from __future__ import annotations
 
+import functools
+import math
 import string
 import unicodedata
 from dataclasses import dataclass, field
@@ -89,11 +91,18 @@ class DocumentAnalysisProfile:
         }
 
 
+_PUNCTUATION_TRANSLATION_TABLE = str.maketrans(string.punctuation, " " * len(string.punctuation))
+
+
 def estimate_evidence_framing_tokens(section: Any, default_floor: int = 85) -> int:
     """
     Stima conservativa e verificabile dell'overhead di serializzazione JSON per una sezione di evidenza.
     Tiene conto di identificativi complessi, metadati e delimitatori JSON (~85 token floor).
     """
+    cached = getattr(section, "_cached_framing_tokens", None)
+    if cached is not None and default_floor == 85:
+        return cached
+
     ev_id = getattr(section, "evidence_id", "")
     s_type = getattr(getattr(section, "source_type", None), "value", "text")
     msg_id = getattr(section, "message_id", "")
@@ -101,8 +110,13 @@ def estimate_evidence_framing_tokens(section: Any, default_floor: int = 85) -> i
     s_rec = getattr(section, "source_record_id", "") or ""
     s_lang = getattr(section, "language", "") or ""
     meta_chars = len(ev_id) + len(s_type) + len(msg_id) + len(s_name) + len(s_rec) + len(s_lang) + 110
-    import math
-    return max(default_floor, math.ceil(meta_chars / 2.5))
+    val = max(default_floor, math.ceil(meta_chars / 2.5))
+    if default_floor == 85:
+        try:
+            object.__setattr__(section, "_cached_framing_tokens", val)
+        except Exception:
+            pass
+    return val
 
 
 def profile_document_for_analysis(
@@ -140,7 +154,6 @@ def profile_document_for_analysis(
             total_chars += len(sec.text)
 
     # Stima prudenziale dei token (~2.8 caratteri per token in italiano/multilingue)
-    import math
     est_tokens = max(math.ceil(total_chars / 2.8), 0)
 
     # Calcolo dei chunk effettivi tramite split_document_into_chunks
@@ -181,7 +194,10 @@ def split_document_into_chunks(
     if not document.bundles:
         return (document,)
 
-    import math
+    cache_key = (max_characters, max_bundles, max_tokens)
+    cached_map = getattr(document, "_cached_chunks_map", None)
+    if cached_map is not None and cache_key in cached_map:
+        return cached_map[cache_key]
 
     chunks: list[list[MessageEvidenceBundle]] = []
     current_chunk: list[MessageEvidenceBundle] = []
@@ -189,15 +205,16 @@ def split_document_into_chunks(
     current_tokens = 0
 
     for bundle in document.bundles:
-        bundle_chars = sum(len(sec.text) for sec in bundle.text_evidence_sections)
+        sec_list = bundle.text_evidence_sections
+        bundle_chars = sum(len(sec.text) for sec in sec_list)
         # Stima token realistica che include il testo e il framing JSON serializzato della sezione (~85 token floor o dinamico)
         bundle_framing_tokens = sum(
-            estimate_evidence_framing_tokens(sec) for sec in bundle.text_evidence_sections
+            estimate_evidence_framing_tokens(sec) for sec in sec_list
         )
         bundle_tokens = math.ceil(bundle_chars / 2.8) + bundle_framing_tokens
 
         # H1: Controllo singola evidenza oversize
-        for sec in bundle.text_evidence_sections:
+        for sec in sec_list:
             if len(sec.text) > max_characters:
                 raise AnalysisInputTooLargeError(
                     f"La sezione di evidenza '{sec.evidence_id}' ({len(sec.text)} caratteri) "
@@ -239,26 +256,34 @@ def split_document_into_chunks(
         chunks.append(current_chunk)
 
     if len(chunks) <= 1:
-        return (document,)
-
-    result_chunks: list[ConversationEvidenceDocument] = []
-    for idx, b_list in enumerate(chunks):
-        chunk_id = f"{document.document_id}::chunk::{idx}"
-        result_chunks.append(
-            ConversationEvidenceDocument(
-                document_id=chunk_id,
-                bundles=tuple(b_list),
-                chat_id=document.chat_id,
-                source_name=document.source_name,
-                metadata={
-                    "parent_document_id": document.document_id,
-                    "chunk_index": idx,
-                    "total_chunks": len(chunks),
-                },
+        res = (document,)
+    else:
+        result_chunks: list[ConversationEvidenceDocument] = []
+        for idx, b_list in enumerate(chunks):
+            chunk_id = f"{document.document_id}::chunk::{idx}"
+            result_chunks.append(
+                ConversationEvidenceDocument(
+                    document_id=chunk_id,
+                    bundles=tuple(b_list),
+                    chat_id=document.chat_id,
+                    source_name=document.source_name,
+                    metadata={
+                        "parent_document_id": document.document_id,
+                        "chunk_index": idx,
+                        "total_chunks": len(chunks),
+                    },
+                )
             )
-        )
+        res = tuple(result_chunks)
 
-    return tuple(result_chunks)
+    if cached_map is None:
+        cached_map = {}
+        try:
+            object.__setattr__(document, "_cached_chunks_map", cached_map)
+        except Exception:
+            pass
+    cached_map[cache_key] = res
+    return res
 
 
 def verify_translated_document_size(
@@ -352,9 +377,11 @@ def aggregate_topic_detection(
     # Regola 1: PRESENT vince sempre se almeno un chunk ha rilevato evidenze valide
     if present_results:
         aggregated_eids: list[str] = []
+        aggregated_eids_set: set[str] = set()
         for pr in present_results:
             for eid in pr.evidence_ids:
-                if eid not in aggregated_eids:
+                if eid not in aggregated_eids_set:
+                    aggregated_eids_set.add(eid)
                     aggregated_eids.append(eid)
 
         rationales = " | ".join(pr.rationale for pr in present_results if pr.rationale)
@@ -397,9 +424,11 @@ def aggregate_topic_detection(
     # Regola 3: Se vi sono chunk con decisione UNCERTAIN
     if uncertain_results:
         aggregated_eids: list[str] = []
+        aggregated_eids_set: set[str] = set()
         for ur in uncertain_results:
             for eid in ur.evidence_ids:
-                if eid not in aggregated_eids:
+                if eid not in aggregated_eids_set:
+                    aggregated_eids_set.add(eid)
                     aggregated_eids.append(eid)
 
         return TopicDetectionResult(
@@ -455,6 +484,7 @@ def stem_italian_word(word: str) -> str:
     return w
 
 
+@functools.lru_cache(maxsize=4096)
 def canonicalize_topic_label(label: str) -> str:
     """
     Normalizza la label a livello morfologico/sintattico (senza falsi claim di embedding neurale):
@@ -479,7 +509,7 @@ def canonicalize_topic_label(label: str) -> str:
     return " ".join(stems)
 
 
-
+@functools.lru_cache(maxsize=4096)
 def normalize_topic_label(label: str) -> str:
     """
     Normalizza deterministicamente una label tematica per il consolidamento:
@@ -490,8 +520,7 @@ def normalize_topic_label(label: str) -> str:
     if not label:
         return ""
     norm = unicodedata.normalize("NFKC", label).casefold()
-    table = str.maketrans(string.punctuation, " " * len(string.punctuation))
-    norm = norm.translate(table)
+    norm = norm.translate(_PUNCTUATION_TRANSLATION_TABLE)
     return " ".join(norm.split())
 
 
@@ -529,19 +558,24 @@ def aggregate_topic_discovery(
             if canonical_key in consolidated:
                 item = consolidated[canonical_key]
                 item["supporting_chunks"].add(chunk_id)
+                eids_set = item["evidence_ids_set"]
+                eids_list = item["evidence_ids"]
                 for eid in t.evidence_ids:
-                    if eid not in item["evidence_ids"]:
-                        item["evidence_ids"].append(eid)
+                    if eid not in eids_set:
+                        eids_set.add(eid)
+                        eids_list.append(eid)
                 if len(t.short_description.strip()) > len(item["short_description"]):
                     item["short_description"] = t.short_description.strip()
                 if len(t.label.strip()) > len(item["label"]):
                     item["label"] = t.label.strip()
             else:
+                eids_list = list(t.evidence_ids)
                 consolidated[canonical_key] = {
                     "label": t.label.strip(),
                     "norm_key": canonical_key,
                     "short_description": t.short_description.strip(),
-                    "evidence_ids": list(t.evidence_ids),
+                    "evidence_ids": eids_list,
+                    "evidence_ids_set": set(eids_list),
                     "supporting_chunks": {chunk_id},
                     "first_seen_index": order_idx,
                 }

@@ -1,8 +1,0 @@
-=== METRICHE EMPIRICHE LARGE-FILE INGESTION & BOUNDED MEMORY (BLOCKER 3) ===
-Target (MB)  | Input Bytes  | Record    | Peak RSS (MB)  | Tempo (s)  | Msg      | Evidence  | Integrità 
------------------------------------------------------------------------------------------------
-10           | 10486064     | 18963     | 186.13         | 349.72     | 18963    | 18963     | VALID     
-
-DICHIARAZIONE TECNICA SULLE DIMENSIONI NON TESTATE EMPIRICAMENTE:
-- 10 MB: Misurato empiricamente e verificato con successo (Integrità VALID, Peak RSS bounded).
-- 100 MB, 250 MB, 500 MB, 2 GB: Architettura bounded-memory verificata staticamente. Le prove oltre i 10 MB richiedono un tempo CPU superiore a quanto eseguibile in sessione interattiva su macchina Windows; il supporto a 2 GB non viene falsamente dichiarato verificato ma solo architetturalmente supportato dallo staging streaming.

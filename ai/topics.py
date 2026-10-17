@@ -39,6 +39,7 @@ from ai.models import (
 )
 from ai.serializer import (
     SYSTEM_SECURITY_DIRECTIVE,
+    generate_evidence_alias_maps,
     serialize_document_for_llm,
 )
 from ai.structured import (
@@ -115,6 +116,7 @@ class TopicDetectionAnalyzer:
         max_tokens: int | None = None,
         operational_mode: bool | None = None,
         context_length: int = 8192,
+        use_evidence_aliases: bool | None = None,
     ) -> TopicDetectionResult:
         """
         Esegue la detection del topic specificato.
@@ -127,6 +129,12 @@ class TopicDetectionAnalyzer:
             if is_operational
             else PROMPT_VERSION_DETECTION
         )
+
+        use_aliases = False if use_evidence_aliases is None else use_evidence_aliases
+        id_to_alias: dict[str, str] = {}
+        alias_to_id: dict[str, str] = {}
+        if use_aliases:
+            id_to_alias, alias_to_id = generate_evidence_alias_maps(document)
 
         # Gestione documenti privi di evidenza testuale
         if not valid_evidence_ids:
@@ -144,10 +152,18 @@ class TopicDetectionAnalyzer:
                     "requested_model": target_model,
                     "operational_mode": is_operational,
                     "raw_response": None,
+                    "evidence_citation_protocol": "deterministic_alias_v1" if use_aliases else "direct_evidence_id",
+                    "evidence_aliases_used": bool(use_aliases),
                 },
             )
 
         is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
+
+        rule_4_cite = (
+            "4. CITE ONLY EXACT evidence_ids that are present in the evidence block using their assigned aliases (e.g. 'E001', 'E002'). DO NOT fabricate or invent IDs."
+            if use_aliases
+            else "4. CITE ONLY EXACT evidence_ids that are present in the evidence block. DO NOT fabricate or invent IDs."
+        )
 
         # Costruzione del system prompt con direttiva anti-injection e specifiche di task
         if is_operational:
@@ -170,7 +186,7 @@ OUTPUT RULES:
    You MUST cite at least one exact evidence_id in 'evidence_ids'.
 2. Return decision 'ABSENT' if the topic is NOT present in the conversation evidence. 'evidence_ids' MUST be an empty array [].
 3. Return decision 'UNCERTAIN' if the evidence is ambiguous, partial, fragmentary, or insufficient to decide. You may cite ambiguous evidence_ids.
-4. CITE ONLY EXACT evidence_ids that are present in the evidence block. DO NOT fabricate or invent IDs.
+{rule_4_cite}
 5. Provide a short, objective rationale explaining the decision in Italian. DO NOT provide lengthy chain-of-thought.
 """
             system_content += f"{OPERATIONAL_SEMANTIC_DIRECTIVE}\n"
@@ -187,7 +203,7 @@ OUTPUT RULES:
    You MUST cite at least one exact evidence_id in 'evidence_ids'.
 2. Return decision 'ABSENT' if the topic is NOT present. 'evidence_ids' MUST be an empty array [].
 3. Return decision 'UNCERTAIN' if the evidence is ambiguous, partial, or insufficient to decide. You may cite ambiguous evidence_ids.
-4. CITE ONLY EXACT evidence_ids that are present in the evidence block. DO NOT fabricate or invent IDs.
+{rule_4_cite}
 5. Provide a short, objective rationale explaining the decision in Italian. DO NOT provide lengthy chain-of-thought.
 """
 
@@ -198,7 +214,12 @@ OUTPUT RULES:
                 raise ValueError("Per la strategia TRANSLATE_FIRST è obbligatorio fornire un EvidenceTranslationResult.")
             verify_translated_document_size(document, translation, max_characters=8000)
 
-        user_content = serialize_document_for_llm(document, strategy=strategy, translation=translation)
+        user_content = serialize_document_for_llm(
+            document,
+            strategy=strategy,
+            translation=translation,
+            evidence_id_map=id_to_alias if use_aliases else None,
+        )
 
         messages = [
             {"role": "system", "content": system_content},
@@ -245,6 +266,7 @@ OUTPUT RULES:
         decision, evidence_ids, rationale = validate_topic_detection_payload(
             raw_text=response.content,
             valid_evidence_ids=valid_evidence_ids,
+            alias_map=alias_to_id if use_aliases else None,
         )
 
         metadata: dict[str, Any] = {
@@ -263,6 +285,8 @@ OUTPUT RULES:
             "query_mode": "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION",
             "is_label_only": is_label_only,
             "raw_response": response.content,
+            "evidence_citation_protocol": "deterministic_alias_v1" if use_aliases else "direct_evidence_id",
+            "evidence_aliases_used": bool(use_aliases),
         }
 
         return TopicDetectionResult(
@@ -304,12 +328,26 @@ class TopicDiscoveryAnalyzer:
         operational_mode: bool | None = None,
         context_length: int = 8192,
         on_retry_callback: Any = None,
+        use_evidence_aliases: bool | None = None,
     ) -> TopicDiscoveryResult:
         """
         Esegue la scoperta non supervisionata di temi emergenti nel documento.
         """
         target_model = model_id or self.default_model_id
         valid_evidence_ids = {s.evidence_id for s in document.all_evidence_sections}
+
+        is_op = self.operational_mode if operational_mode is None else operational_mode
+        prompt_version = (
+            PROMPT_VERSION_DISCOVERY_OPERATIONAL
+            if is_op
+            else PROMPT_VERSION_DISCOVERY
+        )
+
+        use_aliases = is_op if use_evidence_aliases is None else use_evidence_aliases
+        id_to_alias: dict[str, str] = {}
+        alias_to_id: dict[str, str] = {}
+        if use_aliases:
+            id_to_alias, alias_to_id = generate_evidence_alias_maps(document)
 
         if not valid_evidence_ids:
             return TopicDiscoveryResult(
@@ -320,17 +358,18 @@ class TopicDiscoveryAnalyzer:
                     "prompt_version": PROMPT_VERSION_DISCOVERY,
                     "strategy": strategy.value,
                     "model": target_model or "none",
+                    "evidence_citation_protocol": "deterministic_alias_v1" if use_aliases else "direct_evidence_id",
+                    "evidence_aliases_used": bool(use_aliases),
                 },
             )
 
-        is_op = self.operational_mode if operational_mode is None else operational_mode
-        prompt_version = (
-            PROMPT_VERSION_DISCOVERY_OPERATIONAL
-            if is_op
-            else PROMPT_VERSION_DISCOVERY
-        )
-
         current_topics = max_topics
+
+        cite_rule = (
+            "3. Cite the exact 'evidence_ids' supporting each topic using ONLY the assigned alias identifiers shown in the evidence block (e.g. 'E001', 'E002'). Each topic must cite at least one valid evidence_id from this block."
+            if use_aliases
+            else "3. Cite the exact 'evidence_ids' supporting each topic. Each topic must cite at least one valid evidence_id."
+        )
 
         def _make_sys_prompt(num_topics: int) -> str:
             sp = f"""{SYSTEM_SECURITY_DIRECTIVE}
@@ -346,7 +385,7 @@ ETHICAL FORENSIC CONSTRAINTS:
 OUTPUT RULES:
 1. Provide a concise 'label' for each topic (in Italian).
 2. Provide a 'short_description' explaining the topic objectively (in Italian).
-3. Cite the exact 'evidence_ids' supporting each topic. Each topic must cite at least one valid evidence_id.
+{cite_rule}
 4. Return an array of topics matching schema, with at most {num_topics} elements.
 """
             if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
@@ -358,7 +397,12 @@ OUTPUT RULES:
                 raise ValueError("Per la strategia TRANSLATE_FIRST è obbligatorio fornire un EvidenceTranslationResult.")
             verify_translated_document_size(document, translation, max_characters=8000)
 
-        user_content = serialize_document_for_llm(document, strategy=strategy, translation=translation)
+        user_content = serialize_document_for_llm(
+            document,
+            strategy=strategy,
+            translation=translation,
+            evidence_id_map=id_to_alias if use_aliases else None,
+        )
 
         messages = [
             {"role": "system", "content": _make_sys_prompt(current_topics)},
@@ -449,18 +493,27 @@ OUTPUT RULES:
                     raw_text=response.content,
                     valid_evidence_ids=valid_evidence_ids,
                     max_topics=current_topics,
+                    alias_map=alias_to_id if use_aliases else None,
                 )
                 last_error = None
                 break
             except AiInvalidEvidenceCitationError as cite_err:
                 last_error = cite_err
                 if attempt + 1 < max_attempts and is_op:
-                    correction_msg = (
-                        "CORRECTION DIRECTIVE: In your previous response, you cited invalid or hallucinated evidence_id values. "
-                        "Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in the evidence block provided above. "
-                        "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
-                        "Re-evaluate the topics and return the corrected JSON matching the schema."
-                    )
+                    if use_aliases:
+                        correction_msg = (
+                            "CORRECTION DIRECTIVE: In your previous response, you cited invalid or hallucinated evidence_id values. "
+                            "Strict forensic requirement: You MUST cite ONLY exact evidence_id aliases that appear in the evidence block provided above (e.g. 'E001', 'E002'). "
+                            "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
+                            "Re-evaluate the topics and return the corrected JSON matching the schema."
+                        )
+                    else:
+                        correction_msg = (
+                            "CORRECTION DIRECTIVE: In your previous response, you cited invalid or hallucinated evidence_id values. "
+                            "Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in the evidence block provided above. "
+                            "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
+                            "Re-evaluate the topics and return the corrected JSON matching the schema."
+                        )
                     # Candidato A: Retry contestuale con cronologia assistente
                     candidate_msgs = list(messages)
                     if response and getattr(response, "content", None):
@@ -567,6 +620,8 @@ OUTPUT RULES:
             "finish_reason": finish_reason,
             "http_status": 200,
             "operational_mode": is_op,
+            "evidence_citation_protocol": "deterministic_alias_v1" if use_aliases else "direct_evidence_id",
+            "evidence_aliases_used": bool(use_aliases),
         }
 
         return TopicDiscoveryResult(

@@ -1,9 +1,0 @@
-{
-  "type": "llm",
-  "instance_id": "instance-qwen-001",
-  "status": "loaded",
-  "load_config": {
-    "context_length": 8192,
-    "gpu_offload": "max"
-  }
-}

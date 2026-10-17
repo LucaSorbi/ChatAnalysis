@@ -1,5 +1,0 @@
-=== git ls-files --stage run_benchmark.sh ===
-100755 2f6539bb27429bbc060e6eb593ce467aa340aa06 0	run_benchmark.sh
-
-=== bash -n run_benchmark.sh ===
-Exit code: 0 (Sintassi bash corretta)

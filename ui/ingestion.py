@@ -455,13 +455,17 @@ def ingest_file_payload(
             regular_chat_idx = 1
             for chat_key in ordered_keys:
                 chat_records = staging.iter_records_for_chat(chat_key)
-                group_msgs = list(builder.build_stream(chat_records))
-                total_unified_message_count += len(group_msgs)
+                bundles: list[MessageEvidenceBundle] = []
+                first_msg = None
+                for m in builder.build_stream(chat_records):
+                    if first_msg is None:
+                        first_msg = m
+                    bundles.append(MessageEvidenceBundle(message=m))
 
-                bundles = [MessageEvidenceBundle(message=m) for m in group_msgs]
+                total_unified_message_count += len(bundles)
                 effective_chat_id = (
-                    group_msgs[0].chat.chat_id
-                    if (group_msgs and group_msgs[0].chat and group_msgs[0].chat.chat_id)
+                    first_msg.chat.chat_id
+                    if (first_msg and first_msg.chat and first_msg.chat.chat_id)
                     else (chat_key if chat_key != "UNRESOLVED" else None)
                 )
                 doc_id = derive_deterministic_document_id(

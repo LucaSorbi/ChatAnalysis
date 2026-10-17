@@ -17,7 +17,7 @@ L'obiettivo primario del gate è certificare:
 
 ## 2. Percorsi E2E Verificati e Fixture Forensi
 
-Tutti i percorsi sono stati verificati tramite test end-to-end automatizzati ([test_full_pipeline_e2e.py](file:///C:/Users/lucas/Desktop/Tesi/tests/integration/test_full_pipeline_e2e.py)) impiegando esclusivamente le fixture sintetiche autoritative presenti in `test_data/`:
+Tutti i percorsi sono stati verificati tramite test end-to-end automatizzati ([test_full_pipeline_e2e.py](../tests/integration/test_full_pipeline_e2e.py)) impiegando esclusivamente le fixture sintetiche autoritative presenti in `test_data/`:
 
 | Percorso / Formato Sorgente | Fixture di Riferimento | Record Raw | Messaggi Unificati | Conversazioni | Record Ausiliari | Note e Partizionamento |
 | :--- | :--- | :--- | :--- | :--- | :--- | :--- |
@@ -127,7 +127,7 @@ Le etichette descrittive (`ImportedConversationInfo.display_label`) rispettano i
 
 ## 11. Accettazione Streamlit AppTest Headless
 
-L'applicazione grafica [app.py](file:///C:/Users/lucas/Desktop/Tesi/app.py) è stata testata con `streamlit.testing.v1.AppTest`:
+L'applicazione grafica [app.py](../app.py) è stata testata con `streamlit.testing.v1.AppTest`:
 - Avvio e navigazione verificati attraverso tutte le 6 sezioni (Panoramica, Importazione, Esplora, Ricerca, Topic, Stato).
 - Caricamento ed esplorazione in modalità DEMO.
 - Ingestion reale con selectbox multi-conversazione attiva.
