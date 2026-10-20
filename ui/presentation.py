@@ -1177,6 +1177,17 @@ def render_topics() -> None:
                     st.markdown(f"**Esito:** {badge}")
 
                 meta = last_det.metadata or {}
+                det_status_val = meta.get("status")
+                failed_c = meta.get("failed_chunk_count", 0)
+                tot_c = meta.get("chunk_count", 1)
+                comp_c = meta.get("completed_chunk_count", 1)
+                if det_status_val == "PARTIAL" or failed_c > 0:
+                    st.warning(
+                        f"⚠️ **Topic Detection Parziale**: {comp_c}/{tot_c} blocchi completati "
+                        f"({failed_c} blocchi falliti per errori operativi). "
+                        f"L'esito '{badge}' riflette unicamente la porzione analizzata e non l'intero documento."
+                    )
+
                 is_label_only = (
                     meta.get("query_mode") == "LABEL_ONLY"
                     or getattr(last_det.topic, "is_label_only", False)

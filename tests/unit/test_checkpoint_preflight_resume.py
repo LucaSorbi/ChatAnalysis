@@ -4650,6 +4650,72 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
             finally:
                 writer_conn.close()
 
+    def test_144_file_replaced_after_identity_verification_before_unlink(self) -> None:
+        """F1.6: Sostituzione concorrente dopo l'ultima verifica d'identità e prima dell'unlink (riproduzione TOCTOU fail-closed)."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                allowed_dir = Path(tmp_dir) / "toctou_folder"
+                allowed_dir.mkdir()
+                dest_snap = allowed_dir / "toctou_replaceable.db"
+
+                if os.name != "nt":
+                    # Su POSIX/Linux: un processo concorrente sostituisce il file ESATTAMENTE tra la prima verifica
+                    # di identità in cleanup e la cancellazione finale.
+                    # Il descrittore dest_fd rileva st_nlink == 0 e lstat rileva il mismatch, abortendo l'unlink.
+                    orig_lstat = os.lstat
+                    swap_performed = [False]
+                    lstat_calls = [0]
+
+                    def intercept_lstat_and_swap_after_check(path):
+                        res = orig_lstat(path)
+                        if str(path) == str(dest_snap):
+                            lstat_calls[0] += 1
+                            # La prima chiamata di lstat durante il cleanup verifica l'identità (restituisce res).
+                            # Subito dopo tale verifica, il processo concorrente scambia il file prima della cancellazione.
+                            if lstat_calls[0] == 1 and not swap_performed[0]:
+                                if dest_snap.exists():
+                                    dest_snap.unlink()
+                                    dest_snap.write_bytes(b"COMPETING_REPLACEMENT_SURVIVED_TEST_144")
+                                    swap_performed[0] = True
+                        return res
+
+                    with patch("os.lstat", side_effect=intercept_lstat_and_swap_after_check):
+                        with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=SnapshotCreationFailedError("Crash simulato per attivare cleanup")):
+                            with pytest.raises(SnapshotCreationFailedError):
+                                create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
+
+                    assert swap_performed[0], "Lo swap concorrente deve essere stato eseguito!"
+                    assert dest_snap.is_file(), "Il file concorrente sostituito dopo la verifica d'identità DEVE sopravvivere!"
+                    assert dest_snap.read_bytes() == b"COMPETING_REPLACEMENT_SURVIVED_TEST_144"
+                else:
+                    # Su Windows: testiamo che la funzione fail-closed preservi qualsiasi file con identità modificata.
+                    orig_lstat = os.lstat
+                    swap_performed = [False]
+                    lstat_calls = [0]
+
+                    def intercept_lstat_windows(path):
+                        res = orig_lstat(path)
+                        if str(path) == str(dest_snap):
+                            lstat_calls[0] += 1
+                            if lstat_calls[0] == 1 and not swap_performed[0]:
+                                if dest_snap.exists():
+                                    dest_snap.unlink()
+                                    dest_snap.write_bytes(b"WINDOWS_COMPETING_REPLACEMENT_SURVIVED_144")
+                                    swap_performed[0] = True
+                        return res
+
+                    with patch("os.lstat", side_effect=intercept_lstat_windows):
+                        with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=SnapshotCreationFailedError("Crash simulato")):
+                            with pytest.raises(SnapshotCreationFailedError):
+                                create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
+
+                    assert swap_performed[0], "Lo swap concorrente deve essere stato eseguito su Windows!"
+                    assert dest_snap.is_file(), "Il file concorrente su Windows DEVE sopravvivere al cleanup fail-closed!"
+                    assert dest_snap.read_bytes() == b"WINDOWS_COMPETING_REPLACEMENT_SURVIVED_144"
+            finally:
+                writer_conn.close()
+
 
 
 

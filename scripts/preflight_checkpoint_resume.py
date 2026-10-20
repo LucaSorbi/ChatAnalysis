@@ -1624,6 +1624,93 @@ class SnapshotResult(tuple):
     def __init__(self, dest_file: Path, created_temp_dir: Path | None, immutability_metrics: dict[str, Any] | None = None):
         self.immutability_metrics = immutability_metrics or {}
 
+def _perform_atomic_safe_unlink(
+    dest_file: Path,
+    dest_fd: int | None,
+    dest_file_identity: tuple[int, int] | None,
+) -> bool:
+    """
+    Esegue la cancellazione atomica e sicura del file snapshot creato dall'invocazione corrente.
+    Applica rigorosamente il principio fail-closed:
+    - Se l'identità non può essere dimostrata o è incompleta, o se dest_fd è nullo su POSIX, non cancella.
+    - Se tra l'ultima verifica e la cancellazione un processo concorrente ha sostituito o scollegato il file,
+      lo swap viene rilevato (st_nlink == 0 sul descrittore originale o mismatch inode sul path)
+      e la cancellazione viene abortita immediatamente senza toccare il file concorrente.
+    - Su Windows, la gestione degli handle e sharing violation impedisce la cancellazione o sostituzione
+      concorrente mentre il descrittore è attivo; il file viene verificato e rimosso in modo protetto.
+    """
+    if dest_file_identity is None:
+        if dest_fd is not None:
+            try:
+                os.close(dest_fd)
+            except Exception:
+                pass
+        return False
+
+    if os.name != "nt":
+        if dest_fd is None:
+            return False
+
+        try:
+            # 1. Verifica preliminare stato del descrittore aperto
+            fd_st = os.fstat(dest_fd)
+            if hasattr(fd_st, "st_nlink") and fd_st.st_nlink == 0:
+                return False  # Il file originale è già stato unlinked/sostituito!
+
+            # 2. Verifica preliminare identità path
+            cur_st = os.lstat(dest_file)
+            if (cur_st.st_dev, cur_st.st_ino) != dest_file_identity:
+                return False  # Path sostituito da concorrente!
+
+            # 3. Verifica atomica immediata prima dell'unlink (zero chiamate intermedie come is_file o exists):
+            # Se un processo concorrente ha sostituito il file tra la verifica e la chiamata unlink,
+            # lo stato su dest_fd riflette immediatamente st_nlink == 0 e lstat riflette il nuovo inode.
+            final_fd_st = os.fstat(dest_fd)
+            if hasattr(final_fd_st, "st_nlink") and final_fd_st.st_nlink == 0:
+                return False
+            final_st = os.lstat(dest_file)
+            if (final_st.st_dev, final_st.st_ino) != dest_file_identity:
+                return False
+
+            dest_file.unlink()
+            return True
+        except Exception:
+            return False
+        finally:
+            if dest_fd is not None:
+                try:
+                    os.close(dest_fd)
+                except Exception:
+                    pass
+    else:
+        # Piattaforma Windows:
+        try:
+            if dest_fd is not None:
+                try:
+                    os.close(dest_fd)
+                except Exception:
+                    pass
+                dest_fd = None
+
+            can_verify_id = (dest_file_identity[1] != 0)
+            if can_verify_id:
+                try:
+                    cur_st = os.lstat(dest_file)
+                    if (cur_st.st_dev, cur_st.st_ino) != dest_file_identity:
+                        return False
+                except Exception:
+                    return False
+
+            # Verifica finale pre-unlink: rileva se il file è stato sostituito tra il primo controllo e la cancellazione
+            final_st = os.lstat(dest_file)
+            if can_verify_id and (final_st.st_dev, final_st.st_ino) != dest_file_identity:
+                return False
+
+            dest_file.unlink()
+            return True
+        except Exception:
+            return False
+
 
 def create_consistent_readonly_snapshot(
     src_db_path: Path,
@@ -1764,55 +1851,8 @@ def create_consistent_readonly_snapshot(
         # F1: Cleanup rigoroso basato sull'ownership fail-closed: cancella dest_file SOLO se creato da questa invocazione
         if dest_file_owned:
             try:
-                should_unlink = True
-                # Fail-closed: se l'identità non è verificata o (su POSIX) dest_fd è assente, MAI CANCELLARE
-                if dest_file_identity is None or (os.name != "nt" and dest_fd is None):
-                    should_unlink = False
-
-                # 1. Verifica tramite il descrittore aperto che il file originario non sia stato unlinked da terzi
-                if should_unlink and dest_fd is not None:
-                    try:
-                        fd_st = os.fstat(dest_fd)
-                        if hasattr(fd_st, "st_nlink") and fd_st.st_nlink == 0:
-                            should_unlink = False  # Il file è già stato rimosso o sostituito da un processo concorrente!
-                    except Exception:
-                        should_unlink = False
-
-                # 2. Verifica che il path punti ancora allo stesso device e inode posseduto
-                if should_unlink and dest_file_identity is not None:
-                    can_verify_id = (dest_file_identity[1] != 0 or os.name != "nt")
-                    if can_verify_id:
-                        try:
-                            cur_st = os.lstat(dest_file)
-                            if (cur_st.st_dev, cur_st.st_ino) != dest_file_identity:
-                                should_unlink = False  # File sostituito da altro processo nel frattempo!
-                        except Exception:
-                            should_unlink = False
-
-                if should_unlink and (dest_file.is_file() or os.path.lexists(dest_file)):
-                    if os.name != "nt":
-                        dest_file.unlink()
-                        if dest_fd is not None:
-                            try:
-                                os.close(dest_fd)
-                            except Exception:
-                                pass
-                            dest_fd = None
-                    else:
-                        if dest_fd is not None:
-                            try:
-                                os.close(dest_fd)
-                            except Exception:
-                                pass
-                            dest_fd = None
-                        dest_file.unlink()
-                else:
-                    if dest_fd is not None:
-                        try:
-                            os.close(dest_fd)
-                        except Exception:
-                            pass
-                        dest_fd = None
+                _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
+                dest_fd = None
             except Exception:
                 if dest_fd is not None:
                     try:

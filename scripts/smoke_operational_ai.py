@@ -1049,7 +1049,7 @@ def run_smoke_test(
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Smoke test operativo per LM Studio (ChatAnalysis)")
-    parser.add_argument("--fake", action="store_true", help="Utilizza client simulato deterministico per test offline")
+    parser.add_argument("--fake", "--mock", dest="fake", action="store_true", help="Utilizza client simulato deterministico per test offline")
     parser.add_argument("--model", default=DEFAULT_OPERATIONAL_MODEL, help="Modello target da testare")
     parser.add_argument(
         "--fake-mode",

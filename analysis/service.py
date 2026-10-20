@@ -1325,11 +1325,21 @@ class LocalTopicAnalysisService:
                             tracker=tracker,
                             chunk_idx_1based=current_tracker_idx,
                         )
-                        outcomes.extend(sub_outcomes)
-                    else:
+                    elif isinstance(fatal_err, SYSTEMIC_BACKEND_ERRORS):
                         tracker.chunk_failed(current_tracker_idx, str(fatal_err))
                         tracker.fail(str(fatal_err))
                         raise
+                    else:
+                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
+                        outcomes.append(
+                            ChunkAnalysisOutcome(
+                                chunk_id=chunk.document_id,
+                                result=None,
+                                status="FAILED",
+                                error_type=type(fatal_err).__name__,
+                                error_message=str(fatal_err),
+                            )
+                        )
                 except Exception as exc:
                     tracker.chunk_failed(current_tracker_idx, str(exc))
                     outcomes.append(
