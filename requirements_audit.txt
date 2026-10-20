@@ -1,0 +1,7 @@
+# Dipendenze minime per l'esecuzione riproducibile della suite di test per l'audit indipendente
+pytest>=8.0.0
+charset-normalizer>=3.4.0
+python-dateutil>=2.9.0
+ijson>=3.3.0
+defusedxml>=0.7.1
+

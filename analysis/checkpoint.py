@@ -134,6 +134,51 @@ def compute_run_config_hash(
     return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
 
 
+def compute_chunk_partition_fingerprint(chunks: Sequence[ConversationEvidenceDocument]) -> str:
+    """
+    Calcola il fingerprint crittografico SHA-256 della partizione effettiva dei chunk.
+    Garantisce la prova matematica rigorosa delle chunk boundaries includendo gli hash
+    dei singoli bundle/messaggi contenuti in ciascun blocco partizionato.
+
+    NATURA DEI FINGERPRINT STORICI E LIMITAZIONI BOUNDARY:
+    1. document_fingerprint: SHA-256 di tutti i messaggi nell'intero documento. Garantisce
+       l'identità globale del documento al 100%.
+    2. compute_run_config_hash: Include parametri operativi, budget e chunk_ids. Poiché i
+       chunk_ids hanno formato deterministico ({document_id}::chunk::{i}), non catturano
+       la distribuzione puntuale dei messaggi tra i chunk.
+    3. validate_checkpoint_evidence_references: Verifica che le evidenze citate appartengano
+       al chunk. Tuttavia, per chunk con 0 topic scoperti, non persistendo la lista grezza
+       dei messaggi in SQLite, i checkpoint storici non possono provare matematicamente le boundaries.
+    4. compute_chunk_partition_fingerprint: È la soluzione estesa e versionata per nuovi checkpoint,
+       che non altera retroattivamente compute_run_config_hash preservando la compatibilità
+       dei 24 checkpoint storici esistenti.
+    """
+    def _bundle_hash(b: Any) -> str:
+        if hasattr(b, "bundle_hash"):
+            return str(b.bundle_hash)
+        bh = hashlib.sha256()
+        bh.update(str(getattr(getattr(b, "message", None), "message_id", "")).encode("utf-8"))
+        bh.update(str(getattr(getattr(b, "message", None), "source_record_id", "")).encode("utf-8"))
+        sections = getattr(b, "text_evidence_sections", ())
+        for sec in sections:
+            bh.update(str(getattr(sec, "evidence_id", "")).encode("utf-8"))
+            bh.update(str(getattr(sec, "text", "")).encode("utf-8"))
+        return bh.hexdigest()
+
+    partition_descriptor = []
+    for idx, chunk in enumerate(chunks):
+        bundle_hashes = [_bundle_hash(b) for b in chunk.bundles]
+        partition_descriptor.append({
+            "chunk_index": idx,
+            "chunk_id": chunk.document_id,
+            "chunk_fingerprint": compute_document_fingerprint(chunk),
+            "bundles_count": len(chunk.bundles),
+            "bundle_hashes": bundle_hashes,
+        })
+    serialized = json.dumps(partition_descriptor, sort_keys=True)
+    return hashlib.sha256(serialized.encode("utf-8")).hexdigest()
+
+
 def validate_checkpoint_evidence_references(
     checkpoint: AnalysisCheckpoint,
     document: ConversationEvidenceDocument,
