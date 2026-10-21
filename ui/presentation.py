@@ -985,37 +985,29 @@ def render_discovery_diagnostics(
         )
 
         exp_col1, exp_col2 = st.columns(2)
-        safe_export_data = []
-        for d in raw_diagnostics:
-            safe_export_data.append({
-                "chunk_index": d.get("chunk_index"),
-                "chunk_id": d.get("chunk_id"),
-                "status": d.get("status"),
-                "attempts": d.get("attempts"),
-                "duration_seconds": d.get("duration_seconds"),
-                "model_id": d.get("model_id"),
-                "http_status": d.get("http_status"),
-                "finish_reason": d.get("finish_reason"),
-                "prompt_tokens": d.get("prompt_tokens"),
-                "completion_tokens": d.get("completion_tokens"),
-                "error_type": d.get("error_type"),
-                "diagnostic_category": d.get("diagnostic_category"),
-                "failure_phase": d.get("failure_phase"),
-                "error_detail": d.get("error_detail"),
-                "json_valid": d.get("json_valid"),
-                "schema_valid": d.get("schema_valid"),
-                "evidence_valid": d.get("evidence_valid"),
-                "checkpoint_saved": d.get("checkpoint_saved"),
-            })
+        from analysis.export import _normalize_chunks_diagnostics
+        disc_meta = discovery_res.metadata or {}
+        norm_chunks = _normalize_chunks_diagnostics(
+            raw_diagnostics=raw_diagnostics,
+            total_planned_chunks=disc_meta.get("chunk_count") if disc_meta.get("chunk_count") is not None else (len(raw_diagnostics) if raw_diagnostics else 0),
+            model_id=disc_meta.get("model"),
+            run_id=disc_meta.get("run_id"),
+            status_default="NOT_RECORDED",
+            redact_sensitive_topics=redact_disc,
+        )
 
         import csv
         import io
         csv_buffer = io.StringIO()
-        if safe_export_data:
-            writer = csv.DictWriter(csv_buffer, fieldnames=list(safe_export_data[0].keys()))
+        if norm_chunks:
+            writer = csv.DictWriter(csv_buffer, fieldnames=list(norm_chunks[0].keys()))
             writer.writeheader()
-            writer.writerows(safe_export_data)
+            writer.writerows(norm_chunks)
         csv_export_str = csv_buffer.getvalue()
+
+        # Il nome del file CSV eredita la stessa pseudonimizzazione sicura del JSON
+        csv_filename = f"diagnostica_{full_disc_filename.rsplit('.', 1)[0]}.csv"
+        csv_button_label = "📥 Esporta diagnostica (CSV sicuro)" if redact_disc else "⚠️ Esporta diagnostica (CSV non redatto)"
 
         with exp_col1:
             st.download_button(
@@ -1027,9 +1019,9 @@ def render_discovery_diagnostics(
             )
         with exp_col2:
             st.download_button(
-                "📥 Esporta diagnostica (CSV)",
+                csv_button_label,
                 data=csv_export_str,
-                file_name=f"diagnostica_discovery_{document.document_id}.csv",
+                file_name=csv_filename,
                 mime="text/csv",
                 key="btn_download_diag_csv",
             )

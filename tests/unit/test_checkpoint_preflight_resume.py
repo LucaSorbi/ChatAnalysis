@@ -5202,6 +5202,128 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
             finally:
                 writer_conn.close()
 
+    def test_165_f1_d_adversarial_boundary_race_unlink_demonstration(self) -> None:
+        """
+        ANOMALIA F1/D — Test avversario al confine effettivo di Path.unlink:
+        Dimostra empiricamente il limite intrinseco della separazione check-then-unlink
+        basata su pathname rispetto a un avversario same-UID concorrente che scambia il file
+        DOPO l'ultimo lstat/is_owned_file e PRIMA di unlink().
+        Conferma che la reale garanzia risiede nel trust boundary di mkdtemp 0700 isolata,
+        non in un'illusoria promessa di prevenzione assoluta a livello di API pathname.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            private_dir = Path(tmp_dir) / "private_scratch_165"
+            private_dir.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(private_dir)
+
+            owned_snap = private_dir / "snap_165.db"
+            owned_snap.write_bytes(b"OWNED_DATA_165")
+            st_orig = os.lstat(owned_snap)
+            orig_ident = (int(st_orig.st_dev), int(st_orig.st_ino))
+            _OWNERSHIP_TRACKER.register_owned_file(owned_snap, orig_ident)
+
+            competitor_file = private_dir / "competitor_same_uid_target_165.db"
+            competitor_file.write_bytes(b"COMPETITOR_CRITICAL_EVIDENCE_165")
+
+            real_unlink = Path.unlink
+
+            def hostile_boundary_swap_unlink(path_self, *args, **kwargs):
+                # Simula l'avversario same-UID che effettua lo swap atomico esattamente al confine
+                if path_self == owned_snap:
+                    # Rimuove il file posseduto e sposta il file concorrente al suo posto
+                    real_unlink(owned_snap)
+                    competitor_file.rename(owned_snap)
+                return real_unlink(path_self, *args, **kwargs)
+
+            with patch.object(Path, "unlink", side_effect=hostile_boundary_swap_unlink, autospec=True):
+                # L'operazione supera tutti i controlli lstat/identity/ownership e procede all'unlink
+                res = _perform_atomic_safe_unlink(owned_snap, None, orig_ident)
+                # Il risultato è True e il file concorrente scambiato al pathname è stato cancellato
+                assert res is True
+                assert not owned_snap.exists()
+                assert not competitor_file.exists()
+
+            _OWNERSHIP_TRACKER.unregister_temp_dir(private_dir)
+
+    def test_166_f1_d_adversarial_boundary_race_rmdir_demonstration(self) -> None:
+        """
+        ANOMALIA F1/D — Test avversario al confine effettivo di os.rmdir:
+        Dimostra empiricamente il limite intrinseco di check-then-rmdir con un avversario
+        same-UID concorrente che scambia la directory registrata con una concorrente vuota
+        esattamente prima di os.rmdir().
+        Verifica inoltre che se la directory concorrente contiene file (non-vuota),
+        os.rmdir fallisce rigorosamente in modo fail-closed, preservando tutti i dati.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_parent = Path(tmp_dir) / "parent_166"
+            temp_parent.mkdir()
+
+            registered_dir = temp_parent / "registered_empty_166"
+            registered_dir.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(registered_dir)
+
+            competitor_empty_dir = temp_parent / "competitor_empty_166"
+            competitor_empty_dir.mkdir()
+
+            real_rmdir = os.rmdir
+
+            def hostile_boundary_swap_rmdir(path_str):
+                p = Path(path_str)
+                if p.resolve() == registered_dir.resolve():
+                    # L'avversario sposta la cartella registrata e posiziona la directory concorrente vuota
+                    real_rmdir(str(registered_dir))
+                    competitor_empty_dir.rename(registered_dir)
+                return real_rmdir(path_str)
+
+            # Caso 1: Directory concorrente vuota scambiata al confine di rmdir
+            with patch("os.rmdir", side_effect=hostile_boundary_swap_rmdir):
+                res = _safe_cleanup_owned_temp_dir(registered_dir, known_files=[])
+                assert res is True
+                assert not registered_dir.exists()
+                assert not competitor_empty_dir.exists()
+
+            # Caso 2: Se la directory concorrente contiene file, os.rmdir rifiuta la rimozione (Fail-Closed)
+            non_empty_dir = temp_parent / "registered_non_empty_166"
+            non_empty_dir.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(non_empty_dir)
+
+            alien_file = non_empty_dir / "alien_irreplaceable_file.dat"
+            alien_file.write_bytes(b"NON_EMPTY_PRESERVATION_DATA")
+
+            res_fail_closed = _safe_cleanup_owned_temp_dir(non_empty_dir, known_files=[])
+            assert res_fail_closed is False, "La directory contenente file alieni non deve MAI essere rimossa!"
+            assert non_empty_dir.is_dir()
+            assert alien_file.is_file()
+            assert alien_file.read_bytes() == b"NON_EMPTY_PRESERVATION_DATA"
+
+            _OWNERSHIP_TRACKER.unregister_temp_dir(non_empty_dir)
+
+    def test_167_f1_d_unowned_external_target_never_deleted_on_failure(self) -> None:
+        """
+        ANOMALIA F1/D — Restrizione del trust boundary:
+        Le destinazioni esterne non possedute o create da terzi non vengono MAI
+        cancellate o distrutte dal cleanup in caso di fallimento o interruzione (fail-closed).
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                dest_dir = Path(tmp_dir) / "external_dest_167"
+                dest_dir.mkdir()
+                external_target = dest_dir / "user_chosen_snapshot_167.db"
+                external_target.write_bytes(b"PREEXISTING_USER_FILE_167")
+                orig_hash = hashlib.sha256(b"PREEXISTING_USER_FILE_167").hexdigest()
+
+                # Tentativo di creare snapshot su percorso preesistente fallisce con FileExistsError
+                with pytest.raises(FileExistsError):
+                    create_consistent_readonly_snapshot(src_db, dest_path=external_target)
+
+                # Nessuna cancellazione distruttiva automatica: il file preesistente rimane intatto
+                assert external_target.is_file()
+                assert hashlib.sha256(external_target.read_bytes()).hexdigest() == orig_hash
+            finally:
+                writer_conn.close()
+
+
 
 
 

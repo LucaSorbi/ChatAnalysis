@@ -779,18 +779,42 @@ def export_topic_detection_json(
     from ui import state
 
     cons_res = None
+    consistency_association_flag = None
     if session_state is not None:
         try:
             cons_list = state.get_consistency_results(document.document_id, state=session_state)
             target_run_id = detection_result.metadata.get("run_id")
             if target_run_id:
-                for c in reversed(cons_list):
-                    # Selezione ESCLUSIVA per detection_run_id esatto (vietato il fallback su sola label)
-                    if c.detection_run_id == target_run_id:
-                        cons_res = c
-                        break
+                target_disc_run_id = (
+                    detection_result.metadata.get("discovery_run_id")
+                    or detection_result.metadata.get("verified_discovery_run_id")
+                    or detection_result.metadata.get("linked_discovery_run_id")
+                )
+                matches = []
+                for c in cons_list:
+                    # Match rigoroso: detection_run_id esatto e document_id identico
+                    if c.detection_run_id != target_run_id:
+                        continue
+                    if c.document_id != document.document_id:
+                        continue
+                    # Se nei metadati di detection è registrato un discovery_run_id, deve coincidere
+                    if target_disc_run_id and c.discovery_run_id and c.discovery_run_id != target_disc_run_id:
+                        continue
+                    matches.append(c)
+
+                if len(matches) == 1:
+                    cons_res = matches[0]
+                    consistency_association_flag = "EXACT_UNIQUE_MATCH"
+                elif len(matches) > 1:
+                    # Rifiuto categorico di associazione ambigua per risultati multipli
+                    cons_res = None
+                    consistency_association_flag = "AMBIGUOUS_MULTIPLE_MATCHES_REJECTED"
+                else:
+                    cons_res = None
+                    consistency_association_flag = "NO_MATCH"
         except Exception:
-            pass
+            cons_res = None
+            consistency_association_flag = "ASSOCIATION_ERROR"
 
     dataset_mode = None
     if session_state is not None:
@@ -806,6 +830,8 @@ def export_topic_detection_json(
         consistency_result=cons_res,
         redact_sensitive_topics=redact_sensitive_topics,
     )
+    if consistency_association_flag:
+        report["result"]["consistency_association_flag"] = consistency_association_flag
     json_str = serialize_report_to_json(report)
 
     mod_name = report["model"]["effective_model_id"]

@@ -15,7 +15,7 @@
       "completion_tokens": null,
       "diagnostic_category": "NONE",
       "duration_seconds": null,
-      "error_detail": "Blocco non eseguito o saltato",
+      "error_detail": "[REDACTED_DIAGNOSTIC_DETAIL]",
       "error_type": null,
       "evidence_valid": null,
       "failure_phase": "not_started",
@@ -39,7 +39,7 @@
       "completion_tokens": null,
       "diagnostic_category": "NONE",
       "duration_seconds": null,
-      "error_detail": "Blocco non eseguito o saltato",
+      "error_detail": "[REDACTED_DIAGNOSTIC_DETAIL]",
       "error_type": null,
       "evidence_valid": null,
       "failure_phase": "not_started",
@@ -63,7 +63,7 @@
       "completion_tokens": null,
       "diagnostic_category": "NONE",
       "duration_seconds": null,
-      "error_detail": "Blocco non eseguito o saltato",
+      "error_detail": "[REDACTED_DIAGNOSTIC_DETAIL]",
       "error_type": null,
       "evidence_valid": null,
       "failure_phase": "not_started",
@@ -104,7 +104,7 @@
   },
   "document": {
     "analyzed_evidence_count": 12,
-    "document_fingerprint": "fp_03c3485c44b8",
+    "document_fingerprint": null,
     "document_pseudonym": "doc_03c3485c44b8",
     "message_count": 8,
     "source_name": "src_70078ddfe843",
@@ -113,33 +113,37 @@
   },
   "execution": {
     "duration_seconds": 12.35,
-    "end_timestamp": "2026-10-21T09:50:12Z",
+    "end_timestamp": "2026-10-21T09:50:12+00:00",
     "error_count": 0,
     "global_status": "COMPLETE",
     "origin": "SYNTHETIC_REFERENCE",
-    "retry_count": 0,
-    "start_timestamp": "2026-10-21T09:50:00Z",
-    "subchunks_used": false
+    "reported_execution_status": "COMPLETE",
+    "retry_count": null,
+    "start_timestamp": "2026-10-21T09:50:00+00:00",
+    "subchunks_used": null,
+    "verified_execution_status": "COMPLETE"
   },
   "experiment": {
     "analysis_type": "TOPIC_DISCOVERY",
     "attestation_level": "MOCK_VERIFIED",
     "conversation_pseudonym": "chat_941b44d9e26a",
     "duration_seconds": 12.35,
-    "end_time": "2026-10-21T09:50:12Z",
-    "export_id": "exp_3efb516a8f7b",
+    "end_time": "2026-10-21T09:50:12+00:00",
+    "export_id": "exp_00e4a46afaf5",
     "loading_mode": "IN_MEMORY_EXECUTION",
-    "mode": "DEMO",
-    "origin_flow": "LIVE_DISCOVERY",
+    "mode": "NOT_RECORDED",
+    "origin_flow": "NOT_RECORDED",
+    "reported_attestation_level": "MOCK_VERIFIED",
     "run_id": "run_discovery_synth_c1",
-    "start_time": "2026-10-21T09:50:00Z"
+    "start_time": "2026-10-21T09:50:00+00:00",
+    "verified_attestation_level": "MOCK_VERIFIED"
   },
   "model": {
     "declared_context_length": null,
     "declared_quantization": null,
     "effective_context_length": null,
     "effective_model_id": "qwen2.5-7b-instruct",
-    "family": "QWEN",
+    "family": "qwen",
     "local_endpoint": "http://127.0.0.1:1234",
     "observed_quantization": null,
     "requested_model_id": "qwen2.5-7b-instruct"
@@ -209,15 +213,15 @@
       "python_version": "3.14.7"
     },
     "execution_software_commit": "NOT_RECORDED",
-    "export_software_commit": "git_commit_synthetic_audit_20261021",
+    "export_software_commit": "NOT_RECORDED",
     "name": "ChatAnalysis",
     "offline_mode": true,
     "version": "0.1.0"
   },
   "validation": {
-    "evidence_id_validation_applied": true,
-    "hallucinated_citations_rejected": true,
-    "schema_validation_applied": true,
-    "strict_alias_matching": true
+    "evidence_id_validation_applied": "STATICALLY_VERIFIED",
+    "hallucinated_citations_rejected": "STATICALLY_VERIFIED",
+    "schema_validation_applied": "STATICALLY_VERIFIED",
+    "strict_alias_matching": "STATICALLY_VERIFIED"
   }
 }

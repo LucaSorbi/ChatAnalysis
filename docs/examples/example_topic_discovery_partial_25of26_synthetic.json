@@ -8,7 +8,7 @@
   "chunks": [
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 1,
       "chunk_id": "chk_7deb520a9240",
       "chunk_index": 0,
@@ -32,7 +32,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 2,
       "chunk_id": "chk_f232a486c60f",
       "chunk_index": 1,
@@ -56,7 +56,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 3,
       "chunk_id": "chk_a22ee453fee4",
       "chunk_index": 2,
@@ -80,7 +80,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 4,
       "chunk_id": "chk_24cf60ad066f",
       "chunk_index": 3,
@@ -104,7 +104,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 5,
       "chunk_id": "chk_392b596a23f2",
       "chunk_index": 4,
@@ -128,7 +128,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 6,
       "chunk_id": "chk_6cf067c996d6",
       "chunk_index": 5,
@@ -152,7 +152,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 7,
       "chunk_id": "chk_2a1e58d6814e",
       "chunk_index": 6,
@@ -176,7 +176,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 8,
       "chunk_id": "chk_fb955a65eac6",
       "chunk_index": 7,
@@ -200,7 +200,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 9,
       "chunk_id": "chk_8ddb51cc05e5",
       "chunk_index": 8,
@@ -224,7 +224,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 10,
       "chunk_id": "chk_a58917689179",
       "chunk_index": 9,
@@ -248,7 +248,7 @@
     },
     {
       "attempts": 2,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 11,
       "chunk_id": "chk_b5a4d7c47f55",
       "chunk_index": 10,
@@ -272,7 +272,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 12,
       "chunk_id": "chk_bdce1d8c6c8b",
       "chunk_index": 11,
@@ -296,7 +296,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 13,
       "chunk_id": "chk_aa21d8b7cc1b",
       "chunk_index": 12,
@@ -320,7 +320,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 14,
       "chunk_id": "chk_ada26c2b17c0",
       "chunk_index": 13,
@@ -344,7 +344,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 15,
       "chunk_id": "chk_48885c6de206",
       "chunk_index": 14,
@@ -368,7 +368,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 16,
       "chunk_id": "chk_2165f3b78fcc",
       "chunk_index": 15,
@@ -392,7 +392,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 17,
       "chunk_id": "chk_7692d76b573c",
       "chunk_index": 16,
@@ -416,7 +416,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 18,
       "chunk_id": "chk_618e9a90266b",
       "chunk_index": 17,
@@ -440,7 +440,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 19,
       "chunk_id": "chk_f9a073dcf964",
       "chunk_index": 18,
@@ -464,7 +464,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 20,
       "chunk_id": "chk_71ccdffb730f",
       "chunk_index": 19,
@@ -488,7 +488,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 21,
       "chunk_id": "chk_a1e207e25f70",
       "chunk_index": 20,
@@ -512,7 +512,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 22,
       "chunk_id": "chk_4cb32cc78f96",
       "chunk_index": 21,
@@ -536,7 +536,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 23,
       "chunk_id": "chk_636ce91fa1ea",
       "chunk_index": 22,
@@ -560,7 +560,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 24,
       "chunk_id": "chk_058732291801",
       "chunk_index": 23,
@@ -584,7 +584,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 25,
       "chunk_id": "chk_6697958ead0f",
       "chunk_index": 24,
@@ -608,7 +608,7 @@
     },
     {
       "attempts": 1,
-      "checkpoint_saved": null,
+      "checkpoint_saved": false,
       "chunk_display_number": 26,
       "chunk_id": "chk_a6a003943dce",
       "chunk_index": 25,
@@ -656,7 +656,7 @@
   },
   "document": {
     "analyzed_evidence_count": null,
-    "document_fingerprint": "fp_03c3485c44b8",
+    "document_fingerprint": null,
     "document_pseudonym": "doc_03c3485c44b8",
     "message_count": 8,
     "source_name": "src_70078ddfe843",
@@ -669,9 +669,11 @@
     "error_count": 1,
     "global_status": "PARTIAL",
     "origin": "SYNTHETIC_REFERENCE",
-    "retry_count": 0,
+    "reported_execution_status": "PARTIAL",
+    "retry_count": null,
     "start_timestamp": null,
-    "subchunks_used": false
+    "subchunks_used": null,
+    "verified_execution_status": "PARTIAL"
   },
   "experiment": {
     "analysis_type": "TOPIC_DISCOVERY",
@@ -679,19 +681,21 @@
     "conversation_pseudonym": "chat_941b44d9e26a",
     "duration_seconds": 29.3,
     "end_time": null,
-    "export_id": "exp_ff315e13e1e5",
+    "export_id": "exp_7b5a6b4309d7",
     "loading_mode": "IN_MEMORY_EXECUTION",
-    "mode": "DEMO",
-    "origin_flow": "LIVE_DISCOVERY",
+    "mode": "NOT_RECORDED",
+    "origin_flow": "NOT_RECORDED",
+    "reported_attestation_level": "MOCK_VERIFIED",
     "run_id": "run_discovery_partial_25of26",
-    "start_time": null
+    "start_time": null,
+    "verified_attestation_level": "MOCK_VERIFIED"
   },
   "model": {
     "declared_context_length": null,
     "declared_quantization": null,
     "effective_context_length": null,
     "effective_model_id": "qwen2.5-7b-instruct",
-    "family": "QWEN",
+    "family": "qwen",
     "local_endpoint": "http://127.0.0.1:1234",
     "observed_quantization": null,
     "requested_model_id": "qwen2.5-7b-instruct"
@@ -747,15 +751,15 @@
       "python_version": "3.14.7"
     },
     "execution_software_commit": "NOT_RECORDED",
-    "export_software_commit": "git_commit_synthetic_audit_20261021",
+    "export_software_commit": "NOT_RECORDED",
     "name": "ChatAnalysis",
     "offline_mode": true,
     "version": "0.1.0"
   },
   "validation": {
-    "evidence_id_validation_applied": true,
-    "hallucinated_citations_rejected": true,
-    "schema_validation_applied": true,
-    "strict_alias_matching": true
+    "evidence_id_validation_applied": "STATICALLY_VERIFIED",
+    "hallucinated_citations_rejected": "STATICALLY_VERIFIED",
+    "schema_validation_applied": "STATICALLY_VERIFIED",
+    "strict_alias_matching": "STATICALLY_VERIFIED"
   }
 }

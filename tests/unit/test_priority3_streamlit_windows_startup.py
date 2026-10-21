@@ -151,6 +151,11 @@ class TestPriority3StreamlitWindowsStartup:
 
     def test_powershell_python_command_array_invocation(self) -> None:
         """Verifica che l'invocazione di comandi con argomenti array in PowerShell (es. 'py -3') funzioni senza errori sintattici."""
+        import shutil
+        ps_exe = shutil.which("powershell") or shutil.which("pwsh")
+        if not ps_exe:
+            pytest.skip("Interprete PowerShell (powershell o pwsh) non disponibile nell'ambiente corrente")
+
         # Testiamo che l'interprete risponda correttamente tramite comando PowerShell nativo
         ps_script = """
         $PythonExe = $env:PYTHON_TEST_EXE
@@ -161,10 +166,11 @@ class TestPriority3StreamlitWindowsStartup:
         env["PYTHON_TEST_EXE"] = sys.executable
 
         res = subprocess.run(
-            ["powershell", "-NoProfile", "-Command", ps_script],
+            [ps_exe, "-NoProfile", "-Command", ps_script],
             capture_output=True,
             text=True,
             env=env,
         )
         assert res.returncode == 0, f"PowerShell array invocation fallita: {res.stderr}"
         assert f"PY_OK_{sys.version_info.major}" in res.stdout
+

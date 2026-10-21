@@ -35,6 +35,7 @@ from datetime import datetime, timezone
 from enum import Enum
 import hashlib
 import json
+import math
 from pathlib import Path
 import platform
 import re
@@ -120,6 +121,333 @@ def get_platform_environment() -> dict[str, str]:
 # Sanitizzazione e Privacy Guardrails (Safe by Default)
 # ---------------------------------------------------------------------------
 
+SUPPORTED_OPERATIONAL_MODELS = {
+    "qwen2.5-7b-instruct",
+    "qwen2.5-7b-instruct-1m",
+    "qwen2.5-14b-instruct",
+    "llama-3.1-8b-instruct",
+    "llama-3.2-3b-instruct",
+    "deepseek-r1-distill-qwen-7b",
+    "mistral-7b-instruct",
+    "fake-model",
+    "mock-model",
+    "qwen",
+    "llama",
+    "deepseek",
+    "mistral",
+}
+
+ALLOWED_DIAGNOSTIC_CATEGORIES = {
+    "NONE",
+    "TIMEOUT",
+    "PARSING_ERROR",
+    "JSON_PARSE_ERROR",
+    "SCHEMA_VALIDATION_ERROR",
+    "NETWORK_ERROR",
+    "SYSTEM_ERROR",
+    "UNKNOWN_ERROR",
+    "RECOVERED_FROM_CHECKPOINT",
+    "EVIDENCE_VALIDATION_ERROR",
+    "INVALID_EVIDENCE_ID",
+    "INFERENCE_ERROR",
+}
+
+ALLOWED_FAILURE_PHASES = {
+    "completed",
+    "recovered",
+    "inference",
+    "parsing",
+    "validation",
+    "evidence_validation",
+    "prompt_assembly",
+    "response_parsing",
+    "not_started",
+    "unknown",
+}
+
+ALLOWED_FINISH_REASONS = {
+    "stop",
+    "length",
+    "content_filter",
+    "error",
+    "timeout",
+    "tool_calls",
+    "unknown",
+}
+
+ALLOWED_ERROR_TYPES = {
+    "TimeoutError",
+    "ValueError",
+    "AiStructuredOutputError",
+    "AiInvalidEvidenceCitationError",
+    "ConnectionError",
+    "RuntimeError",
+    "KeyError",
+    "IndexError",
+    "OSError",
+    "JSONDecodeError",
+    "FileNotFoundError",
+    "PermissionError",
+    "SnapshotCreationFailedError",
+    "AiPromptError",
+    "AiExecutionError",
+    "None",
+}
+
+ALLOWED_MODEL_FAMILIES = {
+    "qwen",
+    "llama",
+    "deepseek",
+    "phi",
+    "gemma",
+    "mistral",
+    "custom",
+    "unknown",
+}
+
+ALLOWED_QUANTIZATIONS = {
+    "Q4_K_M",
+    "Q5_K_M",
+    "Q8_0",
+    "F16",
+    "BF16",
+    "Q4_0",
+    "Q4_1",
+    "Q5_0",
+    "Q5_1",
+    "Q2_K",
+    "Q3_K_S",
+    "Q3_K_M",
+    "Q3_K_L",
+    "Q6_K",
+    "UNKNOWN",
+}
+
+ALLOWED_OPERATIONAL_PROFILES = {
+    "HIGH_RESOURCE",
+    "BALANCED",
+    "RESOURCE_CONSTRAINED",
+    "ULTRA_FAST",
+    "FALLBACK",
+}
+
+ALLOWED_REDUCTION_STRATEGIES = {
+    "DIRECT_MULTILINGUAL",
+    "TRANSLATE_FIRST",
+    "NONE",
+    "CHUNKING",
+    "HIERARCHICAL",
+    "EXTRACTIVE",
+}
+
+ALLOWED_ORIGIN_FLOWS = {
+    "MANUAL_DETECTION",
+    "DISCOVERY_VERIFICATION",
+    "BENCHMARK_EVALUATION",
+    "CHECKPOINT_RESUME",
+    "INTERACTIVE_UI",
+    "LIVE_DISCOVERY",
+    "NOT_RECORDED",
+}
+
+ALLOWED_ORIGINS = {
+    "LIVE_LM_STUDIO",
+    "MOCK_INSPECTION",
+    "SYNTHETIC_REFERENCE",
+    "NOT_RECORDED",
+    "OFFLINE_PLAYBACK",
+}
+
+ALLOWED_LOADING_MODES = {
+    "IN_MEMORY_EXECUTION",
+    "CHECKPOINT_RESTORE",
+    "DISK_BACKED",
+    "NOT_RECORDED",
+}
+
+ALLOWED_DATASET_MODES = {
+    "REAL_DATA",
+    "SYNTHETIC_DATA",
+    "BENCHMARK",
+    "NOT_RECORDED",
+    "TEST",
+}
+
+ALLOWED_EXECUTION_STATUSES = {
+    "COMPLETE",
+    "PARTIAL",
+    "FAILED",
+    "SUCCESS",
+    "NOT_RECORDED",
+    "INCONSISTENT_COUNTERS",
+    "UNATTEMPTED",
+    "UNVERIFIED",
+}
+
+ALLOWED_CHUNK_STATUSES = {
+    "SUCCESS",
+    "FAILED",
+    "SKIPPED",
+    "RECOVERED_FROM_CHECKPOINT",
+    "UNATTEMPTED",
+    "TIMEOUT",
+    "CANCELLED",
+}
+
+ALLOWED_AGGREGATION_STATUSES = {
+    "NOT_RECORDED",
+    "COMPLETED",
+    "PARTIAL",
+    "FAILED",
+    "SKIPPED",
+    "SUCCESS",
+}
+
+
+def sanitize_model_family(val: Any, redact: bool = True, fallback: str = "unknown") -> str:
+    """Sanitizza la famiglia di modelli secondo allowlist formale."""
+    if val is None:
+        return fallback
+    s = str(val).strip().lower()
+    if s in ALLOWED_MODEL_FAMILIES:
+        return s
+    return fallback if redact else s[:32]
+
+
+def sanitize_quantization(val: Any, redact: bool = True) -> str | None:
+    """Sanitizza la quantizzazione dichiarata/osservata secondo allowlist."""
+    if val is None:
+        return None
+    s = str(val).strip().upper()
+    if s in ALLOWED_QUANTIZATIONS:
+        return s
+    return "UNKNOWN" if redact else s[:16]
+
+
+def sanitize_operational_profile(val: Any, redact: bool = True) -> str | None:
+    """Sanitizza il profilo operativo secondo allowlist formale."""
+    if val is None:
+        return None
+    s = str(val).strip().upper()
+    if s in ALLOWED_OPERATIONAL_PROFILES:
+        return s
+    return None if redact else s[:32]
+
+
+def sanitize_reduction_strategy(val: Any, redact: bool = True) -> str | None:
+    """Sanitizza la strategia di riduzione secondo allowlist."""
+    if val is None:
+        return None
+    s = str(val).strip().upper()
+    if s in ALLOWED_REDUCTION_STRATEGIES:
+        return s
+    return None if redact else s[:32]
+
+
+def sanitize_origin_flow(val: Any, redact: bool = True, default: str = "NOT_RECORDED") -> str:
+    """Sanitizza il flusso di origine secondo allowlist."""
+    if not val:
+        return default
+    s = str(val).strip().upper()
+    if s in ALLOWED_ORIGIN_FLOWS:
+        return s
+    return default
+
+
+def sanitize_origin(val: Any, redact: bool = True) -> str:
+    """Sanitizza l'origine di esecuzione secondo allowlist."""
+    if not val:
+        return "NOT_RECORDED"
+    s = str(val).strip().upper()
+    if s in ALLOWED_ORIGINS:
+        return s
+    return "NOT_RECORDED"
+
+
+def sanitize_loading_mode(val: Any) -> str:
+    """Sanitizza la modalità di caricamento checkpoint/memoria."""
+    if not val:
+        return "IN_MEMORY_EXECUTION"
+    s = str(val).strip().upper()
+    if s in ALLOWED_LOADING_MODES:
+        return s
+    return "IN_MEMORY_EXECUTION"
+
+
+def sanitize_git_commit(commit: Any) -> str:
+    """Valida tipicamente un commit Git (7-40 caratteri esadecimali o tag canonico), escludendo categoricamente canarini e testo libero."""
+    if not commit or not isinstance(commit, str):
+        return "NOT_RECORDED"
+    s = commit.strip()
+    if not s or s == "NOT_RECORDED":
+        return "NOT_RECORDED"
+    lower_s = s.lower()
+    if any(k in lower_s for k in ("canary", "secret", "confidential", "token", "password", "example", "+", "@", " ", "/", "\\")):
+        return "NOT_RECORDED"
+    if re.match(r"^[0-9a-fA-F]{7,40}$", s):
+        return s
+    if re.match(r"^(?:commit|export|head|tag|v|release)_[0-9a-zA-Z_-]{1,40}$", s):
+        return s
+    if re.match(r"^v?\d+\.\d+(?:\.\d+)?(?:-[0-9a-zA-Z._-]+)?$", s):
+        return s
+    return "NOT_RECORDED"
+
+
+def sanitize_aggregation_errors(errors: Any, redact: bool = True) -> list[str]:
+    """Sanitizza la lista degli errori di aggregazione Discovery."""
+    if not errors or not isinstance(errors, (list, tuple)):
+        return []
+    if redact:
+        return [sanitize_error_detail(str(e), redact=True) or "[REDACTED_DIAGNOSTIC_DETAIL]" for e in errors]
+    return [str(e)[:128] for e in errors]
+
+
+def sanitize_aggregation_status(val: Any) -> str:
+    """Sanitizza lo stato di aggregazione Discovery."""
+    if not val:
+        return "NOT_RECORDED"
+    s = str(val).strip().upper()
+    if s in ALLOWED_AGGREGATION_STATUSES:
+        return s
+    return "NOT_RECORDED"
+
+
+def sanitize_dataset_mode(mode: Any) -> str:
+    """Sanitizza la modalità del dataset."""
+    if not mode:
+        return "NOT_RECORDED"
+    s = str(mode).strip().upper()
+    if s in ALLOWED_DATASET_MODES:
+        return s
+    return "NOT_RECORDED"
+
+
+def safe_int(val: Any) -> int | None:
+    """Conversione sicura a intero, resiste a None, stringhe arbitrarie, NaN e Infinity."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return int(f)
+    except (ValueError, TypeError):
+        return None
+
+
+def safe_float(val: Any) -> float | None:
+    """Conversione sicura a float, resiste a None, stringhe arbitrarie, NaN e Infinity."""
+    if val is None:
+        return None
+    try:
+        f = float(val)
+        if math.isnan(f) or math.isinf(f):
+            return None
+        return f
+    except (ValueError, TypeError):
+        return None
+
+
 def sanitize_local_path(path_str: str | None) -> str | None:
     """Rimuove percorsi assoluti utente o cartelle personali."""
     if not path_str or not isinstance(path_str, str):
@@ -148,21 +476,13 @@ def sanitize_source_name(source_name: str | None, redact: bool = True) -> str | 
 def sanitize_error_detail(detail: str | None, redact: bool = True) -> str | None:
     """
     Rimuove percorsi locali, email, numeri di telefono o tracce di chat dai messaggi di errore.
-    In modalità safe (default), blocca categoricamente qualsiasi testo libero contenente dati personali.
+    In modalità safe (default), blocca categoricamente qualsiasi testo libero non tipizzato.
     """
     if not detail or not isinstance(detail, str):
         return None
-    clean = sanitize_local_path(detail)
-    clean = re.sub(r"[\w\.-]+@[\w\.-]+\.\w+", "<REDACTED_EMAIL>", clean)
-    clean = re.sub(r"\+?\b\d{8,15}\b", "<REDACTED_PHONE>", clean)
-
     if redact:
-        lower = clean.lower()
-        if any(term in lower for term in ("messaggio", "vacanza", "segret", "secret", "private", "alice", "rossi", "<redacted_email>", "<redacted_phone>")):
-            return "[REDACTED_DIAGNOSTIC_DETAIL]"
-        if len(clean) > 80:
-            return "[REDACTED_DIAGNOSTIC_DETAIL]"
-
+        return "[REDACTED_DIAGNOSTIC_DETAIL]"
+    clean = sanitize_local_path(detail)
     if len(clean) > 300:
         clean = clean[:297] + "..."
     return clean
@@ -178,6 +498,100 @@ def get_pseudonymous_id(raw_id: str | None, prefix: str = "anon") -> str:
     raw_str = str(raw_id).strip()
     h = hashlib.sha256(raw_str.encode("utf-8")).hexdigest()[:12]
     return f"{prefix}_{h}"
+
+
+def sanitize_run_id(raw_run_id: str | None, redact: bool = True) -> str:
+    r"""
+    Sanitizza un identificativo di esecuzione (run_id).
+    In modalità safe (default), accetta identificatori sintetici conformi (^run_[a-zA-Z0-9_-]{1,32}$),
+    ma esclude categoricamente canarini, credenziali, token e testo libero non tipizzato che vengono pseudonimizzati.
+    """
+    if not raw_run_id or str(raw_run_id).strip() in ("NOT_RECORDED", "unknown", "None", ""):
+        return "NOT_RECORDED"
+    clean = str(raw_run_id).strip()
+    if redact:
+        lower_c = clean.lower()
+        if any(k in lower_c for k in ("canary", "secret", "confidential", "token", "password", "example", "+", "@", " ", "/", "\\")):
+            return get_pseudonymous_id(clean, prefix="run")
+        if re.match(r"^run_[a-zA-Z0-9_-]{1,32}$", clean):
+            return clean
+        return get_pseudonymous_id(clean, prefix="run")
+    return clean
+
+
+def sanitize_model_id(raw_model: str | None, redact: bool = True) -> str | None:
+    """
+    Sanitizza l'identificativo del modello.
+    In modalità safe (default), applica una allowlist rigorosa e converte in pseudonimo
+    qualsiasi stringa non autorizzata o contenente email, percorsi o pattern personali arbitrari.
+    """
+    if not raw_model:
+        return None
+    s = str(raw_model).strip()
+    if redact:
+        if "@" in s or "/" in s or "\\" in s or " " in s or "+" in s:
+            return get_pseudonymous_id(s, prefix="mod")
+        if s.lower() not in SUPPORTED_OPERATIONAL_MODELS:
+            return get_pseudonymous_id(s, prefix="mod")
+    return s
+
+
+def sanitize_diagnostic_category(val: Any, redact: bool = True) -> str:
+    """Sanitizza la categoria diagnostica secondo allowlist strutturata."""
+    if val is None:
+        return "NONE"
+    s = str(val).strip().upper()
+    if s in ALLOWED_DIAGNOSTIC_CATEGORIES:
+        return s
+    return "UNKNOWN_ERROR" if redact else s
+
+
+def sanitize_failure_phase(val: Any, redact: bool = True) -> str:
+    """Sanitizza la fase di fallimento secondo allowlist strutturata."""
+    if val is None:
+        return "unknown"
+    s = str(val).strip().lower()
+    if s in ALLOWED_FAILURE_PHASES:
+        return s
+    return "unknown" if redact else s
+
+
+def sanitize_finish_reason(val: Any, redact: bool = True) -> str | None:
+    """Sanitizza il finish_reason secondo allowlist strutturata."""
+    if val is None:
+        return None
+    s = str(val).strip().lower()
+    if s in ALLOWED_FINISH_REASONS:
+        return s
+    return "unknown" if redact else s
+
+
+def sanitize_error_type(val: Any, redact: bool = True) -> str | None:
+    """Sanitizza il tipo di eccezione secondo allowlist strutturata."""
+    if val is None:
+        return None
+    s = str(val).strip()
+    if redact:
+        if "." in s:
+            s = s.rsplit(".", 1)[-1]
+        if s in ALLOWED_ERROR_TYPES:
+            return s
+        return "GENERIC_ERROR"
+    return s
+
+
+def sanitize_document_fingerprint(fp: Any) -> str | None:
+    """
+    Restituisce l'impronta crittografica autentica registrata del documento (64 caratteri esadecimali SHA-256).
+    Se assente o non conforme a una vera impronta crittografica registrata, restituisce None (NOT_RECORDED).
+    NON fabbrica pseudonimi del solo document_id.
+    """
+    if not fp or not isinstance(fp, str):
+        return None
+    s = fp.strip()
+    if re.match(r"^[0-9a-fA-F]{64}$", s):
+        return s.lower()
+    return None
 
 
 def sanitize_evidence_id(eid: str, redact: bool = True) -> str:
@@ -212,7 +626,7 @@ def sanitize_topic_text(text: str | None, redact: bool = True) -> str | None:
 
 
 def format_iso_timestamp(ts: Any) -> str | None:
-    """Formatta in ISO-8601 standard qualsiasi tipo di timestamp o stringa."""
+    """Formatta e valida rigorosamente in ISO-8601 standard qualsiasi tipo di timestamp o stringa."""
     if ts is None:
         return None
     if isinstance(ts, datetime):
@@ -221,14 +635,23 @@ def format_iso_timestamp(ts: Any) -> str | None:
         return ts.isoformat()
     if isinstance(ts, (int, float)):
         try:
+            if math.isnan(ts) or math.isinf(ts) or ts <= 0:
+                return None
             dt = datetime.fromtimestamp(ts, tz=timezone.utc)
             return dt.isoformat()
         except Exception:
             return None
     s = str(ts).strip()
-    if not s or s in ("N/D", "n/a", "None"):
+    if not s or s in ("N/D", "n/a", "None", "NOT_RECORDED", "null"):
         return None
-    return s
+    try:
+        norm = s.replace("Z", "+00:00")
+        dt = datetime.fromisoformat(norm)
+        if dt.tzinfo is None:
+            dt = dt.replace(tzinfo=timezone.utc)
+        return dt.isoformat()
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -278,11 +701,12 @@ def generate_export_filename(
     run_id: str | None,
     timestamp: str | None = None,
     export_id: str | None = None,
+    extension: str = "json",
 ) -> str:
     """
     Genera un nome file univoco, deterministico e sanitizzato.
     Usa SEMPRE lo pseudonimo del dataset anziché il percorso o chat_id grezzo.
-    Se run_id non è registrato o è assente, usa un ID di export esplicito senza falsificare la run originaria.
+    Se run_id o model_id contengono dati personali (email, numeri, nomi, percorsi), vengono pseudonimizzati.
     """
     def _clean(val: str, max_len: int = 32) -> str:
         s = re.sub(r"[^a-zA-Z0-9_\.-]+", "_", str(val).strip()).strip("_")
@@ -290,19 +714,26 @@ def generate_export_filename(
 
     type_prefix = "detection" if "detect" in analysis_type.lower() else "discovery"
 
-    # Usa pseudonimo se non è già nel formato anonimo
-    raw_ds = str(dataset_id).strip()
-    if raw_ds.startswith(("chat_", "doc_")):
+    # Dataset: se non è già nel formato anonimo standard chat_<hash> o syn_<num>, genera pseudonimo
+    raw_ds = str(dataset_id).strip() if dataset_id else ""
+    if re.match(r"^(?:chat|doc)_[0-9a-fA-F]{8,32}$", raw_ds) or re.match(r"^syn_\d{1,6}$", raw_ds):
         clean_ds = _clean(raw_ds, 24)
     else:
-        clean_ds = get_pseudonymous_id(raw_ds, prefix="chat")
+        clean_ds = get_pseudonymous_id(raw_ds or "nodataset", prefix="chat")
 
-    clean_model = _clean(model_id or "nomodel", 32)
+    # Modello: se non è modello standard da allowlist, usa pseudonimo
+    m_str = str(model_id).strip() if model_id else ""
+    if m_str and m_str.lower() in SUPPORTED_OPERATIONAL_MODELS:
+        clean_model = _clean(m_str, 32)
+    else:
+        clean_model = get_pseudonymous_id(m_str or "nomodel", prefix="mod")
 
-    if not run_id or str(run_id).strip() in ("NOT_RECORDED", "unknown", "None", ""):
+    # Run ID: accetta solo formati sintetici standard, altrimenti pseudonimizza
+    r_str = str(run_id).strip() if run_id else ""
+    if not r_str or r_str in ("NOT_RECORDED", "unknown", "None", ""):
         clean_run = _clean(export_id or "norunid", 24)
     else:
-        clean_run = _clean(run_id, 24)
+        clean_run = sanitize_run_id(r_str, redact=True)
 
     if timestamp:
         clean_ts = re.sub(r"[^0-9TZ]+", "", str(timestamp).replace("-", "").replace(":", ""))
@@ -311,7 +742,36 @@ def generate_export_filename(
     else:
         clean_ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S")
 
-    return f"{type_prefix}_{clean_ds}_{clean_model}_{clean_run}_{clean_ts}.json"
+    ext = "csv" if ("csv" in analysis_type.lower() or extension.lower() == "csv") else "json"
+    return f"{type_prefix}_{clean_ds}_{clean_model}_{clean_run}_{clean_ts}.{ext}"
+
+
+def export_chunk_diagnostics_to_csv(
+    diagnostics: Sequence[Mapping[str, Any]] | None,
+    total_planned_chunks: int | None = None,
+    model_id: str | None = None,
+    run_id: str | None = None,
+    redact_sensitive_topics: bool = True,
+) -> str:
+    """Esporta la diagnostica dei chunk in formato CSV rigorosamente sanitizzato e safe-by-default."""
+    norm_chunks = _normalize_chunks_diagnostics(
+        raw_diagnostics=diagnostics,
+        total_planned_chunks=total_planned_chunks,
+        model_id=model_id,
+        run_id=run_id,
+        status_default="NOT_RECORDED",
+        redact_sensitive_topics=redact_sensitive_topics,
+    )
+    if not norm_chunks:
+        return "chunk_index,status,diagnostic_category,error_type\n"
+    import csv
+    import io
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=list(norm_chunks[0].keys()))
+    writer.writeheader()
+    writer.writerows(norm_chunks)
+    return buf.getvalue()
+
 
 
 # ---------------------------------------------------------------------------
@@ -335,42 +795,54 @@ def _normalize_chunks_diagnostics(
     if raw_diagnostics:
         for d in raw_diagnostics:
             idx = d.get("chunk_index")
-            if idx is not None and isinstance(idx, int):
+            if idx is not None and isinstance(idx, int) and idx >= 0:
                 diag_by_index[idx] = dict(d)
 
-    total = total_planned_chunks if total_planned_chunks is not None else (max(diag_by_index.keys()) + 1 if diag_by_index else 0)
+    total = total_planned_chunks if (total_planned_chunks is not None and total_planned_chunks >= 0) else (max(diag_by_index.keys()) + 1 if diag_by_index else 0)
 
     normalized: list[dict[str, Any]] = []
     for idx in range(total):
         if idx in diag_by_index:
             d = diag_by_index[idx]
-            st = d.get("status") or status_default
-            att = d.get("attempts")
-            dur = d.get("duration_seconds")
-            mid = d.get("model_id") or d.get("model") or model_id
-            http_st = d.get("http_status")
-            finish_r = d.get("finish_reason")
-            p_tok = d.get("prompt_tokens")
-            c_tok = d.get("completion_tokens")
-            t_tok = d.get("total_tokens") or ((p_tok + c_tok) if p_tok is not None and c_tok is not None else None)
-            jv = d.get("json_valid") if d.get("json_valid") is not None else d.get("json_validation_ok")
-            sv = d.get("schema_valid") if d.get("schema_valid") is not None else d.get("schema_validation_ok")
-            ev = d.get("evidence_valid") if d.get("evidence_valid") is not None else d.get("evidence_validation_ok")
-            err_type = d.get("error_type") or d.get("exception_class")
-            diag_cat = d.get("diagnostic_category") or ("NONE" if st in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT") else "UNKNOWN_ERROR")
-            phase = d.get("failure_phase") or ("completed" if st == "SUCCESS" else "recovered" if st == "RECOVERED_FROM_CHECKPOINT" else "inference")
+            raw_st = str(d.get("status") or status_default).strip().upper()
+            st = raw_st if raw_st in ALLOWED_CHUNK_STATUSES else ("NOT_RECORDED" if redact_sensitive_topics else raw_st[:32])
+            att = safe_int(d.get("attempts"))
+            dur = safe_float(d.get("duration_seconds"))
+            raw_mid = d.get("model_id") or d.get("model") or model_id
+            mid = sanitize_model_id(raw_mid, redact=redact_sensitive_topics)
+            http_st = safe_int(d.get("http_status"))
+            finish_r = sanitize_finish_reason(d.get("finish_reason"), redact=redact_sensitive_topics)
+            p_tok = safe_int(d.get("prompt_tokens"))
+            c_tok = safe_int(d.get("completion_tokens"))
+            t_tok = safe_int(d.get("total_tokens")) or ((p_tok + c_tok) if p_tok is not None and c_tok is not None else None)
+            jv_raw = d.get("json_valid") if d.get("json_valid") is not None else d.get("json_validation_ok")
+            jv = bool(jv_raw) if jv_raw is not None else None
+            sv_raw = d.get("schema_valid") if d.get("schema_valid") is not None else d.get("schema_validation_ok")
+            sv = bool(sv_raw) if sv_raw is not None else None
+            ev_raw = d.get("evidence_valid") if d.get("evidence_valid") is not None else d.get("evidence_validation_ok")
+            ev = bool(ev_raw) if ev_raw is not None else None
+            err_type = sanitize_error_type(d.get("error_type") or d.get("exception_class"), redact=redact_sensitive_topics)
+            diag_cat = sanitize_diagnostic_category(
+                d.get("diagnostic_category") or ("NONE" if st in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT") else "UNKNOWN_ERROR"),
+                redact=redact_sensitive_topics
+            )
+            phase = sanitize_failure_phase(
+                d.get("failure_phase") or ("completed" if st == "SUCCESS" else "recovered" if st == "RECOVERED_FROM_CHECKPOINT" else "inference"),
+                redact=redact_sensitive_topics
+            )
             err_det = sanitize_error_detail(d.get("error_detail") or d.get("details"), redact=redact_sensitive_topics)
-            chk_saved = d.get("checkpoint_saved") if d.get("checkpoint_saved") is not None else d.get("checkpoint_save_ok")
-            val_ev_c = d.get("valid_evidence_count")
+            chk_raw = d.get("checkpoint_saved") if d.get("checkpoint_saved") is not None else d.get("checkpoint_save_ok")
+            chk_saved = bool(chk_raw) if chk_raw is not None else False
+            val_ev_c = safe_int(d.get("valid_evidence_count"))
 
             rec = {
                 "chunk_index": idx,
                 "chunk_display_number": idx + 1,
-                "chunk_id": get_pseudonymous_id(d.get("chunk_id") or f"chk_{idx}", prefix="chk"),
+                "chunk_id": get_pseudonymous_id(d.get("chunk_id") or f"chk_{idx}", prefix="chk") if redact_sensitive_topics else str(d.get("chunk_id") or f"chunk_{idx}"),
                 "status": st,
-                "attempts": int(att) if att is not None else None,
-                "duration_seconds": round(float(dur), 4) if dur is not None else None,
-                "model_id": str(mid) if mid is not None else None,
+                "attempts": att,
+                "duration_seconds": round(dur, 4) if dur is not None else None,
+                "model_id": mid,
                 "http_status": http_st,
                 "finish_reason": finish_r,
                 "prompt_tokens": p_tok,
@@ -391,11 +863,11 @@ def _normalize_chunks_diagnostics(
             rec = {
                 "chunk_index": idx,
                 "chunk_display_number": idx + 1,
-                "chunk_id": f"chk_{idx}_unattempted",
+                "chunk_id": f"chk_{idx}_unattempted" if redact_sensitive_topics else f"chunk_{idx}_unattempted",
                 "status": "UNATTEMPTED",
                 "attempts": 0,
                 "duration_seconds": None,
-                "model_id": model_id,
+                "model_id": sanitize_model_id(model_id, redact=redact_sensitive_topics),
                 "http_status": None,
                 "finish_reason": None,
                 "prompt_tokens": None,
@@ -407,7 +879,7 @@ def _normalize_chunks_diagnostics(
                 "error_type": None,
                 "diagnostic_category": "NONE",
                 "failure_phase": "not_started",
-                "error_detail": "Blocco non eseguito o saltato",
+                "error_detail": "[REDACTED_DIAGNOSTIC_DETAIL]" if redact_sensitive_topics else "Blocco non eseguito o saltato",
                 "checkpoint_saved": False,
                 "valid_evidence_count": 0,
                 "subchunks_used": False,
@@ -429,6 +901,7 @@ def build_topic_detection_export_report(
     checkpoint_store: Any = None,
     custom_commit: str | None = None,
     custom_version: str | None = None,
+    authoritative_live_run_ids: Sequence[str] | set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Costruisce la struttura dati completa e scientificamente veritiera per l'esportazione JSON di Topic Detection.
@@ -438,120 +911,191 @@ def build_topic_detection_export_report(
 
     # Run ID: non inventare 'run_' + id(obj). Usare NOT_RECORDED se non registrata.
     raw_run_id = meta.get("run_id")
-    run_id = str(raw_run_id) if raw_run_id else "NOT_RECORDED"
+    run_id = sanitize_run_id(raw_run_id, redact=redact_sensitive_topics)
     export_id = get_pseudonymous_id(f"exp_det_{id(detection_result)}_{datetime.now(timezone.utc).timestamp()}", prefix="exp")
     analysis_type = "TOPIC_DETECTION"
 
     # Risoluzione modello: acquisire dai metadati reali senza default fittizi
-    req_model = meta.get("requested_model") or meta.get("model")
-    eff_model = meta.get("model") or req_model
+    req_model = sanitize_model_id(meta.get("requested_model") or meta.get("model"), redact=redact_sensitive_topics)
+    eff_model = sanitize_model_id(meta.get("model") or req_model, redact=redact_sensitive_topics)
     if eff_model:
         family_inferred = infer_model_family(eff_model)
-        family_val = meta.get("family") or (family_inferred.value if hasattr(family_inferred, "value") else str(family_inferred))
+        fallback_fam = family_inferred.value if hasattr(family_inferred, "value") else str(family_inferred)
+        family_val = sanitize_model_family(meta.get("family"), redact=redact_sensitive_topics, fallback=fallback_fam)
     else:
         family_val = None
 
     # Risoluzione conteggi chunk e validazione delle invarianti
     raw_diag = meta.get("chunk_diagnostics") or []
     planned_chunks_raw = meta.get("chunk_count") if meta.get("chunk_count") is not None else meta.get("expected_chunk_count")
-    if planned_chunks_raw is not None:
-        planned_chunks = int(planned_chunks_raw)
-    elif raw_diag:
-        planned_chunks = len(raw_diag)
-    else:
+    planned_chunks = safe_int(planned_chunks_raw)
+    if planned_chunks is not None and planned_chunks < 0:
         planned_chunks = None
+    elif planned_chunks is None and raw_diag:
+        planned_chunks = len(raw_diag)
 
-    if planned_chunks is not None:
-        failed_chunks = int(meta.get("failed_chunk_count", 0))
-        recovered_chunks = int(meta.get("recovered_chunk_count", 0))
-        completed_chunks = int(meta.get("completed_chunk_count", max(0, planned_chunks - failed_chunks)))
-        skipped_chunks = int(meta.get("skipped_chunk_count", max(0, planned_chunks - completed_chunks - failed_chunks)))
+    has_explicit_counters = any(
+        meta.get(k) is not None for k in ("completed_chunk_count", "failed_chunk_count", "recovered_chunk_count", "skipped_chunk_count")
+    )
 
-        # Invariant validation: completed + failed + skipped == planned
-        counter_invariants_valid = (
-            (completed_chunks + failed_chunks + skipped_chunks == planned_chunks)
-            and completed_chunks <= planned_chunks
-            and failed_chunks <= planned_chunks
-        )
-
-        if counter_invariants_valid:
-            is_complete = (completed_chunks == planned_chunks and failed_chunks == 0)
-            coverage_status = "COMPLETE" if is_complete else ("PARTIAL" if completed_chunks > 0 else "FAILED")
-            completion_pct = round((completed_chunks / planned_chunks) * 100.0, 1) if planned_chunks > 0 else 0.0
+    if planned_chunks is not None and (has_explicit_counters or raw_diag):
+        if has_explicit_counters:
+            failed_chunks = safe_int(meta.get("failed_chunk_count")) if meta.get("failed_chunk_count") is not None else 0
+            recovered_chunks = safe_int(meta.get("recovered_chunk_count")) if meta.get("recovered_chunk_count") is not None else 0
+            completed_chunks = safe_int(meta.get("completed_chunk_count"))
+            skipped_chunks = safe_int(meta.get("skipped_chunk_count")) if meta.get("skipped_chunk_count") is not None else 0
         else:
-            is_complete = False
-            coverage_status = "INCONSISTENT_COUNTERS"
+            completed_chunks = sum(1 for d in raw_diag if d.get("status") in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"))
+            failed_chunks = sum(1 for d in raw_diag if d.get("status") == "FAILED")
+            recovered_chunks = sum(1 for d in raw_diag if d.get("status") == "RECOVERED_FROM_CHECKPOINT")
+            skipped_chunks = sum(1 for d in raw_diag if d.get("status") in ("SKIPPED", "UNATTEMPTED"))
+
+        if completed_chunks is None:
+            counter_invariants_valid = None
+            is_complete = None
+            coverage_status = "NOT_RECORDED"
             completion_pct = None
+        else:
+            contradiction = False
+            if raw_diag:
+                diag_success = sum(1 for d in raw_diag if d.get("status") in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"))
+                diag_failed = sum(1 for d in raw_diag if d.get("status") == "FAILED")
+                diag_unattempted = sum(1 for d in raw_diag if d.get("status") == "UNATTEMPTED")
+                if diag_unattempted == len(raw_diag) and completed_chunks > 0:
+                    contradiction = True
+                if diag_failed > 0 and (failed_chunks or 0) == 0:
+                    contradiction = True
+                if diag_success < completed_chunks and len(raw_diag) == planned_chunks:
+                    contradiction = True
+
+            invariants_ok = (
+                (completed_chunks + (failed_chunks or 0) + (skipped_chunks or 0) == planned_chunks)
+                and completed_chunks <= planned_chunks
+                and (failed_chunks or 0) <= planned_chunks
+                and not contradiction
+            )
+
+            if invariants_ok:
+                counter_invariants_valid = True
+                is_complete = (completed_chunks == planned_chunks and (failed_chunks or 0) == 0)
+                coverage_status = "COMPLETE" if is_complete else ("PARTIAL" if completed_chunks > 0 else "FAILED")
+                completion_pct = round((completed_chunks / planned_chunks) * 100.0, 1) if planned_chunks > 0 else 0.0
+            else:
+                counter_invariants_valid = False
+                is_complete = False
+                coverage_status = "INCONSISTENT_COUNTERS"
+                completion_pct = None
     else:
-        failed_chunks = meta.get("failed_chunk_count")
-        recovered_chunks = meta.get("recovered_chunk_count")
-        completed_chunks = meta.get("completed_chunk_count")
-        skipped_chunks = meta.get("skipped_chunk_count")
+        failed_chunks = safe_int(meta.get("failed_chunk_count"))
+        recovered_chunks = safe_int(meta.get("recovered_chunk_count"))
+        completed_chunks = safe_int(meta.get("completed_chunk_count"))
+        skipped_chunks = safe_int(meta.get("skipped_chunk_count"))
         counter_invariants_valid = None
         is_complete = None
         coverage_status = "NOT_RECORDED"
         completion_pct = None
 
-    # Determinazione stato esecuzione
+    # Determinazione stato esecuzione: P0/B separazione reported da verified
     raw_status = meta.get("status")
     if raw_status:
-        execution_status = str(raw_status).upper()
-        if execution_status not in ("COMPLETE", "PARTIAL", "FAILED", "SUCCESS"):
-            execution_status = "PARTIAL" if (failed_chunks and failed_chunks > 0) else "COMPLETE"
-        if execution_status == "SUCCESS":
-            execution_status = "COMPLETE" if is_complete else "PARTIAL"
+        st_clean = str(raw_status).strip().upper()
+        reported_status = st_clean if st_clean in ALLOWED_EXECUTION_STATUSES else "NOT_RECORDED"
     else:
-        execution_status = coverage_status
+        reported_status = coverage_status
+
+    if coverage_status == "INCONSISTENT_COUNTERS":
+        verified_status = "INCONSISTENT_COUNTERS"
+    elif coverage_status == "NOT_RECORDED":
+        verified_status = "NOT_RECORDED"
+    elif coverage_status == "COMPLETE" and is_complete is True:
+        verified_status = "COMPLETE"
+    elif coverage_status == "PARTIAL":
+        verified_status = "PARTIAL"
+    elif coverage_status == "FAILED":
+        verified_status = "FAILED"
+    else:
+        verified_status = "NOT_RECORDED"
+
+    execution_status = verified_status
 
     # Risoluzione evidenze
     tot_evidence = document.evidence_count
-    analyzed_ev = meta.get("analyzed_evidence_count")
+    analyzed_ev = safe_int(meta.get("analyzed_evidence_count"))
     if analyzed_ev is None and is_complete:
         analyzed_ev = tot_evidence
-    unanalyzed_ev = meta.get("unanalyzed_evidence_count")
+    unanalyzed_ev = safe_int(meta.get("unanalyzed_evidence_count"))
     if unanalyzed_ev is None and analyzed_ev is not None:
         unanalyzed_ev = max(0, tot_evidence - analyzed_ev)
 
     ev_coverage_pct = round((analyzed_ev / tot_evidence) * 100.0, 1) if tot_evidence and analyzed_ev is not None else None
 
     # Profilo operativo: non inventare BALANCED se assente
-    prof_req = meta.get("profile_requested") or meta.get("profile")
-    prof_app = meta.get("profile_applied") or meta.get("profile")
+    prof_req = sanitize_operational_profile(meta.get("profile_requested") or meta.get("profile"), redact=redact_sensitive_topics)
+    prof_app = sanitize_operational_profile(meta.get("profile_applied") or meta.get("profile"), redact=redact_sensitive_topics)
 
-    # Origine ed attestazione: FAIL-CLOSED (nessun LIVE_AUTHORITATIVE senza autenticazione verificata)
-    origin_val = meta.get("origin") or "NOT_RECORDED"
+    # Origine ed attestazione: FAIL-CLOSED (nessun LIVE_AUTHORITATIVE senza verifica autoritativa)
+    raw_att = meta.get("attestation_level")
+    origin_val = sanitize_origin(meta.get("origin"), redact=redact_sensitive_topics)
     is_mock = (
         bool(meta.get("is_mock"))
         or bool(meta.get("is_fake"))
         or (origin_val in (AnalysisOrigin.MOCK_INSPECTION.value, AnalysisOrigin.SYNTHETIC_REFERENCE.value))
         or ("fake" in str(meta.get("client_class", "")).lower())
         or ("fake" in str(eff_model).lower() if eff_model else False)
+        or ("mock" in str(eff_model).lower() if eff_model else False)
     )
-    if is_mock:
-        attestation = AttestationLevel.MOCK_VERIFIED.value
-    elif meta.get("attestation_level"):
-        attestation = str(meta["attestation_level"])
-    elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value and bool(meta.get("is_authenticated_live")):
-        attestation = AttestationLevel.LIVE_AUTHORITATIVE.value
+
+    if raw_att:
+        att_str = str(raw_att).strip().upper()
+        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED") else "UNATTESTED"
+    elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
+        reported_attestation = "REPORTED_LIVE"
     else:
-        attestation = AttestationLevel.UNATTESTED.value
+        reported_attestation = None
+
+    # Autenticazione autoritativa verificata (P0/C: i soli flag metadata non possono promuovere a LIVE_AUTHORITATIVE)
+    is_authoritative_live = False
+    if authoritative_live_run_ids is not None and run_id in authoritative_live_run_ids and not is_mock:
+        is_authoritative_live = True
+    elif (
+        meta.get("authoritative_execution_certified") is True
+        and meta.get("server_provenance_verified") is True
+        and meta.get("runtime_binding_verified") is True
+        and not is_mock
+    ):
+        is_authoritative_live = True
+
+    if is_mock:
+        verified_attestation = AttestationLevel.MOCK_VERIFIED.value
+    elif is_authoritative_live and origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
+        verified_attestation = AttestationLevel.LIVE_AUTHORITATIVE.value
+    else:
+        verified_attestation = AttestationLevel.UNATTESTED.value
+
+    attestation = verified_attestation
 
     # Distinguere la modalità di caricamento dall'origine di inferenza
-    loading_mode = meta.get("loading_mode")
-    if not loading_mode:
-        loading_mode = (
+    loading_mode_raw = meta.get("loading_mode")
+    if not loading_mode_raw:
+        loading_mode_raw = (
             LoadingMode.CHECKPOINT_RESTORE.value
             if (meta.get("is_persisted_recovery") or (recovered_chunks and recovered_chunks > 0))
             else LoadingMode.IN_MEMORY_EXECUTION.value
         )
+    loading_mode = sanitize_loading_mode(loading_mode_raw)
 
-    mode_str = "DEMO" if (dataset_mode and "demo" in str(dataset_mode).lower()) else ("DEMO" if "demo" in document.document_id.lower() else "FILE")
+    if dataset_mode:
+        mode_str = sanitize_dataset_mode(dataset_mode)
+    elif meta.get("mode"):
+        mode_str = sanitize_dataset_mode(meta["mode"])
+    else:
+        mode_str = "NOT_RECORDED"
 
     # Informazioni Topic ricercato
     t_obj = detection_result.topic
     is_label_only = getattr(t_obj, "is_label_only", False) or (t_obj.description.strip().casefold() == t_obj.label.strip().casefold())
     query_mode_str = "LABEL_ONLY" if is_label_only else "LABEL_WITH_DESCRIPTION"
-    origin_flow = meta.get("origin_flow", "MANUAL_DETECTION")
+    origin_flow = sanitize_origin_flow(meta.get("origin_flow"), redact=redact_sensitive_topics, default="MANUAL_DETECTION")
 
     # Diagnostica chunk normalizzata
     norm_chunks = _normalize_chunks_diagnostics(
@@ -566,11 +1110,10 @@ def build_topic_detection_export_report(
     # Costruzione sezione semantica Prova del Nove / Consistency
     semantic_consistency_info: dict[str, Any] | None = None
     if consistency_result is not None:
-        src_disc_run = consistency_result.discovery_run_id
-        tgt_det_run = consistency_result.detection_run_id
+        src_disc_run = sanitize_run_id(consistency_result.discovery_run_id, redact=redact_sensitive_topics)
+        tgt_det_run = sanitize_run_id(consistency_result.detection_run_id, redact=redact_sensitive_topics)
 
         # Verifica indipendenza inferenziale documentata (non inventare True)
-        independence_verified = bool(meta.get("inferential_independence_verified"))
         if src_disc_run and tgt_det_run and src_disc_run != tgt_det_run and meta.get("inferential_independence_verified") is True:
             independence_verified = True
         elif meta.get("inferential_independence_verified") is False:
@@ -596,7 +1139,7 @@ def build_topic_detection_export_report(
 
     # Durate: null se non misurate, mai 0.0
     dur_val = meta.get("latency_seconds") if meta.get("latency_seconds") is not None else meta.get("duration_seconds")
-    duration_sec = round(float(dur_val), 3) if dur_val is not None else None
+    duration_sec = round(float(dur_val), 3) if dur_val is not None and safe_float(dur_val) is not None else None
 
     # Struttura del report
     report: dict[str, Any] = {
@@ -604,9 +1147,9 @@ def build_topic_detection_export_report(
         "software": {
             "name": SOFTWARE_NAME,
             "version": custom_version or get_software_version(),
-            "execution_software_commit": meta.get("git_commit") or "NOT_RECORDED",
-            "export_software_commit": custom_commit or get_git_commit(),
-            "offline_mode": True,
+            "execution_software_commit": sanitize_git_commit(meta.get("git_commit")),
+            "export_software_commit": sanitize_git_commit(custom_commit or get_git_commit()),
+            "offline_mode": bool(meta.get("offline_mode", True)),
             "environment": get_platform_environment(),
         },
         "experiment": {
@@ -616,7 +1159,9 @@ def build_topic_detection_export_report(
             "origin_flow": origin_flow,
             "mode": mode_str,
             "conversation_pseudonym": get_pseudonymous_id(document.chat_id or document.document_id, prefix="chat"),
-            "attestation_level": attestation,
+            "reported_attestation_level": reported_attestation,
+            "verified_attestation_level": verified_attestation,
+            "attestation_level": verified_attestation,
             "loading_mode": loading_mode,
             "start_time": format_iso_timestamp(meta.get("start_timestamp")),
             "end_time": format_iso_timestamp(meta.get("end_timestamp") or meta.get("timestamp")),
@@ -624,7 +1169,7 @@ def build_topic_detection_export_report(
         },
         "document": {
             "document_pseudonym": get_pseudonymous_id(document.document_id, prefix="doc"),
-            "document_fingerprint": meta.get("document_fingerprint") or get_pseudonymous_id(document.document_id, prefix="fp"),
+            "document_fingerprint": sanitize_document_fingerprint(meta.get("document_fingerprint")),
             "message_count": document.message_count,
             "total_evidence_count": tot_evidence,
             "analyzed_evidence_count": analyzed_ev,
@@ -635,21 +1180,21 @@ def build_topic_detection_export_report(
             "requested_model_id": req_model,
             "effective_model_id": eff_model,
             "family": family_val,
-            "declared_quantization": meta.get("quantization") or meta.get("declared_quantization"),
-            "observed_quantization": meta.get("observed_quantization"),
-            "declared_context_length": meta.get("context_length"),
-            "effective_context_length": meta.get("runtime_context_length") or meta.get("context_length"),
+            "declared_quantization": sanitize_quantization(meta.get("quantization") or meta.get("declared_quantization"), redact=redact_sensitive_topics),
+            "observed_quantization": sanitize_quantization(meta.get("observed_quantization"), redact=redact_sensitive_topics),
+            "declared_context_length": safe_int(meta.get("context_length")),
+            "effective_context_length": safe_int(meta.get("runtime_context_length") or meta.get("context_length")),
             "local_endpoint": "http://127.0.0.1:1234" if eff_model else None,
         },
         "configuration": {
-            "temperature": float(meta["temperature"]) if meta.get("temperature") is not None else None,
-            "max_tokens": int(meta["max_tokens"]) if meta.get("max_tokens") is not None else None,
-            "timeout_seconds": float(meta["timeout_seconds"]) if meta.get("timeout_seconds") is not None else None,
-            "seed": meta.get("seed"),
+            "temperature": safe_float(meta.get("temperature")),
+            "max_tokens": safe_int(meta.get("max_tokens")),
+            "timeout_seconds": safe_float(meta.get("timeout_seconds")),
+            "seed": safe_int(meta.get("seed")),
             "operational_profile_requested": prof_req,
             "operational_profile_applied": prof_app,
             "profile_downgraded": bool(meta.get("profile_downgraded", False)),
-            "reduction_strategy": meta.get("reduction_strategy"),
+            "reduction_strategy": sanitize_reduction_strategy(meta.get("reduction_strategy"), redact=redact_sensitive_topics),
             "query_mode": query_mode_str,
         },
         "execution": {
@@ -657,10 +1202,12 @@ def build_topic_detection_export_report(
             "end_timestamp": format_iso_timestamp(meta.get("end_timestamp") or meta.get("timestamp")),
             "duration_seconds": duration_sec,
             "origin": origin_val,
-            "global_status": execution_status,
-            "error_count": int(meta["error_count"]) if meta.get("error_count") is not None else (failed_chunks if failed_chunks is not None else 0),
-            "retry_count": int(meta.get("retry_count", 0)),
-            "subchunks_used": bool(meta.get("subchunks_used", False)),
+            "reported_execution_status": reported_status,
+            "verified_execution_status": verified_status,
+            "global_status": verified_status,
+            "error_count": safe_int(meta.get("error_count")) if meta.get("error_count") is not None else (failed_chunks if failed_chunks is not None else None),
+            "retry_count": safe_int(meta.get("retry_count")) if meta.get("retry_count") is not None else None,
+            "subchunks_used": bool(meta.get("subchunks_used", False)) if meta.get("subchunks_used") is not None else None,
         },
         "coverage": {
             "total_chunks_planned": planned_chunks,
@@ -690,21 +1237,24 @@ def build_topic_detection_export_report(
             "rationale": sanitize_topic_text(detection_result.rationale, redact=redact_sensitive_topics),
             "evidence_ids": [sanitize_evidence_id(e, redact=redact_sensitive_topics) for e in detection_result.evidence_ids],
             "evidence_count": len(detection_result.evidence_ids),
-            "linked_discovery_run_id": meta.get("verified_discovery_run_id") or meta.get("discovery_run_id") or meta.get("linked_discovery_run_id"),
+            "linked_discovery_run_id": sanitize_run_id(
+                meta.get("verified_discovery_run_id") or meta.get("discovery_run_id") or meta.get("linked_discovery_run_id"),
+                redact=redact_sensitive_topics
+            ),
             "semantic_consistency": semantic_consistency_info,
         },
         "chunks": norm_chunks,
         "checkpoints": {
             "enabled": meta.get("checkpoint_enabled"),
             "recovered_count": recovered_chunks,
-            "saved_count": meta.get("saved_chunk_count"),
+            "saved_count": safe_int(meta.get("saved_chunk_count")),
             "checkpoint_database_pseudonym": "<LOCAL_SQLITE_CHECKPOINT_STORE>",
         },
         "validation": {
-            "evidence_id_validation_applied": True,
-            "strict_alias_matching": True,
-            "hallucinated_citations_rejected": True,
-            "schema_validation_applied": True,
+            "evidence_id_validation_applied": meta.get("evidence_id_validation_applied") if meta.get("evidence_id_validation_applied") is not None else "STATICALLY_VERIFIED",
+            "strict_alias_matching": meta.get("strict_alias_matching") if meta.get("strict_alias_matching") is not None else "STATICALLY_VERIFIED",
+            "hallucinated_citations_rejected": meta.get("hallucinated_citations_rejected") if meta.get("hallucinated_citations_rejected") is not None else "STATICALLY_VERIFIED",
+            "schema_validation_applied": meta.get("schema_validation_applied") if meta.get("schema_validation_applied") is not None else "STATICALLY_VERIFIED",
         },
         "provenance": {
             "provenance_document_id_pseudonym": get_pseudonymous_id(detection_result.provenance_document_id or document.document_id, prefix="doc"),
@@ -743,6 +1293,7 @@ def build_topic_discovery_export_report(
     checkpoint_store: Any = None,
     custom_commit: str | None = None,
     custom_version: str | None = None,
+    authoritative_live_run_ids: Sequence[str] | set[str] | None = None,
 ) -> dict[str, Any]:
     """
     Costruisce la struttura dati completa e scientificamente veritiera per l'esportazione JSON di Topic Discovery.
@@ -752,55 +1303,85 @@ def build_topic_discovery_export_report(
 
     # Run ID: non inventare 'run_' + id(obj). Usare NOT_RECORDED se non registrata.
     raw_run_id = meta.get("run_id")
-    run_id = str(raw_run_id) if raw_run_id else "NOT_RECORDED"
+    run_id = sanitize_run_id(raw_run_id, redact=redact_sensitive_topics)
     export_id = get_pseudonymous_id(f"exp_disc_{id(discovery_result)}_{datetime.now(timezone.utc).timestamp()}", prefix="exp")
     analysis_type = "TOPIC_DISCOVERY"
 
     # Risoluzione modello: acquisire dai metadati reali senza default fittizi
-    req_model = meta.get("requested_model") or meta.get("model")
-    eff_model = meta.get("model") or req_model
+    req_model = sanitize_model_id(meta.get("requested_model") or meta.get("model"), redact=redact_sensitive_topics)
+    eff_model = sanitize_model_id(meta.get("model") or req_model, redact=redact_sensitive_topics)
     if eff_model:
         family_inferred = infer_model_family(eff_model)
-        family_val = meta.get("family") or (family_inferred.value if hasattr(family_inferred, "value") else str(family_inferred))
+        raw_family = meta.get("family") or (family_inferred.value if hasattr(family_inferred, "value") else str(family_inferred))
+        family_val = sanitize_model_family(raw_family, redact=redact_sensitive_topics)
     else:
         family_val = None
 
     # Risoluzione chunk e validazione invarianti
     raw_diag = meta.get("chunk_diagnostics") or []
     planned_chunks_raw = meta.get("chunk_count") if meta.get("chunk_count") is not None else meta.get("expected_chunk_count")
-    if planned_chunks_raw is not None:
-        planned_chunks = int(planned_chunks_raw)
-    elif raw_diag:
-        planned_chunks = len(raw_diag)
-    else:
+    planned_chunks = safe_int(planned_chunks_raw)
+    if planned_chunks is not None and planned_chunks < 0:
         planned_chunks = None
+    elif planned_chunks is None and raw_diag:
+        planned_chunks = len(raw_diag)
 
-    if planned_chunks is not None:
-        failed_chunks = int(meta.get("failed_chunk_count", 0))
-        recovered_chunks = int(meta.get("recovered_chunk_count", 0))
-        completed_chunks = int(meta.get("completed_chunk_count", max(0, planned_chunks - failed_chunks)))
-        skipped_chunks = int(meta.get("skipped_chunk_count", max(0, planned_chunks - completed_chunks - failed_chunks)))
+    has_explicit_counters = any(
+        meta.get(k) is not None for k in ("completed_chunk_count", "failed_chunk_count", "recovered_chunk_count", "skipped_chunk_count")
+    )
 
-        # Invariant validation
-        counter_invariants_valid = (
-            (completed_chunks + failed_chunks + skipped_chunks == planned_chunks)
-            and completed_chunks <= planned_chunks
-            and failed_chunks <= planned_chunks
-        )
-
-        if counter_invariants_valid:
-            is_complete = (completed_chunks == planned_chunks and failed_chunks == 0)
-            coverage_status = "COMPLETE" if is_complete else ("PARTIAL" if completed_chunks > 0 else "FAILED")
-            completion_pct = round((completed_chunks / planned_chunks) * 100.0, 1) if planned_chunks > 0 else 0.0
+    if planned_chunks is not None and (has_explicit_counters or raw_diag):
+        if has_explicit_counters:
+            failed_chunks = safe_int(meta.get("failed_chunk_count")) if meta.get("failed_chunk_count") is not None else 0
+            recovered_chunks = safe_int(meta.get("recovered_chunk_count")) if meta.get("recovered_chunk_count") is not None else 0
+            completed_chunks = safe_int(meta.get("completed_chunk_count"))
+            skipped_chunks = safe_int(meta.get("skipped_chunk_count")) if meta.get("skipped_chunk_count") is not None else 0
         else:
-            is_complete = False
-            coverage_status = "INCONSISTENT_COUNTERS"
+            completed_chunks = sum(1 for d in raw_diag if d.get("status") in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"))
+            failed_chunks = sum(1 for d in raw_diag if d.get("status") == "FAILED")
+            recovered_chunks = sum(1 for d in raw_diag if d.get("status") == "RECOVERED_FROM_CHECKPOINT")
+            skipped_chunks = sum(1 for d in raw_diag if d.get("status") in ("SKIPPED", "UNATTEMPTED"))
+
+        if completed_chunks is None:
+            counter_invariants_valid = None
+            is_complete = None
+            coverage_status = "NOT_RECORDED"
             completion_pct = None
+        else:
+            contradiction = False
+            if raw_diag:
+                diag_success = sum(1 for d in raw_diag if d.get("status") in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"))
+                diag_failed = sum(1 for d in raw_diag if d.get("status") == "FAILED")
+                diag_unattempted = sum(1 for d in raw_diag if d.get("status") == "UNATTEMPTED")
+                if diag_unattempted == len(raw_diag) and completed_chunks > 0:
+                    contradiction = True
+                if diag_failed > 0 and (failed_chunks or 0) == 0:
+                    contradiction = True
+                if diag_success < completed_chunks and len(raw_diag) == planned_chunks:
+                    contradiction = True
+
+            invariants_ok = (
+                (completed_chunks + (failed_chunks or 0) + (skipped_chunks or 0) == planned_chunks)
+                and completed_chunks <= planned_chunks
+                and (failed_chunks or 0) <= planned_chunks
+                and not contradiction
+            )
+
+            if invariants_ok:
+                counter_invariants_valid = True
+                is_complete = (completed_chunks == planned_chunks and (failed_chunks or 0) == 0)
+                coverage_status = "COMPLETE" if is_complete else ("PARTIAL" if completed_chunks > 0 else "FAILED")
+                completion_pct = round((completed_chunks / planned_chunks) * 100.0, 1) if planned_chunks > 0 else 0.0
+            else:
+                counter_invariants_valid = False
+                is_complete = False
+                coverage_status = "INCONSISTENT_COUNTERS"
+                completion_pct = None
     else:
-        failed_chunks = meta.get("failed_chunk_count")
-        recovered_chunks = meta.get("recovered_chunk_count")
-        completed_chunks = meta.get("completed_chunk_count")
-        skipped_chunks = meta.get("skipped_chunk_count")
+        failed_chunks = safe_int(meta.get("failed_chunk_count"))
+        recovered_chunks = safe_int(meta.get("recovered_chunk_count"))
+        completed_chunks = safe_int(meta.get("completed_chunk_count"))
+        skipped_chunks = safe_int(meta.get("skipped_chunk_count"))
         counter_invariants_valid = None
         is_complete = None
         coverage_status = "NOT_RECORDED"
@@ -808,56 +1389,97 @@ def build_topic_discovery_export_report(
 
     raw_status = meta.get("status")
     if raw_status:
-        execution_status = str(raw_status).upper()
-        if execution_status not in ("COMPLETE", "PARTIAL", "FAILED", "SUCCESS"):
-            execution_status = "PARTIAL" if (failed_chunks and failed_chunks > 0) else "COMPLETE"
-        if execution_status == "SUCCESS":
-            execution_status = "COMPLETE" if is_complete else "PARTIAL"
+        st_clean = str(raw_status).strip().upper()
+        reported_status = st_clean if st_clean in ALLOWED_EXECUTION_STATUSES else "NOT_RECORDED"
     else:
-        execution_status = coverage_status
+        reported_status = coverage_status
+
+    if coverage_status == "INCONSISTENT_COUNTERS":
+        verified_status = "INCONSISTENT_COUNTERS"
+    elif coverage_status == "NOT_RECORDED":
+        verified_status = "NOT_RECORDED"
+    elif coverage_status == "COMPLETE" and is_complete is True:
+        verified_status = "COMPLETE"
+    elif coverage_status == "PARTIAL":
+        verified_status = "PARTIAL"
+    elif coverage_status == "FAILED":
+        verified_status = "FAILED"
+    else:
+        verified_status = "NOT_RECORDED"
+
+    execution_status = verified_status
 
     # Evidenze
     tot_evidence = document.evidence_count
-    analyzed_ev = meta.get("analyzed_evidence_count")
+    analyzed_ev = safe_int(meta.get("analyzed_evidence_count"))
     if analyzed_ev is None and is_complete:
         analyzed_ev = tot_evidence
-    unanalyzed_ev = meta.get("unanalyzed_evidence_count")
+    unanalyzed_ev = safe_int(meta.get("unanalyzed_evidence_count"))
     if unanalyzed_ev is None and analyzed_ev is not None:
         unanalyzed_ev = max(0, tot_evidence - analyzed_ev)
 
     ev_coverage_pct = round((analyzed_ev / tot_evidence) * 100.0, 1) if tot_evidence and analyzed_ev is not None else None
 
     # Profilo operativo: non inventare BALANCED se assente
-    prof_req = meta.get("profile_requested") or meta.get("profile")
-    prof_app = meta.get("profile_applied") or meta.get("profile")
+    prof_req = sanitize_operational_profile(meta.get("profile_requested") or meta.get("profile"), redact=redact_sensitive_topics)
+    prof_app = sanitize_operational_profile(meta.get("profile_applied") or meta.get("profile"), redact=redact_sensitive_topics)
 
-    # Origine ed attestazione: FAIL-CLOSED
-    origin_val = meta.get("origin") or "NOT_RECORDED"
+    # Origine ed attestazione: FAIL-CLOSED (nessun LIVE_AUTHORITATIVE senza verifica autoritativa)
+    raw_att = meta.get("attestation_level")
+    origin_val = sanitize_origin(meta.get("origin"), redact=redact_sensitive_topics)
     is_mock = (
         bool(meta.get("is_mock"))
         or bool(meta.get("is_fake"))
         or (origin_val in (AnalysisOrigin.MOCK_INSPECTION.value, AnalysisOrigin.SYNTHETIC_REFERENCE.value))
         or ("fake" in str(meta.get("client_class", "")).lower())
         or ("fake" in str(eff_model).lower() if eff_model else False)
+        or ("mock" in str(eff_model).lower() if eff_model else False)
     )
-    if is_mock:
-        attestation = AttestationLevel.MOCK_VERIFIED.value
-    elif meta.get("attestation_level"):
-        attestation = str(meta["attestation_level"])
-    elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value and bool(meta.get("is_authenticated_live")):
-        attestation = AttestationLevel.LIVE_AUTHORITATIVE.value
-    else:
-        attestation = AttestationLevel.UNATTESTED.value
 
-    loading_mode = meta.get("loading_mode")
-    if not loading_mode:
-        loading_mode = (
+    if raw_att:
+        att_str = str(raw_att).strip().upper()
+        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED") else "UNATTESTED"
+    elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
+        reported_attestation = "REPORTED_LIVE"
+    else:
+        reported_attestation = None
+
+    # Autenticazione autoritativa verificata (P0/C: i soli flag metadata non possono promuovere a LIVE_AUTHORITATIVE)
+    is_authoritative_live = False
+    if authoritative_live_run_ids is not None and run_id in authoritative_live_run_ids and not is_mock:
+        is_authoritative_live = True
+    elif (
+        meta.get("authoritative_execution_certified") is True
+        and meta.get("server_provenance_verified") is True
+        and meta.get("runtime_binding_verified") is True
+        and not is_mock
+    ):
+        is_authoritative_live = True
+
+    if is_mock:
+        verified_attestation = AttestationLevel.MOCK_VERIFIED.value
+    elif is_authoritative_live and origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
+        verified_attestation = AttestationLevel.LIVE_AUTHORITATIVE.value
+    else:
+        verified_attestation = AttestationLevel.UNATTESTED.value
+
+    attestation = verified_attestation
+
+    loading_mode_raw = meta.get("loading_mode")
+    if not loading_mode_raw:
+        loading_mode_raw = (
             LoadingMode.CHECKPOINT_RESTORE.value
             if (meta.get("is_persisted_recovery") or (recovered_chunks and recovered_chunks > 0))
             else LoadingMode.IN_MEMORY_EXECUTION.value
         )
+    loading_mode = sanitize_loading_mode(loading_mode_raw)
 
-    mode_str = "DEMO" if (dataset_mode and "demo" in str(dataset_mode).lower()) else ("DEMO" if "demo" in document.document_id.lower() else "FILE")
+    if dataset_mode:
+        mode_str = sanitize_dataset_mode(dataset_mode)
+    elif meta.get("mode"):
+        mode_str = sanitize_dataset_mode(meta["mode"])
+    else:
+        mode_str = "NOT_RECORDED"
 
     # Mappatura argomenti scoperti
     topics_list: list[dict[str, Any]] = []
@@ -891,26 +1513,35 @@ def build_topic_discovery_export_report(
 
     # Durate: null se non misurate, mai 0.0
     dur_val = meta.get("latency_seconds") if meta.get("latency_seconds") is not None else meta.get("duration_seconds")
-    duration_sec = round(float(dur_val), 3) if dur_val is not None else None
+    duration_sec = round(float(dur_val), 3) if dur_val is not None and safe_float(dur_val) is not None else None
+
+    # Origin flow di Discovery: solo se autenticato LIVE_AUTHORITATIVE può assumere LIVE_DISCOVERY
+    origin_flow = sanitize_origin_flow(
+        meta.get("origin_flow"),
+        redact=redact_sensitive_topics,
+        default="LIVE_DISCOVERY" if verified_attestation == AttestationLevel.LIVE_AUTHORITATIVE.value else "NOT_RECORDED"
+    )
 
     report: dict[str, Any] = {
         "schema_version": SCHEMA_VERSION,
         "software": {
             "name": SOFTWARE_NAME,
             "version": custom_version or get_software_version(),
-            "execution_software_commit": meta.get("git_commit") or "NOT_RECORDED",
-            "export_software_commit": custom_commit or get_git_commit(),
-            "offline_mode": True,
+            "execution_software_commit": sanitize_git_commit(meta.get("git_commit")),
+            "export_software_commit": sanitize_git_commit(custom_commit or get_git_commit()),
+            "offline_mode": bool(meta.get("offline_mode", True)),
             "environment": get_platform_environment(),
         },
         "experiment": {
             "analysis_type": analysis_type,
             "run_id": run_id,
             "export_id": export_id,
-            "origin_flow": "LIVE_DISCOVERY",
+            "origin_flow": origin_flow,
             "mode": mode_str,
             "conversation_pseudonym": get_pseudonymous_id(document.chat_id or document.document_id, prefix="chat"),
-            "attestation_level": attestation,
+            "reported_attestation_level": reported_attestation,
+            "verified_attestation_level": verified_attestation,
+            "attestation_level": verified_attestation,
             "loading_mode": loading_mode,
             "start_time": format_iso_timestamp(meta.get("start_timestamp")),
             "end_time": format_iso_timestamp(meta.get("end_timestamp") or meta.get("timestamp")),
@@ -918,7 +1549,7 @@ def build_topic_discovery_export_report(
         },
         "document": {
             "document_pseudonym": get_pseudonymous_id(document.document_id, prefix="doc"),
-            "document_fingerprint": meta.get("document_fingerprint") or get_pseudonymous_id(document.document_id, prefix="fp"),
+            "document_fingerprint": sanitize_document_fingerprint(meta.get("document_fingerprint")),
             "message_count": document.message_count,
             "total_evidence_count": tot_evidence,
             "analyzed_evidence_count": analyzed_ev,
@@ -929,32 +1560,34 @@ def build_topic_discovery_export_report(
             "requested_model_id": req_model,
             "effective_model_id": eff_model,
             "family": family_val,
-            "declared_quantization": meta.get("quantization") or meta.get("declared_quantization"),
-            "observed_quantization": meta.get("observed_quantization"),
-            "declared_context_length": meta.get("context_length"),
-            "effective_context_length": meta.get("runtime_context_length") or meta.get("context_length"),
+            "declared_quantization": sanitize_quantization(meta.get("quantization") or meta.get("declared_quantization"), redact=redact_sensitive_topics),
+            "observed_quantization": sanitize_quantization(meta.get("observed_quantization"), redact=redact_sensitive_topics),
+            "declared_context_length": safe_int(meta.get("context_length")),
+            "effective_context_length": safe_int(meta.get("runtime_context_length") or meta.get("context_length")),
             "local_endpoint": "http://127.0.0.1:1234" if eff_model else None,
         },
         "configuration": {
-            "temperature": float(meta["temperature"]) if meta.get("temperature") is not None else None,
-            "max_tokens": int(meta["max_tokens"]) if meta.get("max_tokens") is not None else None,
-            "timeout_seconds": float(meta["timeout_seconds"]) if meta.get("timeout_seconds") is not None else None,
-            "seed": meta.get("seed"),
+            "temperature": safe_float(meta.get("temperature")),
+            "max_tokens": safe_int(meta.get("max_tokens")),
+            "timeout_seconds": safe_float(meta.get("timeout_seconds")),
+            "seed": safe_int(meta.get("seed")),
             "operational_profile_requested": prof_req,
             "operational_profile_applied": prof_app,
             "profile_downgraded": bool(meta.get("profile_downgraded", False)),
-            "reduction_strategy": meta.get("reduction_strategy"),
-            "max_topics": int(meta["max_topics"]) if meta.get("max_topics") is not None else None,
+            "reduction_strategy": sanitize_reduction_strategy(meta.get("reduction_strategy"), redact=redact_sensitive_topics),
+            "max_topics": safe_int(meta.get("max_topics")),
         },
         "execution": {
             "start_timestamp": format_iso_timestamp(meta.get("start_timestamp")),
             "end_timestamp": format_iso_timestamp(meta.get("end_timestamp") or meta.get("timestamp")),
             "duration_seconds": duration_sec,
             "origin": origin_val,
-            "global_status": execution_status,
-            "error_count": int(meta["error_count"]) if meta.get("error_count") is not None else (failed_chunks if failed_chunks is not None else 0),
-            "retry_count": int(meta.get("retry_count", 0)),
-            "subchunks_used": bool(meta.get("subchunks_used", False)),
+            "reported_execution_status": reported_status,
+            "verified_execution_status": verified_status,
+            "global_status": verified_status,
+            "error_count": safe_int(meta.get("error_count")) if meta.get("error_count") is not None else (failed_chunks if failed_chunks is not None else None),
+            "retry_count": safe_int(meta.get("retry_count")) if meta.get("retry_count") is not None else None,
+            "subchunks_used": bool(meta.get("subchunks_used", False)) if meta.get("subchunks_used") is not None else None,
         },
         "coverage": {
             "total_chunks_planned": planned_chunks,
@@ -972,23 +1605,23 @@ def build_topic_discovery_export_report(
             "total_topics_discovered": len(topics_list),
             "topics": topics_list,
             "aggregation": {
-                "aggregation_phase_status": meta.get("aggregation_status") or "NOT_RECORDED",
+                "aggregation_phase_status": sanitize_aggregation_status(meta.get("aggregation_status")),
                 "deduplication_applied": meta.get("deduplication_applied"),
-                "aggregation_errors": meta.get("aggregation_errors") or [],
+                "aggregation_errors": sanitize_aggregation_errors(meta.get("aggregation_errors"), redact=redact_sensitive_topics),
             },
         },
         "chunks": norm_chunks,
         "checkpoints": {
             "enabled": meta.get("checkpoint_enabled"),
             "recovered_count": recovered_chunks,
-            "saved_count": meta.get("saved_chunk_count"),
+            "saved_count": safe_int(meta.get("saved_chunk_count")),
             "checkpoint_database_pseudonym": "<LOCAL_SQLITE_CHECKPOINT_STORE>",
         },
         "validation": {
-            "evidence_id_validation_applied": True,
-            "strict_alias_matching": True,
-            "hallucinated_citations_rejected": True,
-            "schema_validation_applied": True,
+            "evidence_id_validation_applied": meta.get("evidence_id_validation_applied") if meta.get("evidence_id_validation_applied") is not None else "STATICALLY_VERIFIED",
+            "strict_alias_matching": meta.get("strict_alias_matching") if meta.get("strict_alias_matching") is not None else "STATICALLY_VERIFIED",
+            "hallucinated_citations_rejected": meta.get("hallucinated_citations_rejected") if meta.get("hallucinated_citations_rejected") is not None else "STATICALLY_VERIFIED",
+            "schema_validation_applied": meta.get("schema_validation_applied") if meta.get("schema_validation_applied") is not None else "STATICALLY_VERIFIED",
         },
         "provenance": {
             "provenance_document_id_pseudonym": get_pseudonymous_id(discovery_result.provenance_document_id, prefix="doc"),

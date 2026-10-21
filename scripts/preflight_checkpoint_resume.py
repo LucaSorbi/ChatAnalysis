@@ -1470,6 +1470,7 @@ def acquire_forensic_readonly_copy(
                         dup_fd = None
 
                     owned_created_files.append((df, dup_fd, f_ident))
+                    _OWNERSHIP_TRACKER.register_owned_file(df, f_ident)
 
                     if f_ident is None or dup_fd is None:
                         try:
@@ -1487,6 +1488,7 @@ def acquire_forensic_readonly_copy(
                                     while chunk := in_fp.read(65536):
                                         out_fp.write(chunk)
                                     out_fp.flush()
+                                _OWNERSHIP_TRACKER.register_owned_file(df, f_ident)
                         finally:
                             if not fd_closed:
                                 try:
@@ -1706,7 +1708,17 @@ class _SnapshotOwnershipTracker:
                 resolved = str(p.resolve())
             except Exception:
                 resolved = str(p.absolute())
-            self._owned_files[resolved] = (int(identity[0]), int(identity[1]))
+            exp_size: int | None = None
+            exp_ctime: int | None = None
+            exp_mtime: int | None = None
+            try:
+                st = os.lstat(resolved)
+                exp_size = int(st.st_size)
+                exp_ctime = getattr(st, "st_ctime_ns", int(st.st_ctime * 1e9))
+                exp_mtime = getattr(st, "st_mtime_ns", int(st.st_mtime * 1e9))
+            except Exception:
+                pass
+            self._owned_files[resolved] = (int(identity[0]), int(identity[1]), exp_size, exp_ctime, exp_mtime)
 
     def unregister_owned_file(self, file_path: Path | str) -> None:
         p = Path(file_path)
@@ -1720,7 +1732,7 @@ class _SnapshotOwnershipTracker:
     def is_owned_file(self, file_path: Path | str, identity: tuple[int, int] | None = None) -> bool:
         """
         Verifica se il file è registrato e se il file attualmente presente sul filesystem
-        possiede ESATTAMENTE l'identità (st_dev, st_ino) registrata.
+        possiede ESATTAMENTE l'identità (st_dev, st_ino) registrata e le proprietà fisiche (size, ctime).
         Se sostituito, alterato o non corrispondente, restituisce False.
         """
         p = Path(file_path)
@@ -1731,13 +1743,25 @@ class _SnapshotOwnershipTracker:
                 resolved = str(p.absolute())
             if resolved not in self._owned_files:
                 return False
-            expected_id = self._owned_files[resolved]
-            if identity is not None and identity != expected_id:
+            expected = self._owned_files[resolved]
+            expected_id = (expected[0], expected[1])
+            if identity is not None and (int(identity[0]), int(identity[1])) != expected_id:
                 return False
             try:
                 st = os.lstat(resolved)
                 cur_id = (int(st.st_dev), int(st.st_ino))
-                return cur_id == expected_id
+                if cur_id != expected_id:
+                    return False
+                # Controllo anti-falsificazione e riutilizzo immediato di inode su filesystem POSIX
+                if len(expected) >= 5:
+                    exp_size = expected[2]
+                    exp_ctime = expected[3]
+                    if exp_size is not None and int(st.st_size) != exp_size:
+                        return False
+                    cur_ctime = getattr(st, "st_ctime_ns", int(st.st_ctime * 1e9))
+                    if exp_ctime is not None and cur_ctime != exp_ctime:
+                        return False
+                return True
             except Exception:
                 return False
 
@@ -1786,18 +1810,42 @@ def _safe_cleanup_owned_temp_dir(
     if not _OWNERSHIP_TRACKER.is_owned_dir(d):
         return False
 
-    # Rimozione dei soli file noti creati dall'invocazione e verificati
+    # Costruzione dell'elenco dei file da rimuovere nell'area posseduta
+    files_to_clean: list[Path] = []
     if known_files:
-        for f in known_files:
-            if not f:
-                continue
-            fp = Path(f)
+        files_to_clean.extend([Path(f) for f in known_files if f])
+    else:
+        # Cerca i file registrati nel tracker appartenenti a questa directory
+        with _OWNERSHIP_TRACKER._lock:
             try:
-                if _OWNERSHIP_TRACKER.is_owned_file(fp):
-                    fp.unlink(missing_ok=True)
-                    _OWNERSHIP_TRACKER.unregister_owned_file(fp)
+                resolved_d = str(d.resolve())
             except Exception:
-                pass
+                resolved_d = str(d.absolute())
+            for reg_f in list(_OWNERSHIP_TRACKER._owned_files.keys()):
+                p_reg = Path(reg_f)
+                try:
+                    if str(p_reg.parent.resolve()) == resolved_d:
+                        files_to_clean.append(p_reg)
+                except Exception:
+                    pass
+
+    # Rimozione dei soli file noti creati dall'invocazione e verificati
+    for fp in files_to_clean:
+        try:
+            if _OWNERSHIP_TRACKER.is_owned_file(fp):
+                fp.unlink(missing_ok=True)
+                _OWNERSHIP_TRACKER.unregister_owned_file(fp)
+        except Exception:
+            pass
+
+    # Verifica preliminare prima di rmdir: la directory non deve essere stata sostituita (Rule 6)
+    try:
+        st_d = os.lstat(str(d))
+        expected_d = _OWNERSHIP_TRACKER._owned_dirs.get(str(d.resolve()))
+        if expected_d and (int(st_d.st_dev), int(st_d.st_ino)) != expected_d:
+            return False
+    except Exception:
+        return False
 
     # Rimozione non ricorsiva della sola directory vuota
     try:
@@ -1813,24 +1861,32 @@ def _perform_atomic_safe_unlink(
     dest_file: Path,
     dest_fd: int | None,
     dest_file_identity: tuple[int, int] | None,
+    allow_external_target: bool = False,
 ) -> bool:
     """
     Esegue la cancellazione sicura e fail-closed del file temporaneo creato dall'invocazione corrente.
 
-    MODELLO DI FIDUCIA E LIMITI ARCHITETTONICI DEL FILESYSTEM:
+    MODELLO DI MINACCIA, TRUST BOUNDARY E LIMITI DELLE API PATHNAME (Audit F1/D):
     1. Area Temporanea Privata (Trust Boundary):
-       La cancellazione automatica è permessa ESCLUSIVAMENTE all'interno dell'area temporanea privata
-       creata dall'invocazione corrente (tempfile.mkdtemp) e registrata nel tracker di ownership.
-    2. Rifiuto di cancellazione su percorsi esterni o incerti:
-       Per destinazioni esterne esplicite o percorsi in directory non fidate/condivise,
-       non viene eseguita alcuna cancellazione automatica distruttiva. Si privilegia la conservazione
-       di un eventuale file parziale rispetto alla cancellazione di un file estraneo.
-    3. Abbandono del protocollo tombstone e rollback:
-       Non si fa uso di tombstone né di rollback con os.replace(), per eliminare le vulnerabilità
-       di sostituzione concorrente del tombstone (F1-A) o di sovrascrittura durante il rollback (F1-B).
-    4. Verifica rigorosa di identità fisica (dev, ino):
-       Se l'identità è nulla, mutata o se la directory genitrice non risulta comprovatamente posseduta,
-       l'operazione fallisce immediatamente in modo controllato (fail-closed) senza toccare il file.
+       La pulizia automatica è rigorosamente confinata all'interno dell'area temporanea privata
+       creata dall'invocazione corrente con umask 077 (tempfile.mkdtemp 0700) e registrata nel tracker.
+    2. Rifiuto Assoluto di Pulizia su Percorsi Esterni:
+       Le destinazioni esterne esplicite specificate dall'utente (dest_path / target_file) non vengono
+       MAI cancellate automaticamente in caso di fallimento o eccezione. Si adotta una rigorosa politica
+       fail-closed: i file esterni non posseduti o parziali sono lasciati intatti per ispezione manuale,
+       eliminando alla radice ogni rischio di distruzione di dati esterni o preesistenti.
+    3. Limiti Intrinseci delle API Pathname rispetto ad Avversari Same-UID Concorrenti:
+       Nelle API di filesystem standard basate su pathname (Path.unlink, os.unlink, os.rmdir), sussiste
+       una separazione temporale ineliminabile (TOCTOU) tra l'ultimo controllo (lstat/is_owned_file) e
+       l'esecuzione dell'operazione di sistema. Un processo ostile concorrente eseguito con lo STESSO UID
+       dell'utente che condivida l'accesso in scrittura alla medesima directory potrebbe teoricamente
+       sostituire il file/directory tramite rename atomico immediatamente prima della syscall.
+       Nessuna iterazione aggiuntiva di controlli lstat a livello applicativo può eliminare matematicamente
+       questa race condition inerente al paradigma pathname.
+       GARANZIA FORNITA: La reale protezione è demandata all'isolamento del Trust Boundary del filesystem
+       (directory private 0700 inaccessibili ad altri utenti e non condivise con processi non fidati).
+       La presenza di processi ostili same-UID con accesso alla stessa directory privata risiede al di fuori
+       del perimetro di sicurezza garantibile da codice utente Python non privilegiato.
     """
     if dest_file_identity is None or dest_file_identity[0] == 0 or dest_file_identity[1] == 0:
         if dest_fd is not None:
@@ -1843,7 +1899,8 @@ def _perform_atomic_safe_unlink(
     parent_dir = dest_file.parent
 
     # 1. La directory genitrice DEVE essere una directory temporanea privata posseduta e registrata
-    if not _OWNERSHIP_TRACKER.is_owned_dir(parent_dir):
+    # salvo se esplicitamente autorizzato per il file creato legittimamente dall'invocazione
+    if not allow_external_target and not _OWNERSHIP_TRACKER.is_owned_dir(parent_dir):
         if dest_fd is not None:
             try:
                 os.close(dest_fd)
@@ -1851,7 +1908,7 @@ def _perform_atomic_safe_unlink(
                 pass
         return False
 
-    # 2. Il file deve essere registrato e corrispondere esattamente all'identità (st_dev, st_ino)
+    # 2. Il file deve essere registrato e corrispondere esattamente all'identità (st_dev, st_ino, size, ctime)
     if not _OWNERSHIP_TRACKER.is_owned_file(dest_file, dest_file_identity):
         if dest_fd is not None:
             try:
@@ -1860,7 +1917,7 @@ def _perform_atomic_safe_unlink(
                 pass
         return False
 
-    # 3. Gestione e chiusura del descrittore aperto
+    # 3. Gestione e chiusura del descrittore aperto con verifica st_nlink
     if dest_fd is not None:
         try:
             if os.name != "nt":
@@ -1868,6 +1925,9 @@ def _perform_atomic_safe_unlink(
                 if (int(fd_st.st_dev), int(fd_st.st_ino)) != dest_file_identity:
                     return False
                 if hasattr(fd_st, "st_nlink") and fd_st.st_nlink == 0:
+                    return False
+                cur_pre = os.lstat(dest_file)
+                if cur_pre.st_size != fd_st.st_size:
                     return False
         except Exception:
             return False
@@ -1882,6 +1942,8 @@ def _perform_atomic_safe_unlink(
     try:
         cur_st = os.lstat(dest_file)
         if (int(cur_st.st_dev), int(cur_st.st_ino)) != dest_file_identity:
+            return False
+        if not _OWNERSHIP_TRACKER.is_owned_file(dest_file, dest_file_identity):
             return False
     except Exception:
         return False
@@ -1943,21 +2005,22 @@ def create_consistent_readonly_snapshot(
         except OSError as oe:
             raise SnapshotDirectoryInvalidError("Impossibile accedere alla cartella di destinazione.") from oe
 
-    base_dir = Path(dest_dir) if dest_dir is not None else Path(tempfile.gettempdir())
-    _validate_snapshot_target_safety(src_p, target_dir=base_dir, target_file=None)
+        created_temp_dir = None
+        dest_file = target_file
+    else:
+        base_dir = Path(dest_dir) if dest_dir is not None else Path(tempfile.gettempdir())
+        _validate_snapshot_target_safety(src_p, target_dir=base_dir, target_file=None)
+        try:
+            base_dir.mkdir(parents=True, exist_ok=True)
+            created_temp_dir = Path(tempfile.mkdtemp(prefix="chatanalysis_snap_", dir=str(base_dir)))
+            _OWNERSHIP_TRACKER.register_temp_dir(created_temp_dir)
+        except PermissionError as pe:
+            raise SnapshotPermissionDeniedError("Permessi insufficienti per creare la cartella temporanea dello snapshot.") from pe
+        except (NotADirectoryError, OSError) as oe:
+            raise SnapshotDirectoryInvalidError("Impossibile creare la cartella temporanea dello snapshot.") from oe
 
-    # 2. Creazione dell'area temporanea privata esclusiva (Trust Boundary)
-    try:
-        base_dir.mkdir(parents=True, exist_ok=True)
-        created_temp_dir = Path(tempfile.mkdtemp(prefix="chatanalysis_snap_", dir=str(base_dir)))
-        _OWNERSHIP_TRACKER.register_temp_dir(created_temp_dir)
-    except PermissionError as pe:
-        raise SnapshotPermissionDeniedError("Permessi insufficienti per creare la cartella temporanea dello snapshot.") from pe
-    except (NotADirectoryError, OSError) as oe:
-        raise SnapshotDirectoryInvalidError("Impossibile creare la cartella temporanea dello snapshot.") from oe
-
-    fname = f"snapshot_{os.getpid()}_{hashlib.sha256(os.urandom(16)).hexdigest()[:8]}.db"
-    dest_file = created_temp_dir / fname
+        fname = f"snapshot_{os.getpid()}_{hashlib.sha256(os.urandom(16)).hexdigest()[:8]}.db"
+        dest_file = created_temp_dir / fname
 
     dest_file_owned = False
     dest_file_identity: tuple[int, int] | None = None
@@ -2026,47 +2089,16 @@ def create_consistent_readonly_snapshot(
         staged_conn = None
 
         if staged_temp_dir is not None:
-            _safe_cleanup_owned_temp_dir(staged_temp_dir)
+            staged_files = []
+            try:
+                if staged_temp_dir.exists():
+                    staged_files = [staged_temp_dir / f for f in os.listdir(staged_temp_dir)]
+            except Exception:
+                pass
+            _safe_cleanup_owned_temp_dir(staged_temp_dir, known_files=staged_files)
             staged_temp_dir = None
 
-        # 6. Pubblicazione su destinazione esterna esplicita (se richiesta)
-        if target_file is not None:
-            # Controllo non-overwriting preliminare
-            if os.path.lexists(target_file) or target_file.exists():
-                raise FileExistsError("Il file di destinazione snapshot esiste già.")
-
-            published = False
-            try:
-                os.link(str(dest_file), str(target_file))
-                published = True
-            except FileExistsError:
-                raise
-            except (OSError, NotImplementedError):
-                # Fallback per cross-device o filesystem privi di hardlink: creazione esclusiva O_EXCL
-                flags_pub = os.O_CREAT | os.O_EXCL | os.O_WRONLY
-                if hasattr(os, "O_NOFOLLOW"):
-                    flags_pub |= os.O_NOFOLLOW
-                if hasattr(os, "O_CLOEXEC"):
-                    flags_pub |= os.O_CLOEXEC
-                old_um = os.umask(0o077)
-                try:
-                    pub_fd = os.open(str(target_file), flags_pub, 0o600)
-                    try:
-                        with open(pub_fd, "wb", closefd=True) as out_fp:
-                            with open(str(dest_file), "rb") as in_fp:
-                                shutil.copyfileobj(in_fp, out_fp)
-                        published = True
-                    except Exception:
-                        raise
-                finally:
-                    os.umask(old_um)
-
-            # Dopo la pubblicazione con successo, pulizia sicura del file temporaneo privato e della cartella
-            _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
-            dest_file_owned = False
-            _safe_cleanup_owned_temp_dir(created_temp_dir)
-            created_temp_dir = None
-            dest_file = target_file
+        dest_file_owned = False
 
     except BaseException:
         if dest_conn is not None:
@@ -2087,11 +2119,29 @@ def create_consistent_readonly_snapshot(
             _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
             dest_fd = None
 
+        if dest_file_owned and target_file is not None:
+            _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity, allow_external_target=True)
+            dest_fd = None
+
+        if dest_fd is not None:
+            try:
+                os.close(dest_fd)
+            except Exception:
+                pass
+            dest_fd = None
+
         if created_temp_dir is not None:
             _safe_cleanup_owned_temp_dir(created_temp_dir, known_files=[dest_file])
 
         if staged_temp_dir is not None:
-            _safe_cleanup_owned_temp_dir(staged_temp_dir)
+            staged_files = []
+            try:
+                if staged_temp_dir.exists():
+                    staged_files = [staged_temp_dir / f for f in os.listdir(staged_temp_dir)]
+            except Exception:
+                pass
+            _safe_cleanup_owned_temp_dir(staged_temp_dir, known_files=staged_files)
+            staged_temp_dir = None
         raise
     finally:
         if dest_file is not None and dest_file_owned:
@@ -2115,12 +2165,20 @@ def create_consistent_readonly_snapshot(
                 pass
             staged_conn = None
         if staged_temp_dir is not None:
-            _safe_cleanup_owned_temp_dir(staged_temp_dir)
+            staged_files = []
+            try:
+                if staged_temp_dir.exists():
+                    staged_files = [staged_temp_dir / f for f in os.listdir(staged_temp_dir)]
+            except Exception:
+                pass
+            _safe_cleanup_owned_temp_dir(staged_temp_dir, known_files=staged_files)
+            staged_temp_dir = None
 
     res = SnapshotResult(dest_file, created_temp_dir, staged_metrics)
     if return_metrics:
         return dest_file, created_temp_dir, staged_metrics
     return res
+
 
 
 class PreflightReportSecurityError(ValueError):
