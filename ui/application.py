@@ -759,3 +759,115 @@ def execute_local_media_processing(
     return enriched_doc, status_report
 
 
+def export_topic_detection_json(
+    detection_result: TopicDetectionResult,
+    document: ConversationEvidenceDocument,
+    session_state: MutableMapping[str, Any] | None = None,
+    redact_sensitive_topics: bool = True,
+) -> tuple[str, str]:
+    """
+    Costruisce e serializza il rapporto completo in formato JSON per Topic Detection.
+    Privacy Safe by Default: redact_sensitive_topics=True.
+    Correlazione Consistency: match strettamente per detection_run_id (mai per sola label).
+    Restituisce (json_str, filename).
+    """
+    from analysis.export import (
+        build_topic_detection_export_report,
+        generate_export_filename,
+        serialize_report_to_json,
+    )
+    from ui import state
+
+    cons_res = None
+    if session_state is not None:
+        try:
+            cons_list = state.get_consistency_results(document.document_id, state=session_state)
+            target_run_id = detection_result.metadata.get("run_id")
+            if target_run_id:
+                for c in reversed(cons_list):
+                    # Selezione ESCLUSIVA per detection_run_id esatto (vietato il fallback su sola label)
+                    if c.detection_run_id == target_run_id:
+                        cons_res = c
+                        break
+        except Exception:
+            pass
+
+    dataset_mode = None
+    if session_state is not None:
+        try:
+            dataset_mode = state.get_dataset_mode(state=session_state)
+        except Exception:
+            pass
+
+    report = build_topic_detection_export_report(
+        detection_result=detection_result,
+        document=document,
+        dataset_mode=dataset_mode,
+        consistency_result=cons_res,
+        redact_sensitive_topics=redact_sensitive_topics,
+    )
+    json_str = serialize_report_to_json(report)
+
+    mod_name = report["model"]["effective_model_id"]
+    run_id_val = report["experiment"]["run_id"]
+    ts_val = report["experiment"]["end_time"]
+    exp_id_val = report["experiment"].get("export_id")
+    filename = generate_export_filename(
+        analysis_type="TOPIC_DETECTION",
+        dataset_id=document.chat_id or document.document_id,
+        model_id=mod_name,
+        run_id=run_id_val,
+        timestamp=ts_val,
+        export_id=exp_id_val,
+    )
+    return json_str, filename
+
+
+def export_topic_discovery_json(
+    discovery_result: TopicDiscoveryResult,
+    document: ConversationEvidenceDocument,
+    session_state: MutableMapping[str, Any] | None = None,
+    redact_sensitive_topics: bool = True,
+) -> tuple[str, str]:
+    """
+    Costruisce e serializza il rapporto completo in formato JSON per Topic Discovery.
+    Privacy Safe by Default: redact_sensitive_topics=True.
+    Restituisce (json_str, filename).
+    """
+    from analysis.export import (
+        build_topic_discovery_export_report,
+        generate_export_filename,
+        serialize_report_to_json,
+    )
+    from ui import state
+
+    dataset_mode = None
+    if session_state is not None:
+        try:
+            dataset_mode = state.get_dataset_mode(state=session_state)
+        except Exception:
+            pass
+
+    report = build_topic_discovery_export_report(
+        discovery_result=discovery_result,
+        document=document,
+        dataset_mode=dataset_mode,
+        redact_sensitive_topics=redact_sensitive_topics,
+    )
+    json_str = serialize_report_to_json(report)
+
+    mod_name = report["model"]["effective_model_id"]
+    run_id_val = report["experiment"]["run_id"]
+    ts_val = report["experiment"]["end_time"]
+    exp_id_val = report["experiment"].get("export_id")
+    filename = generate_export_filename(
+        analysis_type="TOPIC_DISCOVERY",
+        dataset_id=document.chat_id or document.document_id,
+        model_id=mod_name,
+        run_id=run_id_val,
+        timestamp=ts_val,
+        export_id=exp_id_val,
+    )
+    return json_str, filename
+
+

@@ -40,6 +40,7 @@ from ai.backend import (
     AiModelMismatchError,
     AiModelNotInstalledError,
     AiModelNotSpecifiedError,
+    AiStructuredOutputError,
     BaseLocalLlmClient,
     LlmCompletionResponse,
     LmStudioUnavailableError,

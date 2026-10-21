@@ -24,6 +24,14 @@ from analysis.models import (
     TopicProvenanceError,
 )
 from analysis.service import LocalTopicAnalysisService
+from analysis.export import (
+    SCHEMA_VERSION,
+    SOFTWARE_NAME,
+    build_topic_detection_export_report,
+    build_topic_discovery_export_report,
+    generate_export_filename,
+    serialize_report_to_json,
+)
 
 __all__ = [
     "AnalysisNoEvidenceError",
@@ -41,6 +49,12 @@ __all__ = [
     "OperationalAnalysisConfig",
     "OperationalAnalysisFailedError",
     "OperationalProfile",
+    "SCHEMA_VERSION",
+    "SOFTWARE_NAME",
     "TopicAnalysisRunMetadata",
     "TopicProvenanceError",
+    "build_topic_detection_export_report",
+    "build_topic_discovery_export_report",
+    "generate_export_filename",
+    "serialize_report_to_json",
 ]

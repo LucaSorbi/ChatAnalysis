@@ -1,0 +1,228 @@
+{
+  "checkpoints": {
+    "checkpoint_database_pseudonym": "<LOCAL_SQLITE_CHECKPOINT_STORE>",
+    "enabled": null,
+    "recovered_count": 0,
+    "saved_count": null
+  },
+  "chunks": [
+    {
+      "attempts": 0,
+      "checkpoint_saved": false,
+      "chunk_display_number": 1,
+      "chunk_id": "chk_0_unattempted",
+      "chunk_index": 0,
+      "completion_tokens": null,
+      "diagnostic_category": "NONE",
+      "duration_seconds": null,
+      "error_detail": "Blocco non eseguito o saltato",
+      "error_type": null,
+      "evidence_valid": null,
+      "failure_phase": "not_started",
+      "finish_reason": null,
+      "http_status": null,
+      "json_valid": null,
+      "model_id": "qwen2.5-7b-instruct",
+      "prompt_tokens": null,
+      "schema_valid": null,
+      "status": "UNATTEMPTED",
+      "subchunks_used": false,
+      "total_tokens": null,
+      "valid_evidence_count": 0
+    },
+    {
+      "attempts": 0,
+      "checkpoint_saved": false,
+      "chunk_display_number": 2,
+      "chunk_id": "chk_1_unattempted",
+      "chunk_index": 1,
+      "completion_tokens": null,
+      "diagnostic_category": "NONE",
+      "duration_seconds": null,
+      "error_detail": "Blocco non eseguito o saltato",
+      "error_type": null,
+      "evidence_valid": null,
+      "failure_phase": "not_started",
+      "finish_reason": null,
+      "http_status": null,
+      "json_valid": null,
+      "model_id": "qwen2.5-7b-instruct",
+      "prompt_tokens": null,
+      "schema_valid": null,
+      "status": "UNATTEMPTED",
+      "subchunks_used": false,
+      "total_tokens": null,
+      "valid_evidence_count": 0
+    },
+    {
+      "attempts": 0,
+      "checkpoint_saved": false,
+      "chunk_display_number": 3,
+      "chunk_id": "chk_2_unattempted",
+      "chunk_index": 2,
+      "completion_tokens": null,
+      "diagnostic_category": "NONE",
+      "duration_seconds": null,
+      "error_detail": "Blocco non eseguito o saltato",
+      "error_type": null,
+      "evidence_valid": null,
+      "failure_phase": "not_started",
+      "finish_reason": null,
+      "http_status": null,
+      "json_valid": null,
+      "model_id": "qwen2.5-7b-instruct",
+      "prompt_tokens": null,
+      "schema_valid": null,
+      "status": "UNATTEMPTED",
+      "subchunks_used": false,
+      "total_tokens": null,
+      "valid_evidence_count": 0
+    }
+  ],
+  "configuration": {
+    "max_tokens": 512,
+    "operational_profile_applied": null,
+    "operational_profile_requested": null,
+    "profile_downgraded": false,
+    "query_mode": "LABEL_WITH_DESCRIPTION",
+    "reduction_strategy": null,
+    "seed": null,
+    "temperature": 0.0,
+    "timeout_seconds": 240.0
+  },
+  "coverage": {
+    "chunks_completed": 3,
+    "chunks_failed": 0,
+    "chunks_recovered": 0,
+    "chunks_skipped": 0,
+    "completion_percentage": 100.0,
+    "counter_invariants_valid": true,
+    "coverage_status": "COMPLETE",
+    "evidence_coverage_percentage": 100.0,
+    "is_complete": true,
+    "total_chunks_planned": 3
+  },
+  "document": {
+    "analyzed_evidence_count": 12,
+    "document_fingerprint": "fp_03c3485c44b8",
+    "document_pseudonym": "doc_03c3485c44b8",
+    "message_count": 8,
+    "source_name": "src_70078ddfe843",
+    "total_evidence_count": 12,
+    "unanalyzed_evidence_count": 0
+  },
+  "execution": {
+    "duration_seconds": 5.12,
+    "end_timestamp": "2026-10-21T10:00:05Z",
+    "error_count": 0,
+    "global_status": "COMPLETE",
+    "origin": "SYNTHETIC_REFERENCE",
+    "retry_count": 0,
+    "start_timestamp": "2026-10-21T10:00:00Z",
+    "subchunks_used": false
+  },
+  "experiment": {
+    "analysis_type": "TOPIC_DETECTION",
+    "attestation_level": "MOCK_VERIFIED",
+    "conversation_pseudonym": "chat_941b44d9e26a",
+    "duration_seconds": 5.12,
+    "end_time": "2026-10-21T10:00:05Z",
+    "export_id": "exp_27b6b436956a",
+    "loading_mode": "IN_MEMORY_EXECUTION",
+    "mode": "DEMO",
+    "origin_flow": "MANUAL_DETECTION",
+    "run_id": "run_detection_synth_c1",
+    "start_time": "2026-10-21T10:00:00Z"
+  },
+  "model": {
+    "declared_context_length": null,
+    "declared_quantization": null,
+    "effective_context_length": null,
+    "effective_model_id": "qwen2.5-7b-instruct",
+    "family": "QWEN",
+    "local_endpoint": "http://127.0.0.1:1234",
+    "observed_quantization": null,
+    "requested_model_id": "qwen2.5-7b-instruct"
+  },
+  "privacy": {
+    "privacy_mode": "SAFE_REDACTED",
+    "pseudonymization_algorithm": "SHA256_UNSALTED_TRUNCATED",
+    "pseudonymization_notes": "Truncated SHA-256 without secret salt. Stable cross-referencing within authorized scope; dictionary pre-image vulnerability exists for low-entropy inputs.",
+    "text_redaction": {
+      "free_text_redacted": true,
+      "messages_included": false,
+      "raw_llm_responses_included": false,
+      "raw_prompts_included": false,
+      "sanitization_scope": "SAFE_DEFAULT_ALLOWLIST",
+      "topic_text_redacted": true
+    }
+  },
+  "provenance": {
+    "chain_of_custody_intact": null,
+    "evidence_protocol": "deterministic_alias_v1",
+    "provenance_document_id_pseudonym": "doc_03c3485c44b8"
+  },
+  "result": {
+    "decision": "PRESENT",
+    "decision_completeness_distinction": "Decoupled: 'decision' reflects evidence citations in the processed chunks; 'decision_status' reflects execution completeness.",
+    "decision_status": "COMPLETE",
+    "evidence_count": 2,
+    "evidence_ids": [
+      "ev_1caa896eee9e",
+      "ev_b5c62f3e33cf"
+    ],
+    "linked_discovery_run_id": null,
+    "rationale": "[OSCURATO PER PRIVACY / REDACTED]",
+    "semantic_consistency": {
+      "authentication_status": "MOCK_VERIFIED",
+      "consistency_rationale": "[OSCURATO PER PRIVACY / REDACTED]",
+      "consistency_status": "CONSISTENT",
+      "detection_decision": "PRESENT",
+      "detection_evidence_ids": [
+        "ev_1caa896eee9e",
+        "ev_b5c62f3e33cf"
+      ],
+      "discovery_evidence_ids": [
+        "ev_1caa896eee9e",
+        "ev_b5c62f3e33cf"
+      ],
+      "inferential_independence_verified": null,
+      "origin_flow": "DISCOVERY_VERIFICATION",
+      "overlap_count": 2,
+      "overlap_evidence_ids": [
+        "ev_1caa896eee9e",
+        "ev_b5c62f3e33cf"
+      ],
+      "source_discovery_run_id": "run_discovery_synth_c1",
+      "target_detection_run_id": "run_detection_synth_c1",
+      "verified_topic_id": "top_1b98de9a9a99"
+    },
+    "topic": {
+      "description": "[OSCURATO PER PRIVACY / REDACTED]",
+      "is_label_only": false,
+      "label": "[OSCURATO PER PRIVACY / REDACTED]",
+      "topic_id": "top_1b98de9a9a99"
+    }
+  },
+  "schema_version": "1.1.0",
+  "software": {
+    "environment": {
+      "architecture": "AMD64",
+      "mode": "100% Offline / Local Execution",
+      "os": "windows",
+      "os_release": "11",
+      "python_version": "3.14.7"
+    },
+    "execution_software_commit": "NOT_RECORDED",
+    "export_software_commit": "git_commit_synthetic_audit_20261021",
+    "name": "ChatAnalysis",
+    "offline_mode": true,
+    "version": "0.1.0"
+  },
+  "validation": {
+    "evidence_id_validation_applied": true,
+    "hallucinated_citations_rejected": true,
+    "schema_validation_applied": true,
+    "strict_alias_matching": true
+  }
+}

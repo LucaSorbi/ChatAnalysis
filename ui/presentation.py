@@ -44,7 +44,7 @@ from ai.lmstudio import (
 )
 from pathlib import Path
 
-from ai.models import TopicDecision
+from ai.models import TopicDecision, TopicDetectionResult, TopicDiscoveryResult
 from analysis.models import ConsistencyStatus, OperationalProfile, resolve_operational_profile
 from analysis.checkpoint import AnalysisCheckpointStore
 from search.models import MatchMode
@@ -970,6 +970,20 @@ def render_discovery_diagnostics(
                 st.info("Nessuna diagnostica di dettaglio disponibile per questa run.")
 
         # Esportazione rapporto diagnostico privo di dati personali
+        from ui.application import export_topic_discovery_json
+        disc_run_id_val = str(meta.get("run_id") or "run_discovery")
+        redact_disc = st.checkbox(
+            "🔒 Modalità privacy avanzata (oscura label e descrizioni)",
+            value=True,
+            key=f"chk_privacy_disc_{disc_run_id_val}",
+        )
+        full_disc_json_str, full_disc_filename = export_topic_discovery_json(
+            discovery_result=discovery_res,
+            document=document,
+            session_state=st.session_state,
+            redact_sensitive_topics=redact_disc,
+        )
+
         exp_col1, exp_col2 = st.columns(2)
         safe_export_data = []
         for d in raw_diagnostics:
@@ -994,7 +1008,6 @@ def render_discovery_diagnostics(
                 "checkpoint_saved": d.get("checkpoint_saved"),
             })
 
-        json_export_str = json.dumps(safe_export_data, indent=2)
         import csv
         import io
         csv_buffer = io.StringIO()
@@ -1006,9 +1019,9 @@ def render_discovery_diagnostics(
 
         with exp_col1:
             st.download_button(
-                "📥 Esporta diagnostica (JSON)",
-                data=json_export_str,
-                file_name=f"diagnostica_discovery_{document.document_id}.json",
+                "📥 Esporta rapporto completo (JSON)",
+                data=full_disc_json_str,
+                file_name=full_disc_filename,
                 mime="application/json",
                 key="btn_download_diag_json",
             )
@@ -1236,6 +1249,31 @@ def render_topics() -> None:
                                 disabled=True,
                             )
 
+                # Esportazione rapporto completo (JSON) per Topic Detection (Sezione 1)
+                st.markdown("---")
+                from ui.application import export_topic_detection_json
+                det_exp_c1, det_exp_c2 = st.columns([2, 1])
+                with det_exp_c1:
+                    redact_det = st.checkbox(
+                        "🔒 Modalità privacy avanzata (oscura label, descrizioni e motivazioni)",
+                        value=True,
+                        key=f"chk_privacy_det_{run_id_val}",
+                    )
+                det_json_str, det_filename = export_topic_detection_json(
+                    detection_result=last_det,
+                    document=doc,
+                    session_state=st.session_state,
+                    redact_sensitive_topics=redact_det,
+                )
+                with det_exp_c1:
+                    st.download_button(
+                        "📥 Esporta rapporto completo (JSON)",
+                        data=det_json_str,
+                        file_name=det_filename,
+                        mime="application/json",
+                        key=f"btn_download_detection_json_{run_id_val}",
+                    )
+
                 # Controllo storico e correlazione inferenze precedenti per questo topic
                 doc_analysis = state.get_document_analysis_state(doc.document_id)
                 prior_runs = [
@@ -1249,8 +1287,22 @@ def render_topics() -> None:
                             p_meta = prev_r.metadata or {}
                             p_flow = "Discovery Verification" if p_meta.get("origin_flow") == "DISCOVERY_VERIFICATION" else "Detection Manuale"
                             p_mode = "Sola label" if p_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
+                            p_run_id_str = str(p_meta.get('run_id', 'n/a'))
                             st.markdown(
-                                f"- **Run #{p_idx}:** `{p_meta.get('run_id', 'n/a')}` | **Flusso:** {p_flow} | **Input:** {p_mode} | **Esito:** `{prev_r.decision.value}`"
+                                f"- **Run #{p_idx}:** `{p_run_id_str}` | **Flusso:** {p_flow} | **Input:** {p_mode} | **Esito:** `{prev_r.decision.value}`"
+                            )
+                            p_json_str, p_filename = export_topic_detection_json(
+                                detection_result=prev_r,
+                                document=doc,
+                                session_state=st.session_state,
+                                redact_sensitive_topics=True,
+                            )
+                            st.download_button(
+                                f"📥 Esporta Run #{p_idx} (JSON)",
+                                data=p_json_str,
+                                file_name=p_filename,
+                                mime="application/json",
+                                key=f"btn_download_prior_detection_{p_run_id_str}_{p_idx}",
                             )
 
                 # Se presente una verifica da discovery con esito diverso, mostra chiarimento esplicito
@@ -1347,6 +1399,22 @@ def render_topics() -> None:
                                 key=f"sec_top_{idx}_{hit.topic_id}_{sec.evidence_id}_{s_idx}",
                                 disabled=True,
                             )
+
+                if isinstance(hit.raw_result, TopicDetectionResult):
+                    from ui.application import export_topic_detection_json
+                    hit_json_str, hit_filename = export_topic_detection_json(
+                        detection_result=hit.raw_result,
+                        document=doc,
+                        session_state=st.session_state,
+                        redact_sensitive_topics=True,
+                    )
+                    st.download_button(
+                        f"📥 Esporta rapporto completo (JSON)",
+                        data=hit_json_str,
+                        file_name=hit_filename,
+                        mime="application/json",
+                        key=f"btn_export_hit_det_{idx}_{hit.topic_id}",
+                    )
 
     with tab_disc:
         st.subheader("💡 Topic Discovery (Scansione Argomenti Emersi)")
