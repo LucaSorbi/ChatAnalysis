@@ -34,8 +34,8 @@ import subprocess
 import sys
 import zipfile
 
-PRIMARY_ARCHIVE_NAME = "chatAnalysis_json_scientific_integrity_f1_scope_final_20261021.zip"
-SECONDARY_ARCHIVE_NAME = "chatAnalysis_f1_pytest_ubuntu_seven_failures_closure_audit_20261021.zip"
+PRIMARY_ARCHIVE_NAME = "chatAnalysis_ubuntu_last_live_ready_20261021.zip"
+SECONDARY_ARCHIVE_NAME = None
 MANIFEST_NAME = "manifest_sha256.txt"
 
 
@@ -52,6 +52,7 @@ def get_target_file_list(repo_root: Path) -> list[str]:
     parent_dir = repo_root.parent
 
     candidate_baselines = [
+        parent_dir / "chatAnalysis_f1_pytest_ubuntu_seven_failures_closure_audit_20261021(2).zip",
         parent_dir / "chatAnalysis_f1_pytest_ubuntu_seven_failures_closure_audit_20261021.zip",
         parent_dir / "chatAnalysis_json_export_truthfulness_final_audit_20261021.zip",
         parent_dir / "chatAnalysis_json_export_truthfulness_deepseek_f1_fix_audit_20261021.zip",
@@ -84,6 +85,7 @@ def get_target_file_list(repo_root: Path) -> list[str]:
         "tests/unit/test_checkpoint_preflight_resume.py",
         "ui/application.py",
         "ui/presentation.py",
+        "CHATANALYSIS_UBUNTU_LAST_LIVE_READY_REPORT.md",
         "CHATANALYSIS_F1_SEVEN_FAILURES_AND_EXPORT_TRUTHFULNESS_FINAL_REPORT.md",
         "CHATANALYSIS_JSON_EXPORT_SCHEMA_SPECIFICATION.md",
         "CHATANALYSIS_FULL_EXPERIMENTAL_JSON_EXPORTS_AUDIT_REPORT.md",
@@ -176,12 +178,14 @@ def build_audit_archive(repo_root: Path, dest_zip_path: Path) -> dict[str, Any]:
     archive_size = dest_zip_path.stat().st_size
     print(f"[*] Archivio primario generato con successo: {archive_size:,} bytes.")
 
-    # Copia di sincronizzazione per il secondo nome richiesto
-    secondary_zip_path = dest_zip_path.parent / SECONDARY_ARCHIVE_NAME
-    if secondary_zip_path.is_file():
-        secondary_zip_path.unlink()
-    shutil.copy2(dest_zip_path, secondary_zip_path)
-    print(f"[*] Archivio secondario generato in: {secondary_zip_path.resolve()}")
+    # Copia di sincronizzazione per il secondo nome richiesto (se configurato)
+    secondary_zip_path = None
+    if SECONDARY_ARCHIVE_NAME:
+        secondary_zip_path = dest_zip_path.parent / SECONDARY_ARCHIVE_NAME
+        if secondary_zip_path.is_file():
+            secondary_zip_path.unlink()
+        shutil.copy2(dest_zip_path, secondary_zip_path)
+        print(f"[*] Archivio secondario generato in: {secondary_zip_path.resolve()}")
 
     return {
         "dest_zip": dest_zip_path,

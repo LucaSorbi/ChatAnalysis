@@ -681,12 +681,12 @@
     "conversation_pseudonym": "chat_941b44d9e26a",
     "duration_seconds": 38.4,
     "end_time": null,
-    "export_id": "exp_8938abed69a0",
+    "export_id": "exp_93bd4be56d2a",
     "loading_mode": "IN_MEMORY_EXECUTION",
     "mode": "NOT_RECORDED",
     "origin_flow": "MANUAL_DETECTION",
     "reported_attestation_level": "MOCK_VERIFIED",
-    "run_id": "run_detection_partial_17of26",
+    "run_id": "run_5de8053efc34",
     "start_time": null,
     "verified_attestation_level": "MOCK_VERIFIED"
   },
@@ -744,9 +744,9 @@
       "python_version": "3.14.7"
     },
     "execution_software_commit": "NOT_RECORDED",
-    "export_software_commit": "NOT_RECORDED",
+    "export_software_commit": "20261021abcdef0123456789abcdef0123456789",
     "name": "ChatAnalysis",
-    "offline_mode": true,
+    "offline_mode": null,
     "version": "0.1.0"
   },
   "validation": {

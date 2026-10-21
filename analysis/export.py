@@ -282,6 +282,17 @@ ALLOWED_EXECUTION_STATUSES = {
     "INCONSISTENT_COUNTERS",
     "UNATTEMPTED",
     "UNVERIFIED",
+    "NO_WORK",
+}
+
+ALLOWED_VALIDATION_STATUSES = {
+    "STATICALLY_VERIFIED",
+    "RUNTIME_VERIFIED",
+    "TEST_VERIFIED",
+    "MOCK_VERIFIED",
+    "NOT_VERIFIED",
+    "UNVERIFIED",
+    "NOT_APPLIED",
 }
 
 ALLOWED_CHUNK_STATUSES = {
@@ -375,7 +386,7 @@ def sanitize_loading_mode(val: Any) -> str:
 
 
 def sanitize_git_commit(commit: Any) -> str:
-    """Valida tipicamente un commit Git (7-40 caratteri esadecimali o tag canonico), escludendo categoricamente canarini e testo libero."""
+    """Valida tipicamente un commit Git (7-40 caratteri esadecimali), escludendo categoricamente tag (es. release_MarioRossi), canarini e testo libero."""
     if not commit or not isinstance(commit, str):
         return "NOT_RECORDED"
     s = commit.strip()
@@ -386,11 +397,35 @@ def sanitize_git_commit(commit: Any) -> str:
         return "NOT_RECORDED"
     if re.match(r"^[0-9a-fA-F]{7,40}$", s):
         return s
-    if re.match(r"^(?:commit|export|head|tag|v|release)_[0-9a-zA-Z_-]{1,40}$", s):
-        return s
-    if re.match(r"^v?\d+\.\d+(?:\.\d+)?(?:-[0-9a-zA-Z._-]+)?$", s):
-        return s
     return "NOT_RECORDED"
+
+
+def sanitize_software_version(val: Any, redact: bool = True) -> str:
+    """Sanitizza la versione software secondo semver canonico escludendo categoricamente testi liberi o nomi personali."""
+    if not val:
+        return get_software_version()
+    s = str(val).strip()
+    if redact:
+        if re.match(r"^v?\d+\.\d+(?:\.\d+)?(?:-[0-9a-zA-Z._]+)?$", s) and not any(k in s.lower() for k in ("mario", "rossi", "canary", "secret", "user", "admin")):
+            return s
+        return get_software_version()
+    return s[:32]
+
+
+def sanitize_validation_flag(val: Any, redact: bool = True, default: str = "STATICALLY_VERIFIED") -> str | bool | None:
+    """Sanitizza i flag tecnici di validazione impedendo fughe di testo arbitrario o nomi personali."""
+    if val is None:
+        return default
+    if isinstance(val, bool):
+        return val
+    s = str(val).strip().upper()
+    if s in ALLOWED_VALIDATION_STATUSES:
+        return s
+    if s in ("TRUE", "1"):
+        return True
+    if s in ("FALSE", "0"):
+        return False
+    return default if redact else s[:32]
 
 
 def sanitize_aggregation_errors(errors: Any, redact: bool = True) -> list[str]:
@@ -503,18 +538,14 @@ def get_pseudonymous_id(raw_id: str | None, prefix: str = "anon") -> str:
 def sanitize_run_id(raw_run_id: str | None, redact: bool = True) -> str:
     r"""
     Sanitizza un identificativo di esecuzione (run_id).
-    In modalità safe (default), accetta identificatori sintetici conformi (^run_[a-zA-Z0-9_-]{1,32}$),
-    ma esclude categoricamente canarini, credenziali, token e testo libero non tipizzato che vengono pseudonimizzati.
+    In modalità safe (default, redact=True), pseudonimizza SEMPRE l'identificativo di run in modo deterministico
+    tramite SHA-256 troncato, garantendo la collegabilità coerente tra report dello stesso esperimento
+    senza mai esporre identificativi originari o nomi personali (es. run_MarioRossi).
     """
     if not raw_run_id or str(raw_run_id).strip() in ("NOT_RECORDED", "unknown", "None", ""):
         return "NOT_RECORDED"
     clean = str(raw_run_id).strip()
     if redact:
-        lower_c = clean.lower()
-        if any(k in lower_c for k in ("canary", "secret", "confidential", "token", "password", "example", "+", "@", " ", "/", "\\")):
-            return get_pseudonymous_id(clean, prefix="run")
-        if re.match(r"^run_[a-zA-Z0-9_-]{1,32}$", clean):
-            return clean
         return get_pseudonymous_id(clean, prefix="run")
     return clean
 
@@ -938,7 +969,22 @@ def build_topic_detection_export_report(
         meta.get(k) is not None for k in ("completed_chunk_count", "failed_chunk_count", "recovered_chunk_count", "skipped_chunk_count")
     )
 
-    if planned_chunks is not None and (has_explicit_counters or raw_diag):
+    if planned_chunks is not None and planned_chunks == 0:
+        failed_chunks = safe_int(meta.get("failed_chunk_count")) or 0
+        recovered_chunks = safe_int(meta.get("recovered_chunk_count")) or 0
+        completed_chunks = safe_int(meta.get("completed_chunk_count")) or 0
+        skipped_chunks = safe_int(meta.get("skipped_chunk_count")) or 0
+        if completed_chunks == 0 and failed_chunks == 0:
+            counter_invariants_valid = True
+            is_complete = False
+            coverage_status = "NO_WORK"
+            completion_pct = None
+        else:
+            counter_invariants_valid = False
+            is_complete = False
+            coverage_status = "INCONSISTENT_COUNTERS"
+            completion_pct = None
+    elif planned_chunks is not None and (has_explicit_counters or raw_diag):
         if has_explicit_counters:
             failed_chunks = safe_int(meta.get("failed_chunk_count")) if meta.get("failed_chunk_count") is not None else 0
             recovered_chunks = safe_int(meta.get("recovered_chunk_count")) if meta.get("recovered_chunk_count") is not None else 0
@@ -1005,6 +1051,8 @@ def build_topic_detection_export_report(
 
     if coverage_status == "INCONSISTENT_COUNTERS":
         verified_status = "INCONSISTENT_COUNTERS"
+    elif coverage_status == "NO_WORK":
+        verified_status = "NO_WORK"
     elif coverage_status == "NOT_RECORDED":
         verified_status = "NOT_RECORDED"
     elif coverage_status == "COMPLETE" and is_complete is True:
@@ -1021,8 +1069,6 @@ def build_topic_detection_export_report(
     # Risoluzione evidenze
     tot_evidence = document.evidence_count
     analyzed_ev = safe_int(meta.get("analyzed_evidence_count"))
-    if analyzed_ev is None and is_complete:
-        analyzed_ev = tot_evidence
     unanalyzed_ev = safe_int(meta.get("unanalyzed_evidence_count"))
     if unanalyzed_ev is None and analyzed_ev is not None:
         unanalyzed_ev = max(0, tot_evidence - analyzed_ev)
@@ -1047,23 +1093,25 @@ def build_topic_detection_export_report(
 
     if raw_att:
         att_str = str(raw_att).strip().upper()
-        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED") else "UNATTESTED"
+        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED", "REPORTED_LIVE") else "UNATTESTED"
+    elif (
+        meta.get("authoritative_execution_certified") is True
+        or meta.get("server_provenance_verified") is True
+        or meta.get("runtime_binding_verified") is True
+    ):
+        reported_attestation = "REPORTED_LIVE"
     elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
         reported_attestation = "REPORTED_LIVE"
     else:
         reported_attestation = None
 
-    # Autenticazione autoritativa verificata (P0/C: i soli flag metadata non possono promuovere a LIVE_AUTHORITATIVE)
+    # Autenticazione autoritativa verificata: FAIL-CLOSED
+    # Solo una fonte autoritativa esterna (authoritative_live_run_ids) che conferma il raw_run_id originale può promuovere a LIVE_AUTHORITATIVE.
+    # I soli flag auto-dichiarati nei metadati (authoritative_execution_certified, ecc.) NON possono promuovere a LIVE_AUTHORITATIVE.
     is_authoritative_live = False
-    if authoritative_live_run_ids is not None and run_id in authoritative_live_run_ids and not is_mock:
-        is_authoritative_live = True
-    elif (
-        meta.get("authoritative_execution_certified") is True
-        and meta.get("server_provenance_verified") is True
-        and meta.get("runtime_binding_verified") is True
-        and not is_mock
-    ):
-        is_authoritative_live = True
+    if authoritative_live_run_ids is not None and raw_run_id and not is_mock:
+        if raw_run_id in authoritative_live_run_ids:
+            is_authoritative_live = True
 
     if is_mock:
         verified_attestation = AttestationLevel.MOCK_VERIFIED.value
@@ -1146,10 +1194,10 @@ def build_topic_detection_export_report(
         "schema_version": SCHEMA_VERSION,
         "software": {
             "name": SOFTWARE_NAME,
-            "version": custom_version or get_software_version(),
+            "version": sanitize_software_version(custom_version or get_software_version(), redact=redact_sensitive_topics),
             "execution_software_commit": sanitize_git_commit(meta.get("git_commit")),
             "export_software_commit": sanitize_git_commit(custom_commit or get_git_commit()),
-            "offline_mode": bool(meta.get("offline_mode", True)),
+            "offline_mode": bool(meta.get("offline_mode")) if meta.get("offline_mode") is not None else None,
             "environment": get_platform_environment(),
         },
         "experiment": {
@@ -1245,20 +1293,20 @@ def build_topic_detection_export_report(
         },
         "chunks": norm_chunks,
         "checkpoints": {
-            "enabled": meta.get("checkpoint_enabled"),
+            "enabled": bool(meta.get("checkpoint_enabled")) if meta.get("checkpoint_enabled") is not None else None,
             "recovered_count": recovered_chunks,
             "saved_count": safe_int(meta.get("saved_chunk_count")),
             "checkpoint_database_pseudonym": "<LOCAL_SQLITE_CHECKPOINT_STORE>",
         },
         "validation": {
-            "evidence_id_validation_applied": meta.get("evidence_id_validation_applied") if meta.get("evidence_id_validation_applied") is not None else "STATICALLY_VERIFIED",
-            "strict_alias_matching": meta.get("strict_alias_matching") if meta.get("strict_alias_matching") is not None else "STATICALLY_VERIFIED",
-            "hallucinated_citations_rejected": meta.get("hallucinated_citations_rejected") if meta.get("hallucinated_citations_rejected") is not None else "STATICALLY_VERIFIED",
-            "schema_validation_applied": meta.get("schema_validation_applied") if meta.get("schema_validation_applied") is not None else "STATICALLY_VERIFIED",
+            "evidence_id_validation_applied": sanitize_validation_flag(meta.get("evidence_id_validation_applied"), redact=redact_sensitive_topics),
+            "strict_alias_matching": sanitize_validation_flag(meta.get("strict_alias_matching"), redact=redact_sensitive_topics),
+            "hallucinated_citations_rejected": sanitize_validation_flag(meta.get("hallucinated_citations_rejected"), redact=redact_sensitive_topics),
+            "schema_validation_applied": sanitize_validation_flag(meta.get("schema_validation_applied"), redact=redact_sensitive_topics),
         },
         "provenance": {
             "provenance_document_id_pseudonym": get_pseudonymous_id(detection_result.provenance_document_id or document.document_id, prefix="doc"),
-            "chain_of_custody_intact": meta.get("chain_of_custody_intact"),
+            "chain_of_custody_intact": bool(meta.get("chain_of_custody_intact")) if meta.get("chain_of_custody_intact") is not None else None,
             "evidence_protocol": "deterministic_alias_v1",
         },
         "privacy": {
@@ -1330,7 +1378,22 @@ def build_topic_discovery_export_report(
         meta.get(k) is not None for k in ("completed_chunk_count", "failed_chunk_count", "recovered_chunk_count", "skipped_chunk_count")
     )
 
-    if planned_chunks is not None and (has_explicit_counters or raw_diag):
+    if planned_chunks is not None and planned_chunks == 0:
+        failed_chunks = safe_int(meta.get("failed_chunk_count")) or 0
+        recovered_chunks = safe_int(meta.get("recovered_chunk_count")) or 0
+        completed_chunks = safe_int(meta.get("completed_chunk_count")) or 0
+        skipped_chunks = safe_int(meta.get("skipped_chunk_count")) or 0
+        if completed_chunks == 0 and failed_chunks == 0:
+            counter_invariants_valid = True
+            is_complete = False
+            coverage_status = "NO_WORK"
+            completion_pct = None
+        else:
+            counter_invariants_valid = False
+            is_complete = False
+            coverage_status = "INCONSISTENT_COUNTERS"
+            completion_pct = None
+    elif planned_chunks is not None and (has_explicit_counters or raw_diag):
         if has_explicit_counters:
             failed_chunks = safe_int(meta.get("failed_chunk_count")) if meta.get("failed_chunk_count") is not None else 0
             recovered_chunks = safe_int(meta.get("recovered_chunk_count")) if meta.get("recovered_chunk_count") is not None else 0
@@ -1396,6 +1459,8 @@ def build_topic_discovery_export_report(
 
     if coverage_status == "INCONSISTENT_COUNTERS":
         verified_status = "INCONSISTENT_COUNTERS"
+    elif coverage_status == "NO_WORK":
+        verified_status = "NO_WORK"
     elif coverage_status == "NOT_RECORDED":
         verified_status = "NOT_RECORDED"
     elif coverage_status == "COMPLETE" and is_complete is True:
@@ -1412,8 +1477,6 @@ def build_topic_discovery_export_report(
     # Evidenze
     tot_evidence = document.evidence_count
     analyzed_ev = safe_int(meta.get("analyzed_evidence_count"))
-    if analyzed_ev is None and is_complete:
-        analyzed_ev = tot_evidence
     unanalyzed_ev = safe_int(meta.get("unanalyzed_evidence_count"))
     if unanalyzed_ev is None and analyzed_ev is not None:
         unanalyzed_ev = max(0, tot_evidence - analyzed_ev)
@@ -1438,23 +1501,25 @@ def build_topic_discovery_export_report(
 
     if raw_att:
         att_str = str(raw_att).strip().upper()
-        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED") else "UNATTESTED"
+        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED", "REPORTED_LIVE") else "UNATTESTED"
+    elif (
+        meta.get("authoritative_execution_certified") is True
+        or meta.get("server_provenance_verified") is True
+        or meta.get("runtime_binding_verified") is True
+    ):
+        reported_attestation = "REPORTED_LIVE"
     elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
         reported_attestation = "REPORTED_LIVE"
     else:
         reported_attestation = None
 
-    # Autenticazione autoritativa verificata (P0/C: i soli flag metadata non possono promuovere a LIVE_AUTHORITATIVE)
+    # Autenticazione autoritativa verificata: FAIL-CLOSED
+    # Solo una fonte autoritativa esterna (authoritative_live_run_ids) che conferma il raw_run_id originale può promuovere a LIVE_AUTHORITATIVE.
+    # I soli flag auto-dichiarati nei metadati (authoritative_execution_certified, ecc.) NON possono promuovere a LIVE_AUTHORITATIVE.
     is_authoritative_live = False
-    if authoritative_live_run_ids is not None and run_id in authoritative_live_run_ids and not is_mock:
-        is_authoritative_live = True
-    elif (
-        meta.get("authoritative_execution_certified") is True
-        and meta.get("server_provenance_verified") is True
-        and meta.get("runtime_binding_verified") is True
-        and not is_mock
-    ):
-        is_authoritative_live = True
+    if authoritative_live_run_ids is not None and raw_run_id and not is_mock:
+        if raw_run_id in authoritative_live_run_ids:
+            is_authoritative_live = True
 
     if is_mock:
         verified_attestation = AttestationLevel.MOCK_VERIFIED.value
@@ -1526,10 +1591,10 @@ def build_topic_discovery_export_report(
         "schema_version": SCHEMA_VERSION,
         "software": {
             "name": SOFTWARE_NAME,
-            "version": custom_version or get_software_version(),
+            "version": sanitize_software_version(custom_version or get_software_version(), redact=redact_sensitive_topics),
             "execution_software_commit": sanitize_git_commit(meta.get("git_commit")),
             "export_software_commit": sanitize_git_commit(custom_commit or get_git_commit()),
-            "offline_mode": bool(meta.get("offline_mode", True)),
+            "offline_mode": bool(meta.get("offline_mode")) if meta.get("offline_mode") is not None else None,
             "environment": get_platform_environment(),
         },
         "experiment": {
@@ -1612,20 +1677,20 @@ def build_topic_discovery_export_report(
         },
         "chunks": norm_chunks,
         "checkpoints": {
-            "enabled": meta.get("checkpoint_enabled"),
+            "enabled": bool(meta.get("checkpoint_enabled")) if meta.get("checkpoint_enabled") is not None else None,
             "recovered_count": recovered_chunks,
             "saved_count": safe_int(meta.get("saved_chunk_count")),
             "checkpoint_database_pseudonym": "<LOCAL_SQLITE_CHECKPOINT_STORE>",
         },
         "validation": {
-            "evidence_id_validation_applied": meta.get("evidence_id_validation_applied") if meta.get("evidence_id_validation_applied") is not None else "STATICALLY_VERIFIED",
-            "strict_alias_matching": meta.get("strict_alias_matching") if meta.get("strict_alias_matching") is not None else "STATICALLY_VERIFIED",
-            "hallucinated_citations_rejected": meta.get("hallucinated_citations_rejected") if meta.get("hallucinated_citations_rejected") is not None else "STATICALLY_VERIFIED",
-            "schema_validation_applied": meta.get("schema_validation_applied") if meta.get("schema_validation_applied") is not None else "STATICALLY_VERIFIED",
+            "evidence_id_validation_applied": sanitize_validation_flag(meta.get("evidence_id_validation_applied"), redact=redact_sensitive_topics),
+            "strict_alias_matching": sanitize_validation_flag(meta.get("strict_alias_matching"), redact=redact_sensitive_topics),
+            "hallucinated_citations_rejected": sanitize_validation_flag(meta.get("hallucinated_citations_rejected"), redact=redact_sensitive_topics),
+            "schema_validation_applied": sanitize_validation_flag(meta.get("schema_validation_applied"), redact=redact_sensitive_topics),
         },
         "provenance": {
             "provenance_document_id_pseudonym": get_pseudonymous_id(discovery_result.provenance_document_id, prefix="doc"),
-            "chain_of_custody_intact": meta.get("chain_of_custody_intact"),
+            "chain_of_custody_intact": bool(meta.get("chain_of_custody_intact")) if meta.get("chain_of_custody_intact") is not None else None,
             "evidence_protocol": "deterministic_alias_v1",
         },
         "privacy": {

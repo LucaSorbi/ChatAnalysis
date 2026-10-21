@@ -418,8 +418,10 @@ class TestObligatorySyntheticExportScenarios:
             timestamp="20261021T100500",
         )
         assert fn1 != fn2
-        assert "run_a" in fn1
-        assert "run_b" in fn2
+        assert get_pseudonymous_id("run_a", prefix="run") in fn1
+        assert get_pseudonymous_id("run_b", prefix="run") in fn2
+        assert "run_a" not in fn1
+        assert "run_b" not in fn2
 
     # 10. Modelli differenti sulla stessa conversazione
     def test_10_different_models_same_conversation(self, demo_session):
@@ -1072,7 +1074,9 @@ class TestP0ScientificTruthfulnessAndAuditFixes:
         json_1, _ = export_topic_detection_json(det_run1, doc, session_state=mock_state)
         parsed_1 = json.loads(json_1)
         assert parsed_1["result"]["semantic_consistency"] is not None
-        assert parsed_1["result"]["semantic_consistency"]["target_detection_run_id"] == "run_det_target_1"
+        assert parsed_1["result"]["semantic_consistency"]["target_detection_run_id"] == parsed_1["experiment"]["run_id"]
+        assert parsed_1["result"]["semantic_consistency"]["target_detection_run_id"] == get_pseudonymous_id("run_det_target_1", prefix="run")
+        assert "run_det_target_1" not in json_1
 
         json_2, _ = export_topic_detection_json(det_run2, doc, session_state=mock_state)
         parsed_2 = json.loads(json_2)
@@ -1088,7 +1092,9 @@ class TestP0ScientificTruthfulnessAndAuditFixes:
         det = det_list[0]
 
         meta_hist = dict(det.metadata or {})
-        meta_hist["git_commit"] = "commit_storico_123456"
+        commit_hist = "1234567890abcdef1234567890abcdef12345678"
+        commit_exp = "abcdef1234567890abcdef1234567890abcdef12"
+        meta_hist["git_commit"] = commit_hist
         meta_hist["run_id"] = "run_storica_01"
         det_hist = TopicDetectionResult(
             topic=det.topic,
@@ -1099,9 +1105,13 @@ class TestP0ScientificTruthfulnessAndAuditFixes:
             metadata=meta_hist,
         )
 
-        rep = build_topic_detection_export_report(det_hist, doc, custom_commit="export_head_abcdef")
-        assert rep["software"]["execution_software_commit"] == "commit_storico_123456"
-        assert rep["software"]["export_software_commit"] == "export_head_abcdef"
+        rep = build_topic_detection_export_report(det_hist, doc, custom_commit=commit_exp)
+        assert rep["software"]["execution_software_commit"] == commit_hist
+        assert rep["software"]["export_software_commit"] == commit_exp
+
+        # Verifica rifiuto categorico di tag o testi liberi come commit
+        rep_tag = build_topic_detection_export_report(det_hist, doc, custom_commit="release_MarioRossi_tag_v1")
+        assert rep_tag["software"]["export_software_commit"] == "NOT_RECORDED"
 
     def test_acceptance_H_mock_runs_never_live_authoritative(self, demo_session):
         """
@@ -1784,5 +1794,344 @@ class TestIndependentAuditAuditClosure20261021:
         )
         assert rep_disc_auth["experiment"]["verified_attestation_level"] == AttestationLevel.LIVE_AUTHORITATIVE.value
         assert rep_disc_auth["experiment"]["attestation_level"] == AttestationLevel.LIVE_AUTHORITATIVE.value
+
+
+@pytest.mark.unit
+class TestFinalPreTestUbuntuClosure20261021:
+    """
+    Test suite mirata e definitiva per la chiusura dei quattro difetti confermati:
+    1. P0-1: Verified live attestation anti-spoofing (non fidarsi dei soli metadati auto-dichiarati).
+    2. P0-2: Privacy safe-by-default (scrubbing MarioRossi, email, telefoni, tag commit, filename safe).
+    3. P0-3: Veridicità della copertura (0/0 chunks -> NO_WORK, evidenze non copiate, offline_mode verificato).
+    4. P1-4: Snapshot F1 e isolamento esterno (nessuna cancellazione automatica su dest_path esterno).
+    """
+
+    def test_p0_1_adversarial_attestation_spoofing_detection_and_discovery(self, demo_session):
+        doc, det_list, disc_list, _ = demo_session
+        det = det_list[0]
+        disc = disc_list[0]
+
+        meta_adversarial = {
+            "origin": AnalysisOrigin.LIVE_LM_STUDIO.value,
+            "authoritative_execution_certified": True,
+            "server_provenance_verified": True,
+            "runtime_binding_verified": True,
+            "model": "qwen2.5-7b-instruct",
+            "run_id": "run_adversarial_spoof_attempt_2026",
+            "status": "PARTIAL",
+            "chunk_count": 26,
+            "completed_chunk_count": 17,
+            "failed_chunk_count": 9,
+        }
+
+        det_obj = TopicDetectionResult(
+            topic=det.topic,
+            decision=det.decision,
+            rationale=det.rationale,
+            evidence_ids=det.evidence_ids,
+            provenance_document_id=det.provenance_document_id,
+            metadata=meta_adversarial,
+        )
+        disc_obj = TopicDiscoveryResult(
+            topics=disc.topics,
+            provenance_document_id=disc.provenance_document_id,
+            metadata=meta_adversarial,
+        )
+
+        # 1. Caso Avversario Detection: tutti i flag a True ma registro esterno assente o vuoto
+        rep_det_untrusted = build_topic_detection_export_report(det_obj, doc, authoritative_live_run_ids=None)
+        assert rep_det_untrusted["experiment"]["reported_attestation_level"] == "REPORTED_LIVE"
+        assert rep_det_untrusted["experiment"]["verified_attestation_level"] == AttestationLevel.UNATTESTED.value
+        assert rep_det_untrusted["experiment"]["attestation_level"] == AttestationLevel.UNATTESTED.value
+        # Scaricabile anche se parziale e non attestato
+        serialized_det = serialize_report_to_json(rep_det_untrusted)
+        assert len(serialized_det) > 0
+
+        # 2. Caso Avversario Discovery: tutti i flag a True ma registro con ID differente
+        rep_disc_untrusted = build_topic_discovery_export_report(disc_obj, doc, authoritative_live_run_ids={"run_different_id"})
+        assert rep_disc_untrusted["experiment"]["reported_attestation_level"] == "REPORTED_LIVE"
+        assert rep_disc_untrusted["experiment"]["verified_attestation_level"] == AttestationLevel.UNATTESTED.value
+        assert rep_disc_untrusted["experiment"]["attestation_level"] == AttestationLevel.UNATTESTED.value
+        serialized_disc = serialize_report_to_json(rep_disc_untrusted)
+        assert len(serialized_disc) > 0
+
+        # 3. Caso Positivo Verificato: registro attendibile con raw_run_id concreto
+        rep_det_auth = build_topic_detection_export_report(
+            det_obj, doc, authoritative_live_run_ids={"run_adversarial_spoof_attempt_2026"}
+        )
+        assert rep_det_auth["experiment"]["verified_attestation_level"] == AttestationLevel.LIVE_AUTHORITATIVE.value
+        assert rep_det_auth["experiment"]["attestation_level"] == AttestationLevel.LIVE_AUTHORITATIVE.value
+
+        rep_disc_auth = build_topic_discovery_export_report(
+            disc_obj, doc, authoritative_live_run_ids={"run_adversarial_spoof_attempt_2026"}
+        )
+        assert rep_disc_auth["experiment"]["verified_attestation_level"] == AttestationLevel.LIVE_AUTHORITATIVE.value
+        assert rep_disc_auth["experiment"]["attestation_level"] == AttestationLevel.LIVE_AUTHORITATIVE.value
+
+    def test_p0_2_adversarial_privacy_scrubbing_mario_rossi_json_and_filenames(self, demo_session):
+        doc, det_list, disc_list, _ = demo_session
+        det = det_list[0]
+        disc = disc_list[0]
+
+        secret_name = "MarioRossi"
+        secret_email = "mario.rossi@example.com"
+        secret_phone = "+390612345678"
+        secret_path = "/home/mariorossi/chats/secret.txt"
+
+        meta_adversarial = {
+            "run_id": f"run_{secret_name}",
+            "git_commit": f"release_{secret_name}_tag_v2",
+            "offline_mode": True,
+            "evidence_id_validation_applied": secret_name,
+            "strict_alias_matching": f"{secret_name}_strict",
+            "notes": f"Utente {secret_name} con email {secret_email} e cellulare {secret_phone} percorso {secret_path}",
+            "chunk_diagnostics": [
+                {
+                    "chunk_index": 0,
+                    "status": "FAILED",
+                    "error_detail": f"Errore interno per {secret_name} tel {secret_phone}",
+                    "diagnostic_category": "UNKNOWN_ERROR",
+                }
+            ],
+            "aggregation_errors": [f"Errore per {secret_name} {secret_email}"],
+        }
+
+        doc_with_personal_source = ConversationEvidenceDocument(
+            document_id="doc_test_adversarial",
+            chat_id="chat_test_adversarial",
+            source_name=f"C:\\Users\\{secret_name}\\secret_convo.json",
+            bundles=(),
+        )
+
+        query_adv = TopicQuery(
+            topic_id="top_adv_01",
+            label=f"Argomento {secret_name}",
+            description=f"Descrizione con email {secret_email}",
+        )
+
+        det_adv = TopicDetectionResult(
+            topic=query_adv,
+            decision=TopicDecision.PRESENT,
+            rationale=f"Rilevata evidenza per {secret_name} al numero {secret_phone}",
+            evidence_ids=[doc.all_evidence_sections[0].evidence_id],
+            provenance_document_id=f"doc_{secret_name}",
+            metadata=meta_adversarial,
+        )
+
+        disc_topic_adv = DiscoveredTopic(
+            label=f"Topic {secret_name}",
+            short_description=f"Descrizione {secret_name} {secret_email}",
+            evidence_ids=[doc.all_evidence_sections[0].evidence_id],
+        )
+        disc_adv = TopicDiscoveryResult(
+            topics=[disc_topic_adv],
+            provenance_document_id=f"doc_{secret_name}",
+            metadata=meta_adversarial,
+        )
+
+        # 1. Verifica Flusso Detection
+        rep_det = build_topic_detection_export_report(
+            det_adv, doc_with_personal_source, custom_version=f"v1.0.0-{secret_name}"
+        )
+        json_det = serialize_report_to_json(rep_det)
+        fn_det = generate_export_filename(
+            analysis_type="TOPIC_DETECTION",
+            dataset_id=f"dataset_{secret_name}",
+            model_id=f"model_{secret_name}",
+            run_id=f"run_{secret_name}",
+        )
+
+        assert secret_name not in json_det, f"Fuga di {secret_name} rilevata nel JSON Detection!"
+        assert secret_email not in json_det, f"Fuga di {secret_email} rilevata nel JSON Detection!"
+        assert secret_phone not in json_det, f"Fuga di {secret_phone} rilevata nel JSON Detection!"
+        assert "mariorossi" not in json_det.lower()
+        assert secret_name not in fn_det, f"Fuga di {secret_name} nel nome file Detection!"
+        assert rep_det["software"]["execution_software_commit"] == "NOT_RECORDED"
+        assert rep_det["software"]["export_software_commit"] != f"release_{secret_name}_tag_v2"
+        assert rep_det["experiment"]["run_id"] == get_pseudonymous_id(f"run_{secret_name}", prefix="run")
+
+        # 2. Verifica Flusso Discovery
+        rep_disc = build_topic_discovery_export_report(
+            disc_adv, doc_with_personal_source, custom_version=f"v1.0.0-{secret_name}"
+        )
+        json_disc = serialize_report_to_json(rep_disc)
+        fn_disc = generate_export_filename(
+            analysis_type="TOPIC_DISCOVERY",
+            dataset_id=f"dataset_{secret_name}",
+            model_id=f"model_{secret_name}",
+            run_id=f"run_{secret_name}",
+        )
+
+        assert secret_name not in json_disc, f"Fuga di {secret_name} rilevata nel JSON Discovery!"
+        assert secret_email not in json_disc, f"Fuga di {secret_email} rilevata nel JSON Discovery!"
+        assert secret_phone not in json_disc, f"Fuga di {secret_phone} rilevata nel JSON Discovery!"
+        assert "mariorossi" not in json_disc.lower()
+        assert secret_name not in fn_disc, f"Fuga di {secret_name} nel nome file Discovery!"
+        assert rep_disc["software"]["execution_software_commit"] == "NOT_RECORDED"
+        assert rep_disc["experiment"]["run_id"] == get_pseudonymous_id(f"run_{secret_name}", prefix="run")
+
+    def test_p0_3_truthfulness_coverage_zero_chunks_and_proportions(self, demo_session):
+        doc, det_list, disc_list, _ = demo_session
+        det = det_list[0]
+        disc = disc_list[0]
+
+        # 1. Caso 0/0: planned_chunks=0 NON deve produrre COMPLETE
+        meta_zero = {
+            "status": "COMPLETE",
+            "chunk_count": 0,
+            "completed_chunk_count": 0,
+            "failed_chunk_count": 0,
+        }
+        det_zero = TopicDetectionResult(
+            topic=det.topic,
+            decision=det.decision,
+            rationale=det.rationale,
+            evidence_ids=det.evidence_ids,
+            provenance_document_id=det.provenance_document_id,
+            metadata=meta_zero,
+        )
+        rep_det_zero = build_topic_detection_export_report(det_zero, doc)
+        assert rep_det_zero["coverage"]["coverage_status"] == "NO_WORK"
+        assert rep_det_zero["execution"]["verified_execution_status"] == "NO_WORK"
+        assert rep_det_zero["execution"]["global_status"] == "NO_WORK"
+        assert rep_det_zero["coverage"]["completion_percentage"] is None
+        assert rep_det_zero["coverage"]["is_complete"] is False
+        assert rep_det_zero["document"]["analyzed_evidence_count"] is None
+        assert rep_det_zero["software"]["offline_mode"] is None
+
+        disc_zero = TopicDiscoveryResult(
+            topics=disc.topics,
+            provenance_document_id=disc.provenance_document_id,
+            metadata=meta_zero,
+        )
+        rep_disc_zero = build_topic_discovery_export_report(disc_zero, doc)
+        assert rep_disc_zero["coverage"]["coverage_status"] == "NO_WORK"
+        assert rep_disc_zero["execution"]["global_status"] == "NO_WORK"
+        assert rep_disc_zero["coverage"]["completion_percentage"] is None
+        assert rep_disc_zero["coverage"]["is_complete"] is False
+
+        # 2. Caso 1/1
+        meta_1_1 = {"chunk_count": 1, "completed_chunk_count": 1, "failed_chunk_count": 0}
+        det_1_1 = TopicDetectionResult(
+            topic=det.topic, decision=TopicDecision.PRESENT, rationale="ok", evidence_ids=det.evidence_ids,
+            provenance_document_id=det.provenance_document_id, metadata=meta_1_1
+        )
+        rep_1_1 = build_topic_detection_export_report(det_1_1, doc)
+        assert rep_1_1["coverage"]["coverage_status"] == "COMPLETE"
+        assert rep_1_1["coverage"]["completion_percentage"] == 100.0
+        assert rep_1_1["coverage"]["is_complete"] is True
+
+        # 3. Caso 2/2
+        meta_2_2 = {"chunk_count": 2, "completed_chunk_count": 2, "failed_chunk_count": 0}
+        rep_2_2 = build_topic_discovery_export_report(TopicDiscoveryResult(
+            topics=disc.topics, provenance_document_id=disc.provenance_document_id, metadata=meta_2_2
+        ), doc)
+        assert rep_2_2["coverage"]["coverage_status"] == "COMPLETE"
+        assert rep_2_2["coverage"]["completion_percentage"] == 100.0
+
+        # 4. Caso 17/26: PRESENT resta PRESENT ma PARTIAL; ABSENT resta ABSENT ma PARTIAL
+        meta_17_26 = {"chunk_count": 26, "completed_chunk_count": 17, "failed_chunk_count": 9}
+        det_17_26_present = TopicDetectionResult(
+            topic=det.topic, decision=TopicDecision.PRESENT, rationale="ok", evidence_ids=det.evidence_ids,
+            provenance_document_id=det.provenance_document_id, metadata=meta_17_26
+        )
+        rep_17_26_p = build_topic_detection_export_report(det_17_26_present, doc)
+        assert rep_17_26_p["coverage"]["coverage_status"] == "PARTIAL"
+        assert rep_17_26_p["result"]["decision"] == "PRESENT"
+        assert rep_17_26_p["result"]["decision_status"] == "PARTIAL"
+        assert rep_17_26_p["coverage"]["completion_percentage"] == 65.4
+
+        det_17_26_absent = TopicDetectionResult(
+            topic=det.topic, decision=TopicDecision.ABSENT, rationale="nessuna evidenza nei 17 chunk", evidence_ids=[],
+            provenance_document_id=det.provenance_document_id, metadata=meta_17_26
+        )
+        rep_17_26_a = build_topic_detection_export_report(det_17_26_absent, doc)
+        assert rep_17_26_a["coverage"]["coverage_status"] == "PARTIAL"
+        assert rep_17_26_a["result"]["decision"] == "ABSENT"
+        assert rep_17_26_a["result"]["decision_status"] == "PARTIAL"
+        assert "Decoupled" in rep_17_26_a["result"]["decision_completeness_distinction"]
+
+        # 5. Caso 25/26 con INVALID_EVIDENCE_ID
+        raw_diag_25 = [
+            {"chunk_index": i, "status": "SUCCESS"} for i in range(25)
+        ] + [
+            {"chunk_index": 25, "status": "FAILED", "diagnostic_category": "INVALID_EVIDENCE_ID", "error_type": "AiInvalidEvidenceCitationError"}
+        ]
+        meta_25_26 = {
+            "chunk_count": 26,
+            "chunk_diagnostics": raw_diag_25,
+        }
+        rep_25_26 = build_topic_detection_export_report(TopicDetectionResult(
+            topic=det.topic, decision=TopicDecision.UNCERTAIN, rationale="1 chunk fallito", evidence_ids=[],
+            provenance_document_id=det.provenance_document_id, metadata=meta_25_26
+        ), doc)
+        assert rep_25_26["coverage"]["coverage_status"] == "PARTIAL"
+        assert rep_25_26["coverage"]["chunks_completed"] == 25
+        assert rep_25_26["coverage"]["chunks_failed"] == 1
+        assert rep_25_26["coverage"]["completion_percentage"] == 96.2
+        assert rep_25_26["chunks"][25]["diagnostic_category"] == "INVALID_EVIDENCE_ID"
+
+        # 6. Contatori incoerenti rifiutati con INCONSISTENT_COUNTERS
+        meta_inconsistent = {
+            "chunk_count": 26,
+            "completed_chunk_count": 25,
+            "failed_chunk_count": 0,
+        }
+        rep_inc = build_topic_detection_export_report(TopicDetectionResult(
+            topic=det.topic, decision=TopicDecision.UNCERTAIN, rationale="incoerente", evidence_ids=[],
+            provenance_document_id=det.provenance_document_id, metadata=meta_inconsistent
+        ), doc)
+        assert rep_inc["coverage"]["counter_invariants_valid"] is False
+        assert rep_inc["coverage"]["coverage_status"] == "INCONSISTENT_COUNTERS"
+        assert rep_inc["execution"]["global_status"] == "INCONSISTENT_COUNTERS"
+
+    def test_p1_4_snapshot_nominal_and_failure_leaves_no_staging_and_preserves_external(self):
+        import tempfile
+        import sqlite3
+        from unittest.mock import patch
+        from scripts.preflight_checkpoint_resume import create_consistent_readonly_snapshot
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            tmp_p = Path(tmp_dir)
+            dir_a = tmp_p / "dir_a"
+            dir_b = tmp_p / "dir_b"
+            dir_a.mkdir()
+            dir_b.mkdir()
+
+            # Creazione DB SQLite sintetico
+            src_db = dir_a / "test_src.db"
+            conn = sqlite3.connect(str(src_db))
+            conn.execute("PRAGMA journal_mode=WAL;")
+            conn.execute("CREATE TABLE t (id INT, val TEXT);")
+            conn.execute("INSERT INTO t VALUES (1, 'val1');")
+            conn.commit()
+            conn.close()
+
+            # 1. Snapshot nominale verso destinazione esplicita
+            dest_target_ok = dir_b / "snapshot_published.db"
+            snap_file, snap_temp = create_consistent_readonly_snapshot(src_db, dest_path=dest_target_ok)
+            assert snap_file == dest_target_ok
+            assert snap_file.is_file()
+            # Verifica che nessuna staging directory temporanea sia rimasta
+            stray_temps = list(tmp_p.glob("chatanalysis_snap_*"))
+            assert len(stray_temps) == 0
+
+            # 2. Riproduzione Anomalia: errore durante il processo con dest_path esplicito non preesistente
+            dest_target_fail = dir_b / "snapshot_should_not_exist.db"
+            with patch("shutil.copy2", side_effect=OSError("Simulazione interruzione copia finale")):
+                with pytest.raises(OSError):
+                    create_consistent_readonly_snapshot(src_db, dest_path=dest_target_fail)
+
+            # Il file target esterno non è mai stato pubblicato né cancellato distruttivamente
+            assert not dest_target_fail.exists()
+            assert not dest_target_fail.is_file()
+
+            # 3. Preservazione assoluta di file preesistenti su dest_path
+            preexisting_file = dir_b / "user_preexisting.db"
+            preexisting_file.write_bytes(b"USER_DATA_DO_NOT_TOUCH")
+            with pytest.raises(FileExistsError):
+                create_consistent_readonly_snapshot(src_db, dest_path=preexisting_file)
+            assert preexisting_file.is_file()
+            assert preexisting_file.read_bytes() == b"USER_DATA_DO_NOT_TOUCH"
 
 

@@ -2005,22 +2005,20 @@ def create_consistent_readonly_snapshot(
         except OSError as oe:
             raise SnapshotDirectoryInvalidError("Impossibile accedere alla cartella di destinazione.") from oe
 
-        created_temp_dir = None
-        dest_file = target_file
-    else:
-        base_dir = Path(dest_dir) if dest_dir is not None else Path(tempfile.gettempdir())
-        _validate_snapshot_target_safety(src_p, target_dir=base_dir, target_file=None)
-        try:
-            base_dir.mkdir(parents=True, exist_ok=True)
-            created_temp_dir = Path(tempfile.mkdtemp(prefix="chatanalysis_snap_", dir=str(base_dir)))
-            _OWNERSHIP_TRACKER.register_temp_dir(created_temp_dir)
-        except PermissionError as pe:
-            raise SnapshotPermissionDeniedError("Permessi insufficienti per creare la cartella temporanea dello snapshot.") from pe
-        except (NotADirectoryError, OSError) as oe:
-            raise SnapshotDirectoryInvalidError("Impossibile creare la cartella temporanea dello snapshot.") from oe
+    # L'intera preparazione e consolidamento dello snapshot avvengono SEMPRE in un'area temporanea privata
+    base_dir = Path(dest_dir) if dest_dir is not None else Path(tempfile.gettempdir())
+    _validate_snapshot_target_safety(src_p, target_dir=base_dir, target_file=None)
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        created_temp_dir = Path(tempfile.mkdtemp(prefix="chatanalysis_snap_", dir=str(base_dir)))
+        _OWNERSHIP_TRACKER.register_temp_dir(created_temp_dir)
+    except PermissionError as pe:
+        raise SnapshotPermissionDeniedError("Permessi insufficienti per creare la cartella temporanea dello snapshot.") from pe
+    except (NotADirectoryError, OSError) as oe:
+        raise SnapshotDirectoryInvalidError("Impossibile creare la cartella temporanea dello snapshot.") from oe
 
-        fname = f"snapshot_{os.getpid()}_{hashlib.sha256(os.urandom(16)).hexdigest()[:8]}.db"
-        dest_file = created_temp_dir / fname
+    fname = f"snapshot_{os.getpid()}_{hashlib.sha256(os.urandom(16)).hexdigest()[:8]}.db"
+    dest_file = created_temp_dir / fname
 
     dest_file_owned = False
     dest_file_identity: tuple[int, int] | None = None
@@ -2098,6 +2096,18 @@ def create_consistent_readonly_snapshot(
             _safe_cleanup_owned_temp_dir(staged_temp_dir, known_files=staged_files)
             staged_temp_dir = None
 
+        # 6. Pubblicazione su destinazione esterna SOLO ad operazione completata con successo
+        if target_file is not None:
+            if os.path.lexists(target_file) or target_file.exists():
+                raise FileExistsError("Il file di destinazione snapshot è apparso prima della pubblicazione (sovrascrittura vietata).")
+            shutil.copy2(str(dest_file), str(target_file))
+            # Pulizia sicura del file e della cartella temporanea privata dopo la copia riuscita
+            _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
+            dest_fd = None
+            _safe_cleanup_owned_temp_dir(created_temp_dir, known_files=[dest_file])
+            created_temp_dir = None
+            dest_file = target_file
+
         dest_file_owned = False
 
     except BaseException:
@@ -2119,10 +2129,6 @@ def create_consistent_readonly_snapshot(
             _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
             dest_fd = None
 
-        if dest_file_owned and target_file is not None:
-            _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity, allow_external_target=True)
-            dest_fd = None
-
         if dest_fd is not None:
             try:
                 os.close(dest_fd)
@@ -2132,6 +2138,7 @@ def create_consistent_readonly_snapshot(
 
         if created_temp_dir is not None:
             _safe_cleanup_owned_temp_dir(created_temp_dir, known_files=[dest_file])
+            created_temp_dir = None
 
         if staged_temp_dir is not None:
             staged_files = []

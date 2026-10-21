@@ -98,18 +98,18 @@
     "completion_percentage": 100.0,
     "counter_invariants_valid": true,
     "coverage_status": "COMPLETE",
-    "evidence_coverage_percentage": 100.0,
+    "evidence_coverage_percentage": null,
     "is_complete": true,
     "total_chunks_planned": 3
   },
   "document": {
-    "analyzed_evidence_count": 12,
+    "analyzed_evidence_count": null,
     "document_fingerprint": null,
     "document_pseudonym": "doc_03c3485c44b8",
     "message_count": 8,
     "source_name": "src_70078ddfe843",
     "total_evidence_count": 12,
-    "unanalyzed_evidence_count": 0
+    "unanalyzed_evidence_count": null
   },
   "execution": {
     "duration_seconds": 5.12,
@@ -129,12 +129,12 @@
     "conversation_pseudonym": "chat_941b44d9e26a",
     "duration_seconds": 5.12,
     "end_time": "2026-10-21T10:00:05+00:00",
-    "export_id": "exp_b74e0ac313a2",
+    "export_id": "exp_3f58cfced01d",
     "loading_mode": "IN_MEMORY_EXECUTION",
     "mode": "NOT_RECORDED",
     "origin_flow": "MANUAL_DETECTION",
     "reported_attestation_level": "MOCK_VERIFIED",
-    "run_id": "run_detection_synth_c1",
+    "run_id": "run_bff8c1df75f2",
     "start_time": "2026-10-21T10:00:00+00:00",
     "verified_attestation_level": "MOCK_VERIFIED"
   },
@@ -197,8 +197,8 @@
         "ev_1caa896eee9e",
         "ev_b5c62f3e33cf"
       ],
-      "source_discovery_run_id": "run_discovery_synth_c1",
-      "target_detection_run_id": "run_detection_synth_c1",
+      "source_discovery_run_id": "run_c65112b92975",
+      "target_detection_run_id": "run_bff8c1df75f2",
       "verified_topic_id": "top_1b98de9a9a99"
     },
     "topic": {
@@ -218,9 +218,9 @@
       "python_version": "3.14.7"
     },
     "execution_software_commit": "NOT_RECORDED",
-    "export_software_commit": "NOT_RECORDED",
+    "export_software_commit": "20261021abcdef0123456789abcdef0123456789",
     "name": "ChatAnalysis",
-    "offline_mode": true,
+    "offline_mode": null,
     "version": "0.1.0"
   },
   "validation": {

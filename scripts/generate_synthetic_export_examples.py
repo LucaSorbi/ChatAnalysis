@@ -86,7 +86,7 @@ def generate_all_examples() -> None:
         doc,
         consistency_result=cons_res,
         redact_sensitive_topics=True,
-        custom_commit="git_commit_synthetic_audit_20261021",
+        custom_commit="20261021abcdef0123456789abcdef0123456789",
     )
     (out_dir / "example_topic_detection_export_synthetic.json").write_text(
         serialize_report_to_json(rep_det), encoding="utf-8"
@@ -121,7 +121,7 @@ def generate_all_examples() -> None:
         disc_c1,
         doc,
         redact_sensitive_topics=True,
-        custom_commit="git_commit_synthetic_audit_20261021",
+        custom_commit="20261021abcdef0123456789abcdef0123456789",
     )
     (out_dir / "example_topic_discovery_export_synthetic.json").write_text(
         serialize_report_to_json(rep_disc), encoding="utf-8"
@@ -167,7 +167,7 @@ def generate_all_examples() -> None:
         p_det_res,
         doc,
         redact_sensitive_topics=True,
-        custom_commit="git_commit_synthetic_audit_20261021",
+        custom_commit="20261021abcdef0123456789abcdef0123456789",
     )
     (out_dir / "example_topic_detection_partial_17of26_synthetic.json").write_text(
         serialize_report_to_json(rep_p_det), encoding="utf-8"
@@ -211,7 +211,7 @@ def generate_all_examples() -> None:
         p_disc_res,
         doc,
         redact_sensitive_topics=True,
-        custom_commit="git_commit_synthetic_audit_20261021",
+        custom_commit="20261021abcdef0123456789abcdef0123456789",
     )
     (out_dir / "example_topic_discovery_partial_25of26_synthetic.json").write_text(
         serialize_report_to_json(rep_p_disc), encoding="utf-8"
