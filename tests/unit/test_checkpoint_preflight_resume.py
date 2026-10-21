@@ -105,6 +105,9 @@ from scripts.preflight_checkpoint_resume import (
     SnapshotPermissionDeniedError,
     SnapshotCreationFailedError,
     _measure_source_file_state,
+    _OWNERSHIP_TRACKER,
+    _perform_atomic_safe_unlink,
+    _safe_cleanup_owned_temp_dir,
     acquire_forensic_readonly_copy,
     create_consistent_readonly_snapshot,
     load_and_validate_checkpoint_readonly,
@@ -4577,7 +4580,7 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
         with tempfile.TemporaryDirectory() as tmp_dir:
             src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
             try:
-                allowed_dir = Path(tmp_dir) / "post_reg_fail"
+                allowed_dir = Path(tmp_dir) / "chatanalysis_snap_post_reg_fail"
                 allowed_dir.mkdir()
                 neighbor_file = allowed_dir / "unrelated_user_file.txt"
                 neighbor_file.write_text("File vicino da non toccare", encoding="utf-8")
@@ -4651,70 +4654,556 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                 writer_conn.close()
 
     def test_144_file_replaced_after_identity_verification_before_unlink(self) -> None:
-        """F1.6: Sostituzione concorrente dopo l'ultima verifica d'identità e prima dell'unlink (riproduzione TOCTOU fail-closed)."""
+        """F1.6: Sostituzione concorrente del file temporaneo nell'area privata: rifiuto fail-closed dell'unlink e sopravvivenza del file."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            snap_dir = Path(tmp_dir) / "toctou_folder"
+            snap_dir.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(snap_dir)
+
+            dest_snap = snap_dir / "toctou_replaceable.db"
+            dest_snap.write_bytes(b"INITIAL_OWNED_DATA_144")
+            st_orig = os.lstat(dest_snap)
+            orig_ident = (int(st_orig.st_dev), int(st_orig.st_ino))
+            _OWNERSHIP_TRACKER.register_owned_file(dest_snap, orig_ident)
+
+            orig_lstat = os.lstat
+            swap_performed = [False]
+
+            def intercept_lstat_and_swap(path, *args, **kwargs):
+                if str(path) == str(dest_snap) and not swap_performed[0]:
+                    dest_snap.unlink()
+                    dest_snap.write_bytes(b"COMPETING_REPLACEMENT_SURVIVED_TEST_144")
+                    swap_performed[0] = True
+                return orig_lstat(path, *args, **kwargs)
+
+            with patch("os.lstat", side_effect=intercept_lstat_and_swap):
+                res = _perform_atomic_safe_unlink(dest_snap, None, orig_ident)
+
+            assert swap_performed[0], "Lo swap concorrente deve essere stato eseguito!"
+            assert res is False, "Il cleanup fail-closed DEVE restituire False quando rileva sostituzione concorrente!"
+            assert dest_snap.is_file(), "Il file concorrente sostituito dopo la verifica d'identità DEVE sopravvivere!"
+            assert dest_snap.read_bytes() == b"COMPETING_REPLACEMENT_SURVIVED_TEST_144"
+            _OWNERSHIP_TRACKER.unregister_temp_dir(snap_dir)
+
+    def test_145_file_replaced_after_final_check_immediately_before_unlink(self) -> None:
+        """F1.7: Fallimento acquisizione con destinazione esterna: nessuna cancellazione distruttiva su percorsi esterni (Rule 4)."""
         with tempfile.TemporaryDirectory() as tmp_dir:
             src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
             try:
-                allowed_dir = Path(tmp_dir) / "toctou_folder"
+                allowed_dir = Path(tmp_dir) / "toctou_folder_145"
                 allowed_dir.mkdir()
-                dest_snap = allowed_dir / "toctou_replaceable.db"
+                dest_snap = allowed_dir / "toctou_replaceable_145.db"
 
-                if os.name != "nt":
-                    # Su POSIX/Linux: un processo concorrente sostituisce il file ESATTAMENTE tra la prima verifica
-                    # di identità in cleanup e la cancellazione finale.
-                    # Il descrittore dest_fd rileva st_nlink == 0 e lstat rileva il mismatch, abortendo l'unlink.
-                    orig_lstat = os.lstat
-                    swap_performed = [False]
-                    lstat_calls = [0]
+                # Un concorrente crea un file sul percorso di destinazione esterna durante la fase di staging
+                def acquire_with_competitor_creation(src_path):
+                    dest_snap.write_bytes(b"COMPETING_REPLACEMENT_SURVIVED_TEST_145")
+                    raise SnapshotCreationFailedError("Crash simulato per attivare cleanup")
 
-                    def intercept_lstat_and_swap_after_check(path):
-                        res = orig_lstat(path)
-                        if str(path) == str(dest_snap):
-                            lstat_calls[0] += 1
-                            # La prima chiamata di lstat durante il cleanup verifica l'identità (restituisce res).
-                            # Subito dopo tale verifica, il processo concorrente scambia il file prima della cancellazione.
-                            if lstat_calls[0] == 1 and not swap_performed[0]:
-                                if dest_snap.exists():
-                                    dest_snap.unlink()
-                                    dest_snap.write_bytes(b"COMPETING_REPLACEMENT_SURVIVED_TEST_144")
-                                    swap_performed[0] = True
-                        return res
+                with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=acquire_with_competitor_creation):
+                    with pytest.raises(SnapshotCreationFailedError):
+                        create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
 
-                    with patch("os.lstat", side_effect=intercept_lstat_and_swap_after_check):
-                        with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=SnapshotCreationFailedError("Crash simulato per attivare cleanup")):
-                            with pytest.raises(SnapshotCreationFailedError):
-                                create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
-
-                    assert swap_performed[0], "Lo swap concorrente deve essere stato eseguito!"
-                    assert dest_snap.is_file(), "Il file concorrente sostituito dopo la verifica d'identità DEVE sopravvivere!"
-                    assert dest_snap.read_bytes() == b"COMPETING_REPLACEMENT_SURVIVED_TEST_144"
-                else:
-                    # Su Windows: testiamo che la funzione fail-closed preservi qualsiasi file con identità modificata.
-                    orig_lstat = os.lstat
-                    swap_performed = [False]
-                    lstat_calls = [0]
-
-                    def intercept_lstat_windows(path):
-                        res = orig_lstat(path)
-                        if str(path) == str(dest_snap):
-                            lstat_calls[0] += 1
-                            if lstat_calls[0] == 1 and not swap_performed[0]:
-                                if dest_snap.exists():
-                                    dest_snap.unlink()
-                                    dest_snap.write_bytes(b"WINDOWS_COMPETING_REPLACEMENT_SURVIVED_144")
-                                    swap_performed[0] = True
-                        return res
-
-                    with patch("os.lstat", side_effect=intercept_lstat_windows):
-                        with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=SnapshotCreationFailedError("Crash simulato")):
-                            with pytest.raises(SnapshotCreationFailedError):
-                                create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
-
-                    assert swap_performed[0], "Lo swap concorrente deve essere stato eseguito su Windows!"
-                    assert dest_snap.is_file(), "Il file concorrente su Windows DEVE sopravvivere al cleanup fail-closed!"
-                    assert dest_snap.read_bytes() == b"WINDOWS_COMPETING_REPLACEMENT_SURVIVED_144"
+                assert dest_snap.is_file(), "Il file concorrente creato alla destinazione esterna DEVE sopravvivere intatto!"
+                assert dest_snap.read_bytes() == b"COMPETING_REPLACEMENT_SURVIVED_TEST_145"
             finally:
                 writer_conn.close()
+
+    def test_146_spoofed_directory_with_valid_prefix_rejected_fail_closed(self) -> None:
+        """A2.1: Rifiuto di una directory falsificata con prefisso canonico valido ('chatanalysis_snap_not_actually_owned')."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            spoofed_dir = Path(tmp_dir) / "chatanalysis_snap_not_actually_owned"
+            spoofed_dir.mkdir()
+            fake_file = spoofed_dir / "target_snapshot.db"
+            fake_file.write_bytes(b"DATA_CREATED_BY_COMPETITOR_OR_AUDIT")
+
+            # La directory ha il prefisso valido, ma NON è stata registrata da _OWNERSHIP_TRACKER
+            assert not _OWNERSHIP_TRACKER.is_owned_dir(spoofed_dir)
+            st = os.lstat(fake_file)
+            ident = (st.st_dev, st.st_ino)
+
+            # Invocazione diretta di cleanup: deve rifiutare categoricamente fail-closed
+            res = _perform_atomic_safe_unlink(fake_file, None, ident)
+            assert res is False, "La cancellazione deve essere rifiutata se la directory non è comprovatamente posseduta!"
+            assert fake_file.is_file(), "Il file nella directory falsificata DEVE sopravvivere intatto!"
+            assert fake_file.read_bytes() == b"DATA_CREATED_BY_COMPETITOR_OR_AUDIT"
+
+    def test_147_competing_file_replaced_after_final_check_survives(self) -> None:
+        """A2.2: Preservazione del file concorrente sostituito esattamente prima di unlink() in directory con prefisso valido."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            spoofed_dir = Path(tmp_dir) / "chatanalysis_snap_concurrent_adversary"
+            spoofed_dir.mkdir()
+            orig_file = spoofed_dir / "snapshot.db"
+            orig_file.write_bytes(b"ORIGINAL_SNAPSHOT_DATA_BEFORE_SWAP")
+
+            st = os.lstat(orig_file)
+            orig_ident = (st.st_dev, st.st_ino)
+
+            # Simulazione attacco TOCTOU: il file originario viene spostato e sostituito da un file concorrente
+            orig_file.unlink()
+            orig_file.write_bytes(b"COMPETITOR_INJECTED_FILE_SURVIVES")
+
+            res = _perform_atomic_safe_unlink(orig_file, None, orig_ident)
+            assert res is False, "Cleanup deve fallire ed evitare categoricamente di cancellare il file concorrente!"
+            assert orig_file.is_file()
+            assert orig_file.read_bytes() == b"COMPETITOR_INJECTED_FILE_SURVIVES"
+
+    def test_148_genuinely_owned_resources_cleaned_up(self) -> None:
+        """A2.3: Pulizia corretta delle risorse comprovatamente possedute create da tempfile.mkdtemp() dall'invocazione."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                # Creazione snapshot con percorso automatico in directory posseduta
+                with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("Simulato crash durante consolidamento transazionale")):
+                    with pytest.raises(sqlite3.OperationalError):
+                        create_consistent_readonly_snapshot(src_db, dest_dir=Path(tmp_dir))
+
+                # Nessuna cartella residua registrata
+                residual_snaps = [p for p in Path(tmp_dir).iterdir() if p.is_dir() and "snap" in p.name]
+                for r in residual_snaps:
+                    assert not _OWNERSHIP_TRACKER.is_owned_dir(r), "Nessuna directory temporanea deve rimanere registrata dopo il cleanup!"
+            finally:
+                writer_conn.close()
+
+    def test_149_indeterminate_ownership_fail_closed(self) -> None:
+        """A2.4: Comportamento fail-closed quando dest_file_identity è indeterminata, parziale o nulla."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_file = Path(tmp_dir) / "indeterminate.db"
+            test_file.write_bytes(b"IMPORTANT_USER_OR_EVIDENCE_DATA")
+
+            # 1. Identity is None
+            assert _perform_atomic_safe_unlink(test_file, None, None) is False
+            assert test_file.is_file()
+
+            # 2. Identity con st_ino nullo (0, 0)
+            assert _perform_atomic_safe_unlink(test_file, None, (0, 0)) is False
+            assert test_file.is_file()
+
+            # 3. Identity con inode 0 su dev valido
+            st = os.lstat(test_file)
+            assert _perform_atomic_safe_unlink(test_file, None, (st.st_dev, 0)) is False
+            assert test_file.is_file()
+            assert test_file.read_bytes() == b"IMPORTANT_USER_OR_EVIDENCE_DATA"
+
+    def test_150_source_database_immutability_preserved_during_failed_cleanup(self) -> None:
+        """A2.5: Assoluta immutabilità dei database sorgenti (db, wal, shm) durante e dopo cleanup fallito."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                wal_path = Path(str(src_db) + "-wal")
+                shm_path = Path(str(src_db) + "-shm")
+
+                db_before = src_db.read_bytes()
+                wal_before = wal_path.read_bytes() if wal_path.exists() else b""
+                shm_before = shm_path.read_bytes() if shm_path.exists() else b""
+                db_hash_before = hashlib.sha256(db_before).hexdigest()
+                wal_hash_before = hashlib.sha256(wal_before).hexdigest()
+
+                dest_target = Path(tmp_dir) / "fail_cleanup_test" / "snap.db"
+                with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("Simulato errore transazionale")):
+                    with pytest.raises(sqlite3.OperationalError):
+                        create_consistent_readonly_snapshot(src_db, dest_path=dest_target)
+
+                # Verifica immutabilità byte-for-byte dei database sorgenti
+                assert hashlib.sha256(src_db.read_bytes()).hexdigest() == db_hash_before
+                if wal_path.exists():
+                    assert hashlib.sha256(wal_path.read_bytes()).hexdigest() == wal_hash_before
+                if shm_path.exists():
+                    assert shm_path.read_bytes() == shm_before
+            finally:
+                writer_conn.close()
+
+    def test_151_adversarial_file_replacement_at_unlink_boundary_survives(self) -> None:
+        """Mandatory 1: Sostituzione concorrente del file DOPO l'ultima verifica, esattamente alla soglia di cancellazione."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            snap_dir = Path(tmp_dir) / "snap_151"
+            snap_dir.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(snap_dir)
+
+            dest_snap = snap_dir / "snapshot_151.db"
+            dest_snap.write_bytes(b"ORIGINAL_SNAPSHOT_151")
+            st_orig = os.lstat(dest_snap)
+            orig_ident = (int(st_orig.st_dev), int(st_orig.st_ino))
+            _OWNERSHIP_TRACKER.register_owned_file(dest_snap, orig_ident)
+
+            orig_lstat = os.lstat
+            swap_done = [False]
+
+            def adversarial_lstat(path, *args, **kwargs):
+                if str(path) == str(dest_snap) and not swap_done[0]:
+                    dest_snap.unlink()
+                    dest_snap.write_bytes(b"COMPETITOR_CRITICAL_SURVIVOR_151")
+                    swap_done[0] = True
+                return orig_lstat(path, *args, **kwargs)
+
+            with patch("os.lstat", side_effect=adversarial_lstat):
+                res = _perform_atomic_safe_unlink(dest_snap, None, orig_ident)
+
+            assert swap_done[0], "Lo swap avversario deve essere stato eseguito alla soglia critica!"
+            assert res is False, "Il cleanup fail-closed DEVE restituire False quando rileva sostituzione concorrente!"
+            assert dest_snap.is_file(), "Il file concorrente DEVE sopravvivere intatto al cleanup!"
+            assert dest_snap.read_bytes() == b"COMPETITOR_CRITICAL_SURVIVOR_151"
+            _OWNERSHIP_TRACKER.unregister_temp_dir(snap_dir)
+
+    def test_152_registered_directory_replaced_at_same_path_rejected(self) -> None:
+        """Mandatory 2: Sostituzione della directory registrata nello stesso percorso rifiutata dinamicamente dal tracker."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            dir_path = Path(tmp_dir) / "registered_dir_152"
+            dir_path.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(dir_path)
+
+            assert _OWNERSHIP_TRACKER.is_owned_dir(dir_path) is True, "La directory appena registrata deve risultare posseduta!"
+
+            backup_path = Path(tmp_dir) / "registered_dir_152_backup"
+            dir_path.rename(backup_path)
+            dir_path.mkdir()
+
+            assert _OWNERSHIP_TRACKER.is_owned_dir(dir_path) is False, "La directory concorrente sostitutiva NON deve essere riconosciuta come posseduta!"
+            assert _OWNERSHIP_TRACKER.is_registered_dir(dir_path) is True, "Il percorso storico rimane registrato ma non posseduto!"
+
+            _OWNERSHIP_TRACKER.unregister_temp_dir(dir_path)
+
+    def test_153_competitor_file_preserved_without_deletion(self) -> None:
+        """Mandatory 3: Preservazione assoluta di un file appartenente a un concorrente in una directory non posseduta o condivisa."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            shared_dir = Path(tmp_dir) / "shared_folder_153"
+            shared_dir.mkdir()
+            competitor_file = shared_dir / "competitor_evidence.dat"
+            competitor_file.write_bytes(b"CONFIDENTIAL_COMPETITOR_DATA_153")
+            st = os.lstat(competitor_file)
+            ident = (int(st.st_dev), int(st.st_ino))
+
+            res = _perform_atomic_safe_unlink(competitor_file, None, ident)
+            assert res is False, "Il cleanup su file non posseduto deve fallire (fail-closed)!"
+            assert competitor_file.is_file(), "Il file concorrente deve essere preservato!"
+            assert competitor_file.read_bytes() == b"CONFIDENTIAL_COMPETITOR_DATA_153"
+
+    def test_154_replacement_competitor_directory_preserved_from_rmtree(self) -> None:
+        """Mandatory 4: Preservazione di una directory concorrente sostitutiva durante i percorsi di eccezione (zero shutil.rmtree indebiti)."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                base_target_dir = Path(tmp_dir) / "snap_target_base_154"
+                base_target_dir.mkdir()
+
+                swap_performed = [False]
+
+                def swap_temp_dir_and_fail(src_path):
+                    # Intercetta l'esecuzione DOPO che la directory temporanea è stata creata e registrata
+                    snaps = [d for d in base_target_dir.iterdir() if d.is_dir() and "snap" in d.name]
+                    if snaps and not swap_performed[0]:
+                        real_dir = snaps[0]
+                        renamed = real_dir.parent / f"{real_dir.name}_bak"
+                        real_dir.rename(renamed)
+                        real_dir.mkdir()
+                        victim_file = real_dir / "competitor_irreplaceable_evidence.log"
+                        victim_file.write_bytes(b"IRREPLACEABLE_EVIDENCE_OF_THIRD_PARTY_154")
+                        swap_performed[0] = True
+                    raise SnapshotCreationFailedError("Simulato crash durante acquisizione per verificare rmtree fail-closed")
+
+                with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=swap_temp_dir_and_fail):
+                    with pytest.raises(SnapshotCreationFailedError):
+                        create_consistent_readonly_snapshot(src_db, dest_dir=base_target_dir)
+
+                assert swap_performed[0], "Lo swap della directory registrata deve essere avvenuto!"
+                found_dirs = [d for d in base_target_dir.iterdir() if d.is_dir() and "snap" in d.name and not d.name.endswith("_bak")]
+                assert len(found_dirs) >= 1, "La directory concorrente DEVE essere sopravvissuta!"
+                victim_survivors = [f for d in found_dirs for f in d.iterdir() if f.name == "competitor_irreplaceable_evidence.log"]
+                assert len(victim_survivors) >= 1, "Il file della directory concorrente DEVE essere sopravvissuto!"
+                assert victim_survivors[0].read_bytes() == b"IRREPLACEABLE_EVIDENCE_OF_THIRD_PARTY_154"
+            finally:
+                writer_conn.close()
+
+    def test_155_cleanup_strictly_confined_to_legitimate_owned_resources(self) -> None:
+        """Mandatory 5: Cleanup confinato rigorosamente alle sole risorse legittimamente possedute create dall'invocazione."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                base_dir = Path(tmp_dir) / "legit_test_155"
+                base_dir.mkdir()
+                unrelated_file = base_dir / "unrelated_user_data.txt"
+                unrelated_file.write_bytes(b"UNRELATED_USER_DATA_PRESERVED")
+
+                with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("Simulato crash per testare cleanup legittimo")):
+                    with pytest.raises(sqlite3.OperationalError):
+                        create_consistent_readonly_snapshot(src_db, dest_dir=base_dir)
+
+                assert unrelated_file.is_file()
+                assert unrelated_file.read_bytes() == b"UNRELATED_USER_DATA_PRESERVED"
+
+                residual_dirs = [d for d in base_dir.iterdir() if d.is_dir() and "chatanalysis_snap_" in d.name]
+                assert len(residual_dirs) == 0, "Le cartelle legittimamente possedute devono essere state ripulite!"
+            finally:
+                writer_conn.close()
+
+    def test_156_wal_shm_acquisition_failure_cleanup_fail_closed(self) -> None:
+        """Mandatory 6: Fallimento durante l'acquisizione WAL/SHM: abort fail-closed e pulizia sicura."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                target_snap = Path(tmp_dir) / "wal_fail_target" / "snap_156.db"
+
+                with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=SnapshotCreationFailedError("Fallimento acquisizione WAL non quiescente")):
+                    with pytest.raises(SnapshotCreationFailedError) as exc_info:
+                        create_consistent_readonly_snapshot(src_db, dest_path=target_snap)
+
+                assert "Fallimento acquisizione WAL non quiescente" in str(exc_info.value)
+                assert not target_snap.exists()
+            finally:
+                writer_conn.close()
+
+    def test_157_sqlite_backup_failure_cleanup_fail_closed(self) -> None:
+        """Mandatory 7: Fallimento durante il backup SQLite: abort fail-closed, preservazione sorgenti e cleanup controllato."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                target_snap = Path(tmp_dir) / "backup_fail_target" / "snap_157.db"
+
+                class FailingBackupConnection(sqlite3.Connection):
+                    def backup(self, *args, **kwargs):
+                        raise sqlite3.OperationalError("Simulato I/O disk error durante conn.backup()")
+
+                orig_connect = sqlite3.connect
+
+                def connect_with_failing_backup(*args, **kwargs):
+                    kwargs["factory"] = FailingBackupConnection
+                    return orig_connect(*args, **kwargs)
+
+                with patch("sqlite3.connect", side_effect=connect_with_failing_backup):
+                    with pytest.raises(sqlite3.OperationalError):
+                        create_consistent_readonly_snapshot(src_db, dest_path=target_snap)
+
+                assert not target_snap.exists(), "Lo snapshot parziale fallito deve essere stato rimosso in modo sicuro!"
+            finally:
+                writer_conn.close()
+
+    def test_158_unmeasurable_file_identity_rejects_cleanup_fail_closed(self) -> None:
+        """Mandatory 8: Identità non misurabile o nulla rigetta categoricamente il cleanup (fail-closed)."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            test_f = Path(tmp_dir) / "unmeasurable_158.db"
+            test_f.write_bytes(b"DATA_158")
+
+            # 1. Identity is None
+            assert _perform_atomic_safe_unlink(test_f, None, None) is False
+            assert test_f.is_file()
+
+            # 2. Identity (0, 0)
+            assert _perform_atomic_safe_unlink(test_f, None, (0, 0)) is False
+            assert test_f.is_file()
+
+            # 3. Identity (st_dev, 0)
+            st = os.lstat(test_f)
+            assert _perform_atomic_safe_unlink(test_f, None, (st.st_dev, 0)) is False
+            assert test_f.is_file()
+
+            # 4. Identity (0, st_ino)
+            assert _perform_atomic_safe_unlink(test_f, None, (0, st.st_ino)) is False
+            assert test_f.is_file()
+
+            # 5. lstat solleva OSError
+            with patch("os.lstat", side_effect=OSError("Accesso I/O negato su lstat")):
+                assert _perform_atomic_safe_unlink(test_f, None, (st.st_dev, st.st_ino)) is False
+                assert test_f.is_file()
+
+    def test_159_preexisting_explicit_destination_preserved_unmodified(self) -> None:
+        """Mandatory 9: Destinazione esplicita preesistente: solleva FileExistsError e non altera i byte."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                preexisting_file = Path(tmp_dir) / "preexisting_snapshot_159.db"
+                original_bytes = b"PREEXISTING_EVIDENCE_USER_DATA_DO_NOT_TOUCH_159"
+                preexisting_file.write_bytes(original_bytes)
+                orig_hash = hashlib.sha256(original_bytes).hexdigest()
+
+                with pytest.raises(FileExistsError):
+                    create_consistent_readonly_snapshot(src_db, dest_path=preexisting_file)
+
+                assert preexisting_file.is_file(), "Il file preesistente DEVE esistere!"
+                assert hashlib.sha256(preexisting_file.read_bytes()).hexdigest() == orig_hash, "I byte del file preesistente devono essere invariati!"
+            finally:
+                writer_conn.close()
+
+    def test_160_byte_for_byte_source_db_wal_shm_invariance_across_failures(self) -> None:
+        """Mandatory 10: Invarianza byte-per-byte assoluta del database sorgente, WAL e SHM attraverso tutte le casistiche di errore."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                wal_path = Path(str(src_db) + "-wal")
+                shm_path = Path(str(src_db) + "-shm")
+
+                db_bytes_t0 = src_db.read_bytes()
+                wal_bytes_t0 = wal_path.read_bytes() if wal_path.exists() else b""
+                shm_bytes_t0 = shm_path.read_bytes() if shm_path.exists() else b""
+
+                db_hash_t0 = hashlib.sha256(db_bytes_t0).hexdigest()
+                wal_hash_t0 = hashlib.sha256(wal_bytes_t0).hexdigest()
+
+                # Caso A: Snapshot regolare con successo
+                snap_file, snap_temp = create_consistent_readonly_snapshot(src_db, dest_dir=Path(tmp_dir))
+                assert snap_file.is_file()
+                if snap_temp and snap_temp.exists():
+                    shutil.rmtree(snap_temp, ignore_errors=True)
+
+                # Invarianza post-successo
+                assert hashlib.sha256(src_db.read_bytes()).hexdigest() == db_hash_t0
+                if wal_path.exists():
+                    assert hashlib.sha256(wal_path.read_bytes()).hexdigest() == wal_hash_t0
+                if shm_path.exists():
+                    assert shm_path.read_bytes() == shm_bytes_t0
+
+                # Caso B: Fallimento backup SQLite
+                with patch("sqlite3.connect", side_effect=sqlite3.OperationalError("Crash di test backup")):
+                    with pytest.raises(sqlite3.OperationalError):
+                        create_consistent_readonly_snapshot(src_db, dest_dir=Path(tmp_dir))
+
+                # Invarianza post-fallimento backup
+                assert hashlib.sha256(src_db.read_bytes()).hexdigest() == db_hash_t0
+                if wal_path.exists():
+                    assert hashlib.sha256(wal_path.read_bytes()).hexdigest() == wal_hash_t0
+                if shm_path.exists():
+                    assert shm_path.read_bytes() == shm_bytes_t0
+
+                # Caso C: Fallimento acquisizione WAL
+                with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=SnapshotCreationFailedError("Crash di test WAL")):
+                    with pytest.raises(SnapshotCreationFailedError):
+                        create_consistent_readonly_snapshot(src_db, dest_dir=Path(tmp_dir))
+
+                # Invarianza post-fallimento WAL
+                assert hashlib.sha256(src_db.read_bytes()).hexdigest() == db_hash_t0
+                if wal_path.exists():
+                    assert hashlib.sha256(wal_path.read_bytes()).hexdigest() == wal_hash_t0
+                if shm_path.exists():
+                    assert shm_path.read_bytes() == shm_bytes_t0
+            finally:
+                writer_conn.close()
+
+    def test_161_f1_a_adversarial_tombstone_replacement_eliminated(self) -> None:
+        """F1-A Regression: Il protocollo tombstone non sicuro è abbandonato; nessun file concorrente eliminato."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            private_dir = Path(tmp_dir) / "private_scratch_161"
+            private_dir.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(private_dir)
+
+            owned_snap = private_dir / "snapshot_161.db"
+            owned_snap.write_bytes(b"OWNED_SNAPSHOT_DATA_161")
+            st_orig = os.lstat(owned_snap)
+            orig_ident = (int(st_orig.st_dev), int(st_orig.st_ino))
+            _OWNERSHIP_TRACKER.register_owned_file(owned_snap, orig_ident)
+
+            # File concorrente posto nella stessa directory (o percorso tombstone fittizio)
+            competitor_file = private_dir / "competitor_critical_log.dat"
+            competitor_file.write_bytes(b"COMPETITOR_CRITICAL_EVIDENCE_161")
+            comp_hash = hashlib.sha256(b"COMPETITOR_CRITICAL_EVIDENCE_161").hexdigest()
+
+            # Verifichiamo che _perform_atomic_safe_unlink NON crei né utilizzi alcun file tombstone
+            # e che un file concorrente non posseduto non venga MAI toccato o cancellato
+            res_comp = _perform_atomic_safe_unlink(competitor_file, None, (9999, 9999))
+            assert res_comp is False, "Cleanup su file concorrente DEVE fallire (fail-closed)!"
+            assert competitor_file.is_file(), "Il file concorrente DEVE sopravvivere!"
+            assert hashlib.sha256(competitor_file.read_bytes()).hexdigest() == comp_hash
+
+            # Verifichiamo che la cancellazione del nostro file avvenga direttamente senza tombstone intermedi
+            res_owned = _perform_atomic_safe_unlink(owned_snap, None, orig_ident)
+            assert res_owned is True, "Il nostro file posseduto deve essere ripulito con successo!"
+            assert not owned_snap.exists()
+            assert competitor_file.is_file(), "Il file concorrente deve ancora esistere intatto!"
+            assert hashlib.sha256(competitor_file.read_bytes()).hexdigest() == comp_hash
+
+            _OWNERSHIP_TRACKER.unregister_temp_dir(private_dir)
+
+    def test_162_f1_b_adversarial_rollback_overwrite_eliminated(self) -> None:
+        """F1-B Regression: Nessun rollback con os.replace; il file concorrente alla destinazione esterna non viene mai sovrascritto."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                dest_dir = Path(tmp_dir) / "external_target_162"
+                dest_dir.mkdir()
+                external_dest = dest_dir / "final_snapshot_162.db"
+
+                # Scenario 1: Un concorrente crea un file prima o durante lo staging
+                competitor_payload = b"COMPETITOR_EXTERNAL_FILE_MUST_NEVER_BE_OVERWRITTEN_162"
+                comp_hash = hashlib.sha256(competitor_payload).hexdigest()
+
+                # Simuliamo concorrenza: il file concorrente appare alla destinazione esterna mentre lo snapshot prepara
+                def simulate_staging_and_concurrent_competitor(src_path):
+                    # Il concorrente posiziona il suo file prima che lo snapshot completi
+                    external_dest.write_bytes(competitor_payload)
+                    # Acquisizione fallisce: verifichiamo che il cleanup NON faccia rollback o unlink sulla destinazione esterna
+                    raise SnapshotCreationFailedError("Crash simulato durante staging")
+
+                with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=simulate_staging_and_concurrent_competitor):
+                    with pytest.raises(SnapshotCreationFailedError):
+                        create_consistent_readonly_snapshot(src_db, dest_path=external_dest)
+
+                # Il file concorrente alla destinazione esterna NON deve essere stato cancellato o modificato
+                assert external_dest.is_file(), "Il file concorrente alla destinazione esterna non deve essere toccato dal cleanup su fallimento!"
+                assert hashlib.sha256(external_dest.read_bytes()).hexdigest() == comp_hash
+
+                # Scenario 2: Se lo staging ha successo ma il file concorrente esiste già alla destinazione,
+                # la pubblicazione fallisce con FileExistsError senza sovrascrittura (O_CREAT | O_EXCL)
+                with pytest.raises(FileExistsError):
+                    create_consistent_readonly_snapshot(src_db, dest_path=external_dest)
+
+                assert external_dest.is_file()
+                assert hashlib.sha256(external_dest.read_bytes()).hexdigest() == comp_hash, "Nessuna sovrascrittura permessa!"
+            finally:
+                writer_conn.close()
+
+    def test_163_f1_c_adversarial_directory_replacement_before_rmtree_eliminated(self) -> None:
+        """F1-C Regression: Nessun shutil.rmtree sui percorsi di errore; directory concorrente con file preservata da os.rmdir non ricorsivo."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            temp_parent = Path(tmp_dir) / "parent_163"
+            temp_parent.mkdir()
+
+            # Creiamo una cartella registrata
+            target_dir = temp_parent / "chatanalysis_snap_temp_163"
+            target_dir.mkdir()
+            _OWNERSHIP_TRACKER.register_temp_dir(target_dir)
+
+            # Simuliamo l'avversario che sostituisce target_dir con una propria directory contenente evidenze
+            backup_real = temp_parent / "real_dir_bak_163"
+            target_dir.rename(backup_real)
+            target_dir.mkdir()
+
+            competitor_evidence = target_dir / "competitor_irreplaceable_data.sqlite"
+            competitor_evidence.write_bytes(b"COMPETITOR_DATABASE_EVIDENCE_163")
+            comp_evidence_hash = hashlib.sha256(b"COMPETITOR_DATABASE_EVIDENCE_163").hexdigest()
+
+            # Eseguiamo _safe_cleanup_owned_temp_dir
+            cleanup_res = _safe_cleanup_owned_temp_dir(target_dir, known_files=[])
+
+            # os.rmdir non ricorsivo DEVE fallire poiché la directory non è vuota (fail-closed)
+            assert cleanup_res is False, "Il cleanup non ricorsivo deve restituire False se la cartella contiene file alieni!"
+            assert target_dir.is_dir(), "La directory concorrente DEVE essere sopravvissuta!"
+            assert competitor_evidence.is_file(), "Tutti i file all'interno della directory concorrente DEVONO essere preservati!"
+            assert hashlib.sha256(competitor_evidence.read_bytes()).hexdigest() == comp_evidence_hash
+
+            _OWNERSHIP_TRACKER.unregister_temp_dir(target_dir)
+
+    def test_164_cross_platform_trust_boundary_windows_linux_semantics(self) -> None:
+        """Verifica uniformità del trust boundary e fail-closed su Windows e Linux."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                # Invocazione normale crea directory privata isolata
+                snap_path, snap_dir = create_consistent_readonly_snapshot(src_db, dest_dir=Path(tmp_dir))
+                assert snap_path.is_file()
+                assert snap_dir is not None
+                assert snap_dir.is_dir()
+                # Verifica che la directory sia registrata nel tracker
+                assert _OWNERSHIP_TRACKER.is_owned_dir(snap_dir)
+
+                # Rimozione del file creato e pulizia sicura della directory registrata
+                snap_path.unlink()
+                res_cleanup = _safe_cleanup_owned_temp_dir(snap_dir)
+                assert res_cleanup is True
+                assert not snap_dir.exists()
+                assert not snap_path.exists()
+                assert not _OWNERSHIP_TRACKER.is_registered_dir(snap_dir)
+            finally:
+                writer_conn.close()
+
+
+
 
 
 

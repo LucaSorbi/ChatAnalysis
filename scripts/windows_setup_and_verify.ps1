@@ -51,17 +51,19 @@ Write-Host "Cartella progetto: $ProjectRoot" -ForegroundColor Gray
 # ---------------------------------------------------------------------------
 Write-Host "`n[1/8] Verifica interprete Python..." -ForegroundColor Yellow
 
-$PythonCmd = $null
+$PythonExe = $null
+$PythonArgs = @()
 if (Get-Command "python" -ErrorAction SilentlyContinue) {
-    $PythonCmd = "python"
+    $PythonExe = "python"
 } elseif (Get-Command "py" -ErrorAction SilentlyContinue) {
-    $PythonCmd = "py -3"
+    $PythonExe = "py"
+    $PythonArgs = @("-3")
 } else {
     Write-Error "Nessun interprete Python trovato nel PATH. Installare Python 3.12+ a 64 bit da python.org."
     exit 1
 }
 
-$PyVerOutput = & $PythonCmd -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro};{sys.maxsize > 2**32}')"
+$PyVerOutput = & $PythonExe @PythonArgs -c "import sys; print(f'{sys.version_info.major}.{sys.version_info.minor}.{sys.version_info.micro};{sys.maxsize > 2**32}')"
 $PyVerParts = $PyVerOutput.Trim().Split(";")
 $PyVersion = $PyVerParts[0]
 $Is64Bit = [System.Convert]::ToBoolean($PyVerParts[1])
@@ -93,7 +95,7 @@ $VenvPython = Join-Path $VenvDir "Scripts\python.exe"
 
 if (-not (Test-Path $VenvPython)) {
     Write-Host "  Creazione nuovo ambiente virtuale in $VenvDir..." -ForegroundColor Gray
-    & $PythonCmd -m venv $VenvDir
+    & $PythonExe @PythonArgs -m venv $VenvDir
     if ($LASTEXITCODE -ne 0) {
         Write-Error "Creazione del virtual environment fallita."
         exit 1
@@ -199,9 +201,30 @@ if ($SkipTests) {
     }
 
     Write-Host "  Esecuzione test snapshot ownership e F1 TOCTOU..." -ForegroundColor Gray
-    & $ActivePython -m pytest tests/unit/test_checkpoint_preflight_resume.py -k "test_122 or test_136 or test_137 or test_138 or test_139 or test_140 or test_141 or test_144" -v
+    & $ActivePython -m pytest tests/unit/test_checkpoint_preflight_resume.py -k "test_122 or test_136 or test_137 or test_138 or test_139 or test_140 or test_141 or test_144 or test_145" -v
     if ($LASTEXITCODE -ne 0) {
         Write-Error "I test di ownership snapshot F1 sono falliti!"
+        exit 1
+    }
+
+    Write-Host "  Esecuzione test Prova del Nove su Discovery recuperata da SQLite..." -ForegroundColor Gray
+    & $ActivePython -m pytest tests/unit/test_priority1_recovered_discovery_prova_del_nove.py -v
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "I test di Prova del Nove su Discovery recuperata da SQLite sono falliti!"
+        exit 1
+    }
+
+    Write-Host "  Esecuzione test avvio Streamlit Windows (Priorità 3)..." -ForegroundColor Gray
+    & $ActivePython -m pytest tests/unit/test_priority3_streamlit_windows_startup.py -v
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "I test di avvio Streamlit Windows sono falliti!"
+        exit 1
+    }
+
+    Write-Host "  Esecuzione test diagnostica live e regressione 25/26 - 17/26 (Priorità 4)..." -ForegroundColor Gray
+    & $ActivePython -m pytest tests/unit/test_priority4_live_diagnostics_integrity.py -v
+    if ($LASTEXITCODE -ne 0) {
+        Write-Error "I test di integrità diagnostica live sono falliti!"
         exit 1
     }
     Write-Host "  [OK] Tutti i test di stabilizzazione e regressione sono stati superati." -ForegroundColor Green
@@ -241,7 +264,7 @@ Write-Host "=================================================================" -
 Write-Host "Per avviare ChatAnalysis con interfaccia grafica Streamlit:" -ForegroundColor Gray
 Write-Host "  .\scripts\run_streamlit_windows.ps1" -ForegroundColor Yellow
 Write-Host "oppure:" -ForegroundColor Gray
-Write-Host "  streamlit run ui/application.py" -ForegroundColor Yellow
+Write-Host "  streamlit run app.py" -ForegroundColor Yellow
 
 if ($LaunchUi) {
     Write-Host "`nAvvio immediato di Streamlit in corso..." -ForegroundColor Cyan

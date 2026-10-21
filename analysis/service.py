@@ -19,6 +19,7 @@ from datetime import datetime, timezone
 import hashlib
 import json
 import logging
+from pathlib import Path
 import re
 import time
 import uuid
@@ -104,12 +105,14 @@ from analysis.models import (
     AnalysisNoEvidenceError,
     AnalysisOrigin,
     AnalysisPlan,
+    AttestationLevel,
     ChunkDiagnosticCategory,
     ChunkDiagnosticRecord,
     ChunkLifecycleStatus,
     ConsistencyResult,
     DiscoveredTopicRef,
     DiscoveryChunkOutcome,
+    LoadingMode,
     OperationalAnalysisConfig,
     OperationalAnalysisFailedError,
     OperationalProfile,
@@ -137,6 +140,18 @@ SYSTEMIC_BACKEND_ERRORS = (
     AiModelAmbiguousError,
     AiModelLoadError,
     AiModelMismatchError,
+)
+
+PROGRAMMING_ERRORS = (
+    NameError,
+    AttributeError,
+    ImportError,
+    SyntaxError,
+    UnboundLocalError,
+    TypeError,
+    KeyError,
+    IndexError,
+    AssertionError,
 )
 
 
@@ -191,7 +206,10 @@ class LocalTopicAnalysisService:
         authoritative_live_run_ids: MutableSet[str] | None = None,
         checkpoint_store: AnalysisCheckpointStore | None = None,
         enable_checkpointing: bool = False,
+        checkpoint_dir: str | Path | None = None,
     ) -> None:
+        if checkpoint_dir is not None and checkpoint_store is None:
+            checkpoint_store = AnalysisCheckpointStore(checkpoint_dir=checkpoint_dir)
         cfg = config or OperationalAnalysisConfig()
         if profile is not None:
             cfg = cfg.with_profile(profile)
@@ -483,20 +501,54 @@ class LocalTopicAnalysisService:
                 "Le reference sintetiche dimostrative non possono essere registrate nel registro autorevole delle Discovery live."
             )
 
-        # MOCK_INSPECTION sul percorso di registrazione live -> respinta: deve usare il test seam esplicito
-        if origin_str == AnalysisOrigin.MOCK_INSPECTION.value:
-            raise TopicProvenanceError(
-                f"Impossibile registrare la run '{eff_run_id}' come live: l'origine è MOCK_INSPECTION. "
-                "Le run mock devono essere registrate esclusivamente tramite il test seam esplicito register_mock_discovery_run()."
-            )
+        is_recovered = bool(
+            discovery_result.metadata.get("is_persisted_recovery")
+            or discovery_result.metadata.get("loading_mode") == LoadingMode.CHECKPOINT_RESTORE.value
+            or discovery_result.metadata.get("recovery_mode") == "CHECKPOINT_RESTORE"
+        )
 
-        # Protezione anti-falsificazione: una run con origin LIVE_LM_STUDIO NON può essere iniettata arbitrariamente dall'esterno
-        # senza essere stata effettivamente generata dall'esecuzione operativa run_topic_discovery()
-        if origin_str == AnalysisOrigin.LIVE_LM_STUDIO.value and eff_run_id not in self._authoritative_live_run_ids:
-            raise TopicProvenanceError(
-                f"Tentativo di registrazione arbitraria di una run live non certificata ('{eff_run_id}'). "
-                "Le run con origine LIVE_LM_STUDIO possono essere registrate esclusivamente dal percorso autoritativo run_topic_discovery()."
-            )
+        if not is_recovered:
+            # MOCK_INSPECTION sul percorso di registrazione live -> respinta: deve usare il test seam esplicito
+            if origin_str == AnalysisOrigin.MOCK_INSPECTION.value:
+                raise TopicProvenanceError(
+                    f"Impossibile registrare la run '{eff_run_id}' come live: l'origine è MOCK_INSPECTION. "
+                    "Le run mock devono essere registrate esclusivamente tramite il test seam esplicito register_mock_discovery_run()."
+                )
+
+            # Protezione anti-falsificazione: una run con origin LIVE_LM_STUDIO NON può essere iniettata arbitrariamente dall'esterno
+            # senza essere stata effettivamente generata dall'esecuzione operativa run_topic_discovery()
+            if origin_str == AnalysisOrigin.LIVE_LM_STUDIO.value and eff_run_id not in self._authoritative_live_run_ids:
+                raise TopicProvenanceError(
+                    f"Tentativo di registrazione arbitraria di una run live non certificata ('{eff_run_id}'). "
+                    "Le run con origine LIVE_LM_STUDIO possono essere registrate esclusivamente dal percorso autoritativo run_topic_discovery()."
+                )
+        else:
+            # Gestione autenticata di una run recuperata: verifica rigorosa contro SQLite
+            if not self.enable_checkpointing or self.checkpoint_store is None:
+                raise TopicProvenanceError(
+                    f"Impossibile registrare la run recuperata '{eff_run_id}': checkpointing disabilitato o store non disponibile (politica fail-closed)."
+                )
+            cfg_fp = discovery_result.metadata.get("config_fingerprint")
+            doc_fp = discovery_result.metadata.get("document_fingerprint")
+            if not cfg_fp or not doc_fp:
+                raise TopicProvenanceError(
+                    f"Impossibile registrare la run recuperata '{eff_run_id}': metadati di fingerprint incompleti o assenti (politica fail-closed)."
+                )
+            chk_data = self.checkpoint_store.load_checkpoint(str(doc_fp).strip(), str(cfg_fp).strip())
+            if chk_data is None or chk_data.document_id != document_id or chk_data.analysis_type != "discovery":
+                raise TopicProvenanceError(
+                    f"Tentativo di registrazione arbitraria di una run recuperata non autenticata ('{eff_run_id}') "
+                    f"per il documento '{document_id}' (politica fail-closed)."
+                )
+            if not chk_data.completed_chunk_indices and not chk_data.serialized_results and not chk_data.subchunks:
+                raise TopicProvenanceError(
+                    f"Tentativo di registrazione di run recuperata '{eff_run_id}' priva di chunk validati."
+                )
+            chk_origin = getattr(chk_data, "origin", None) or ""
+            if chk_origin and chk_origin in {o.value for o in AnalysisOrigin} and str(chk_origin).strip() != origin_str:
+                raise TopicProvenanceError(
+                    f"Discrepanza di origine per la run recuperata '{eff_run_id}': metadata='{origin_str}' != checkpoint='{chk_origin}'."
+                )
 
         # Se la run live è già registrata, verifica che la registrazione esterna non tenti di sovrascriverla o alterarla
         existing = self._discovery_runs.get(document_id, {}).get(eff_run_id)
@@ -907,6 +959,10 @@ class LocalTopicAnalysisService:
                 results.append(res)
                 tracker.chunk_success(sub_display_idx, record_request=False)
             except Exception as s_exc:
+                if isinstance(s_exc, PROGRAMMING_ERRORS):
+                    tracker.chunk_failed(sub_display_idx, str(s_exc))
+                    tracker.fail(str(s_exc))
+                    raise
                 cat, phase, safe_desc = classify_discovery_exception(s_exc)
                 is_val_err = isinstance(s_exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
                 tracker.chunk_failed(sub_display_idx, str(s_exc), is_protocol_or_validation=is_val_err)
@@ -1092,6 +1148,8 @@ class LocalTopicAnalysisService:
             except Exception:
                 pass
 
+            all_chunk_diagnostics: list[ChunkDiagnosticRecord] = []
+
             if len(chunks) == 1:
                 total_units = 1
                 completed_count = 1
@@ -1101,8 +1159,27 @@ class LocalTopicAnalysisService:
                     result = cached_results[0]
                     tracker.chunk_success(1, record_request=False)
                     tracker.complete("Topic Detection completata da checkpoint: 1/1 blocchi recuperati.")
+                    all_chunk_diagnostics.append(
+                        ChunkDiagnosticRecord(
+                            chunk_index=0,
+                            chunk_id=chunks[0].document_id,
+                            status=ChunkLifecycleStatus.SUCCESS.value,
+                            attempts=1,
+                            duration_seconds=0.0,
+                            model_id=resolved_model,
+                            http_status=200,
+                            diagnostic_category="SUCCESS",
+                            failure_phase="none",
+                            error_detail="",
+                            json_valid=True,
+                            schema_valid=True,
+                            evidence_valid=True,
+                            checkpoint_saved=True,
+                        )
+                    )
                 else:
                     tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
+                    t_chunk_start = time.perf_counter()
                     try:
                         result = analyzer.detect_topic(
                             document=chunks[0],
@@ -1116,10 +1193,44 @@ class LocalTopicAnalysisService:
                             operational_mode=operational_mode,
                             context_length=self.context_length,
                         )
+                        dur = round(time.perf_counter() - t_chunk_start, 3)
                         tracker.chunk_success(1, record_request=False)
                         tracker.complete("Topic Detection completata.")
+                        diag = ChunkDiagnosticRecord(
+                            chunk_index=0,
+                            chunk_id=chunks[0].document_id,
+                            status=ChunkLifecycleStatus.SUCCESS.value,
+                            attempts=1,
+                            duration_seconds=dur,
+                            model_id=resolved_model,
+                            http_status=200,
+                            diagnostic_category="SUCCESS",
+                            failure_phase="none",
+                            error_detail="",
+                            json_valid=True,
+                            schema_valid=True,
+                            evidence_valid=True,
+                            checkpoint_saved=(chk_store is not None),
+                        )
+                        all_chunk_diagnostics.append(diag)
                         if chk_store is not None:
                             try:
+                                eff_origin_val = (
+                                    AnalysisOrigin.LIVE_LM_STUDIO.value
+                                    if isinstance(target_client, LmStudioClient)
+                                    else AnalysisOrigin.MOCK_INSPECTION.value
+                                )
+                                res_m = dict(result.metadata)
+                                res_m["origin"] = eff_origin_val
+                                res_m["run_id"] = run_id
+                                result = TopicDetectionResult(
+                                    topic=result.topic,
+                                    decision=result.decision,
+                                    evidence_ids=result.evidence_ids,
+                                    rationale=result.rationale,
+                                    provenance_document_id=result.provenance_document_id,
+                                    metadata=res_m,
+                                )
                                 chk_store.save_chunk(
                                     document_id=document.document_id,
                                     document_fingerprint=doc_fp,
@@ -1130,10 +1241,24 @@ class LocalTopicAnalysisService:
                                     analysis_type="detection",
                                     model_id=resolved_model,
                                     prompt_version="detection_operational" if operational_mode else "detection",
+                                    origin=eff_origin_val,
+                                    run_id=run_id,
+                                )
+                                chk_store.save_chunk_diagnostic(
+                                    document_id=document.document_id,
+                                    document_fingerprint=doc_fp,
+                                    config_fingerprint=cfg_fp,
+                                    diagnostic=diag,
+                                    total_planned_chunks=1,
+                                    analysis_type="detection",
+                                    model_id=resolved_model,
+                                    prompt_version="detection_operational" if operational_mode else "detection",
                                 )
                             except Exception as chk_err:
                                 tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
                     except FATAL_BACKEND_ERRORS as fatal_err:
+                        dur = round(time.perf_counter() - t_chunk_start, 3)
+                        cat, phase, safe_desc = classify_discovery_exception(fatal_err)
                         if (
                             isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
                             and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
@@ -1179,10 +1304,70 @@ class LocalTopicAnalysisService:
                                 tracker.fail(str(fatal_err))
                                 raise
                         else:
+                            diag = ChunkDiagnosticRecord(
+                                chunk_index=0,
+                                chunk_id=chunks[0].document_id,
+                                status=ChunkLifecycleStatus.FAILED.value,
+                                attempts=1,
+                                duration_seconds=dur,
+                                model_id=resolved_model,
+                                http_status=getattr(fatal_err, "status_code", None),
+                                error_type=type(fatal_err).__name__,
+                                diagnostic_category=cat,
+                                failure_phase=phase,
+                                error_detail=safe_desc,
+                                checkpoint_saved=False,
+                            )
+                            all_chunk_diagnostics.append(diag)
+                            if chk_store is not None:
+                                try:
+                                    chk_store.save_chunk_diagnostic(
+                                        document_id=document.document_id,
+                                        document_fingerprint=doc_fp,
+                                        config_fingerprint=cfg_fp,
+                                        diagnostic=diag,
+                                        total_planned_chunks=1,
+                                        analysis_type="detection",
+                                        model_id=resolved_model,
+                                        prompt_version="detection_operational" if operational_mode else "detection",
+                                    )
+                                except Exception:
+                                    pass
                             tracker.chunk_failed(1, str(fatal_err))
                             tracker.fail(str(fatal_err))
                             raise
                     except Exception as exc:
+                        dur = round(time.perf_counter() - t_chunk_start, 3)
+                        cat, phase, safe_desc = classify_discovery_exception(exc)
+                        diag = ChunkDiagnosticRecord(
+                            chunk_index=0,
+                            chunk_id=chunks[0].document_id,
+                            status=ChunkLifecycleStatus.FAILED.value,
+                            attempts=1,
+                            duration_seconds=dur,
+                            model_id=resolved_model,
+                            http_status=getattr(exc, "status_code", None),
+                            error_type=type(exc).__name__,
+                            diagnostic_category=cat,
+                            failure_phase=phase,
+                            error_detail=safe_desc,
+                            checkpoint_saved=False,
+                        )
+                        all_chunk_diagnostics.append(diag)
+                        if chk_store is not None:
+                            try:
+                                chk_store.save_chunk_diagnostic(
+                                    document_id=document.document_id,
+                                    document_fingerprint=doc_fp,
+                                    config_fingerprint=cfg_fp,
+                                    diagnostic=diag,
+                                    total_planned_chunks=1,
+                                    analysis_type="detection",
+                                    model_id=resolved_model,
+                                    prompt_version="detection_operational" if operational_mode else "detection",
+                                )
+                            except Exception:
+                                pass
                         tracker.chunk_failed(1, str(exc))
                         tracker.fail(str(exc))
                         raise OperationalAnalysisFailedError(
@@ -1233,6 +1418,7 @@ class LocalTopicAnalysisService:
                 meta["chunk_count"] = int(total_units)
                 meta["completed_chunk_count"] = int(completed_count)
                 meta["failed_chunk_count"] = int(failed_count)
+                meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
                 is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
                 meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
                 meta["is_label_only"] = is_label_only
@@ -1265,9 +1451,28 @@ class LocalTopicAnalysisService:
                         )
                     )
                     tracker.chunk_success(current_tracker_idx, record_request=False)
+                    all_chunk_diagnostics.append(
+                        ChunkDiagnosticRecord(
+                            chunk_index=idx,
+                            chunk_id=chunk.document_id,
+                            status=ChunkLifecycleStatus.SUCCESS.value,
+                            attempts=1,
+                            duration_seconds=0.0,
+                            model_id=resolved_model,
+                            http_status=200,
+                            diagnostic_category="SUCCESS",
+                            failure_phase="none",
+                            error_detail="",
+                            json_valid=True,
+                            schema_valid=True,
+                            evidence_valid=True,
+                            checkpoint_saved=True,
+                        )
+                    )
                     continue
 
                 tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
+                t_chunk_start = time.perf_counter()
                 try:
                     res = analyzer.detect_topic(
                         document=chunk,
@@ -1281,6 +1486,7 @@ class LocalTopicAnalysisService:
                         operational_mode=operational_mode,
                         context_length=self.context_length,
                     )
+                    dur = round(time.perf_counter() - t_chunk_start, 3)
                     outcomes.append(
                         ChunkAnalysisOutcome(
                             chunk_id=chunk.document_id,
@@ -1289,8 +1495,41 @@ class LocalTopicAnalysisService:
                         )
                     )
                     tracker.chunk_success(current_tracker_idx, record_request=False)
+                    diag = ChunkDiagnosticRecord(
+                        chunk_index=idx,
+                        chunk_id=chunk.document_id,
+                        status=ChunkLifecycleStatus.SUCCESS.value,
+                        attempts=1,
+                        duration_seconds=dur,
+                        model_id=resolved_model,
+                        http_status=200,
+                        diagnostic_category="SUCCESS",
+                        failure_phase="none",
+                        error_detail="",
+                        json_valid=True,
+                        schema_valid=True,
+                        evidence_valid=True,
+                        checkpoint_saved=(chk_store is not None),
+                    )
+                    all_chunk_diagnostics.append(diag)
                     if chk_store is not None:
                         try:
+                            eff_origin_val = (
+                                AnalysisOrigin.LIVE_LM_STUDIO.value
+                                if isinstance(target_client, LmStudioClient)
+                                else AnalysisOrigin.MOCK_INSPECTION.value
+                            )
+                            res_m = dict(res.metadata)
+                            res_m["origin"] = eff_origin_val
+                            res_m["run_id"] = run_id
+                            res = TopicDetectionResult(
+                                topic=res.topic,
+                                decision=res.decision,
+                                evidence_ids=res.evidence_ids,
+                                rationale=res.rationale,
+                                provenance_document_id=res.provenance_document_id,
+                                metadata=res_m,
+                            )
                             chk_store.save_chunk(
                                 document_id=document.document_id,
                                 document_fingerprint=doc_fp,
@@ -1301,10 +1540,24 @@ class LocalTopicAnalysisService:
                                 analysis_type="detection",
                                 model_id=resolved_model,
                                 prompt_version="detection_operational" if operational_mode else "detection",
+                                origin=eff_origin_val,
+                                run_id=run_id,
+                            )
+                            chk_store.save_chunk_diagnostic(
+                                document_id=document.document_id,
+                                document_fingerprint=doc_fp,
+                                config_fingerprint=cfg_fp,
+                                diagnostic=diag,
+                                total_planned_chunks=len(chunks),
+                                analysis_type="detection",
+                                model_id=resolved_model,
+                                prompt_version="detection_operational" if operational_mode else "detection",
                             )
                         except Exception as chk_err:
                             tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
                 except FATAL_BACKEND_ERRORS as fatal_err:
+                    dur = round(time.perf_counter() - t_chunk_start, 3)
+                    cat, phase, safe_desc = classify_discovery_exception(fatal_err)
                     # Se è un CONTEXT_OVERFLOW recuperabile su chunk con più di un bundle, tenta suddivisione
                     if (
                         isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
@@ -1325,12 +1578,44 @@ class LocalTopicAnalysisService:
                             tracker=tracker,
                             chunk_idx_1based=current_tracker_idx,
                         )
-                    elif isinstance(fatal_err, SYSTEMIC_BACKEND_ERRORS):
-                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
-                        tracker.fail(str(fatal_err))
-                        raise
+                        outcomes.extend(sub_outcomes)
+                        for so in sub_outcomes:
+                            if so.diagnostic:
+                                all_chunk_diagnostics.append(so.diagnostic)
                     else:
+                        diag = ChunkDiagnosticRecord(
+                            chunk_index=idx,
+                            chunk_id=chunk.document_id,
+                            status=ChunkLifecycleStatus.FAILED.value,
+                            attempts=1,
+                            duration_seconds=dur,
+                            model_id=resolved_model,
+                            http_status=getattr(fatal_err, "status_code", None),
+                            error_type=type(fatal_err).__name__,
+                            diagnostic_category=cat,
+                            failure_phase=phase,
+                            error_detail=safe_desc,
+                            checkpoint_saved=False,
+                        )
+                        all_chunk_diagnostics.append(diag)
+                        if chk_store is not None:
+                            try:
+                                chk_store.save_chunk_diagnostic(
+                                    document_id=document.document_id,
+                                    document_fingerprint=doc_fp,
+                                    config_fingerprint=cfg_fp,
+                                    diagnostic=diag,
+                                    total_planned_chunks=len(chunks),
+                                    analysis_type="detection",
+                                    model_id=resolved_model,
+                                    prompt_version="detection_operational" if operational_mode else "detection",
+                                )
+                            except Exception:
+                                pass
                         tracker.chunk_failed(current_tracker_idx, str(fatal_err))
+                        if isinstance(fatal_err, SYSTEMIC_BACKEND_ERRORS) or not operational_mode or (chk_store is not None):
+                            tracker.fail(str(fatal_err))
+                            raise
                         outcomes.append(
                             ChunkAnalysisOutcome(
                                 chunk_id=chunk.document_id,
@@ -1341,6 +1626,41 @@ class LocalTopicAnalysisService:
                             )
                         )
                 except Exception as exc:
+                    if not operational_mode or isinstance(exc, PROGRAMMING_ERRORS):
+                        tracker.chunk_failed(current_tracker_idx, str(exc))
+                        tracker.fail(str(exc))
+                        raise
+                    dur = round(time.perf_counter() - t_chunk_start, 3)
+                    cat, phase, safe_desc = classify_discovery_exception(exc)
+                    diag = ChunkDiagnosticRecord(
+                        chunk_index=idx,
+                        chunk_id=chunk.document_id,
+                        status=ChunkLifecycleStatus.FAILED.value,
+                        attempts=1,
+                        duration_seconds=dur,
+                        model_id=resolved_model,
+                        http_status=getattr(exc, "status_code", None),
+                        error_type=type(exc).__name__,
+                        diagnostic_category=cat,
+                        failure_phase=phase,
+                        error_detail=safe_desc,
+                        checkpoint_saved=False,
+                    )
+                    all_chunk_diagnostics.append(diag)
+                    if chk_store is not None:
+                        try:
+                            chk_store.save_chunk_diagnostic(
+                                document_id=document.document_id,
+                                document_fingerprint=doc_fp,
+                                config_fingerprint=cfg_fp,
+                                diagnostic=diag,
+                                total_planned_chunks=len(chunks),
+                                analysis_type="detection",
+                                model_id=resolved_model,
+                                prompt_version="detection_operational" if operational_mode else "detection",
+                            )
+                        except Exception:
+                            pass
                     tracker.chunk_failed(current_tracker_idx, str(exc))
                     outcomes.append(
                         ChunkAnalysisOutcome(
@@ -1426,6 +1746,7 @@ class LocalTopicAnalysisService:
         meta["chunk_count"] = int(total_units)
         meta["completed_chunk_count"] = int(completed_count)
         meta["failed_chunk_count"] = int(failed_count)
+        meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
         is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
         meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
         meta["is_label_only"] = is_label_only
@@ -1723,6 +2044,19 @@ class LocalTopicAnalysisService:
                             tracker.chunk_success(1, record_request=False)
                             tracker.complete("Topic Discovery completata.")
                             chk_saved = False
+                            eff_origin_val = (
+                                AnalysisOrigin.LIVE_LM_STUDIO.value
+                                if isinstance(target_client, LmStudioClient)
+                                else AnalysisOrigin.MOCK_INSPECTION.value
+                            )
+                            disc_m = dict(disc_res.metadata)
+                            disc_m["origin"] = eff_origin_val
+                            disc_m["run_id"] = run_id
+                            disc_res = TopicDiscoveryResult(
+                                topics=disc_res.topics,
+                                provenance_document_id=disc_res.provenance_document_id,
+                                metadata=disc_m,
+                            )
                             if chk_store is not None:
                                 try:
                                     chk_store.save_chunk(
@@ -1735,6 +2069,8 @@ class LocalTopicAnalysisService:
                                         analysis_type="discovery",
                                         model_id=resolved_model,
                                         prompt_version="discovery_operational",
+                                        origin=eff_origin_val,
+                                        run_id=run_id,
                                     )
                                     chk_saved = True
                                 except Exception as chk_err:
@@ -2028,6 +2364,19 @@ class LocalTopicAnalysisService:
                     )
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     chk_saved = False
+                    eff_origin_val = (
+                        AnalysisOrigin.LIVE_LM_STUDIO.value
+                        if isinstance(target_client, LmStudioClient)
+                        else AnalysisOrigin.MOCK_INSPECTION.value
+                    )
+                    res_m = dict(res.metadata)
+                    res_m["origin"] = eff_origin_val
+                    res_m["run_id"] = run_id
+                    res = TopicDiscoveryResult(
+                        topics=res.topics,
+                        provenance_document_id=res.provenance_document_id,
+                        metadata=res_m,
+                    )
                     if chk_store is not None:
                         try:
                             chk_store.save_chunk(
@@ -2040,6 +2389,8 @@ class LocalTopicAnalysisService:
                                 analysis_type="discovery",
                                 model_id=resolved_model,
                                 prompt_version="discovery_operational",
+                                origin=eff_origin_val,
+                                run_id=run_id,
                             )
                             chk_saved = True
                         except Exception as chk_err:
@@ -2187,10 +2538,22 @@ class LocalTopicAnalysisService:
                                 logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
                                 tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
                 except Exception as exc:
+                    if isinstance(exc, PROGRAMMING_ERRORS):
+                        tracker.chunk_failed(current_tracker_idx, str(exc))
+                        tracker.fail(str(exc))
+                        raise
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     cat, phase, safe_desc = classify_discovery_exception(exc)
                     is_val_err = isinstance(exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
                     tracker.chunk_failed(current_tracker_idx, str(exc), is_protocol_or_validation=is_val_err)
+                    if isinstance(exc, AiInvalidEvidenceCitationError):
+                        logger.warning(
+                            "Chunk %d (indice %d) validazione fallita: INVALID_EVIDENCE_ID dopo %d tentativi. Citazioni non valide: %s",
+                            current_tracker_idx,
+                            idx,
+                            chunk_attempts,
+                            getattr(exc, "invalid_evidence_ids", ()),
+                        )
                     http_st = getattr(exc, "status_code", None)
                     if isinstance(exc, (AiInvalidEvidenceCitationError, AiStructuredOutputError)):
                         http_st = 200
@@ -2490,10 +2853,48 @@ class LocalTopicAnalysisService:
         else:
             topics = ()
 
+        persisted_origin = None
+        # Ricostruzione rigorosa dell'origine dell'inferenza dal checkpoint
+        if chk_meta.get("origin") and chk_meta["origin"] in {o.value for o in AnalysisOrigin}:
+            persisted_origin = chk_meta["origin"]
+        if not persisted_origin and checkpoint is not None:
+            if getattr(checkpoint, "origin", None) and checkpoint.origin in {o.value for o in AnalysisOrigin}:
+                persisted_origin = checkpoint.origin
+            if not persisted_origin and cached_discovery_results:
+                for cr in cached_discovery_results.values():
+                    o = cr.metadata.get("origin")
+                    if o and o in {e.value for e in AnalysisOrigin}:
+                        persisted_origin = o
+                        break
+            if not persisted_origin and checkpoint.serialized_results:
+                for s_data in checkpoint.serialized_results.values():
+                    if isinstance(s_data, dict):
+                        m = s_data.get("metadata", {})
+                        if isinstance(m, dict):
+                            o = m.get("origin")
+                            if o and o in {e.value for e in AnalysisOrigin}:
+                                persisted_origin = o
+                                break
+        if not persisted_origin and saved_subchunks:
+            for sub in saved_subchunks:
+                s_res = sub.get("serialized_result", {})
+                if isinstance(s_res, dict):
+                    o = s_res.get("metadata", {}).get("origin")
+                    if o and o in {e.value for e in AnalysisOrigin}:
+                        persisted_origin = o
+                        break
+
+        orig_run_id = chk_meta.get("run_id") or getattr(checkpoint, "run_id", "") or f"persisted_{cfg_fp[:8]}"
+        attestation = AttestationLevel.CHECKPOINT_AUTHENTICATED.value if persisted_origin else AttestationLevel.UNATTESTED.value
+
         meta = {
             "run_id": f"persisted_{cfg_fp[:8]}",
+            "original_run_id": orig_run_id,
             "document_id": document.document_id,
-            "origin": "RECOVERED_CHECKPOINT",
+            "origin": persisted_origin,
+            "loading_mode": LoadingMode.CHECKPOINT_RESTORE.value,
+            "recovery_mode": "CHECKPOINT_RESTORE",
+            "attestation_level": attestation,
             "model": saved_model,
             "historical_model": saved_model,
             "requested_model": resolved_model or saved_model,
@@ -2511,6 +2912,8 @@ class LocalTopicAnalysisService:
             "unanalyzed_evidence_count": max(0, total_evidence_count - len(analyzed_evidence_ids)),
             "chunk_diagnostics": [d.to_dict() for d in diagnostics],
             "is_persisted_recovery": True,
+            "document_fingerprint": doc_fp,
+            "config_fingerprint": cfg_fp,
         }
 
         persisted_res = TopicDiscoveryResult(
@@ -2520,6 +2923,151 @@ class LocalTopicAnalysisService:
         )
         self._record_authoritative_discovery_run(document.document_id, persisted_res)
         return persisted_res
+
+    def _authenticate_recovered_discovery_run_for_verification(
+        self,
+        document: ConversationEvidenceDocument,
+        registered_run: TopicDiscoveryResult,
+        run_id: str,
+    ) -> None:
+        """
+        Autentica rigorosamente una discovery run recuperata da SQLite per la Prova del Nove.
+        Garanzie forensi:
+        1. Checkpointing abilitato e store disponibile (fail-closed).
+        2. Config fingerprint e document fingerprint presenti nei metadata.
+        3. Document fingerprint coincidente al 100% con il documento attivo.
+        4. Record SQLite presente, con document_id e analysis_type='discovery' corrispondenti.
+        5. Validazione referenziale completa di tutti i chunk e sotto-blocchi (validate_checkpoint_evidence_references).
+        6. Verifica dell'identità dei topic recuperati: non devono essere stati alterati o modificati.
+        7. Verifica che l'origine dell'inferenza sia autenticata nel checkpoint (fail-closed se mancante).
+        """
+        if not self.enable_checkpointing or self.checkpoint_store is None:
+            raise TopicProvenanceError(
+                f"Impossibile verificare la run recuperata '{run_id}': checkpointing disabilitato o store non disponibile (politica fail-closed)."
+            )
+        meta = registered_run.metadata if isinstance(registered_run.metadata, Mapping) else {}
+        cfg_fp = meta.get("config_fingerprint")
+        doc_fp = meta.get("document_fingerprint")
+        if not cfg_fp or not doc_fp:
+            raise TopicProvenanceError(
+                f"Impossibile verificare la run recuperata '{run_id}': metadati di fingerprint incompleti o assenti (politica fail-closed)."
+            )
+        active_doc_fp = compute_document_fingerprint(document)
+        if str(doc_fp).strip() != active_doc_fp:
+            raise TopicProvenanceError(
+                f"Documento diverso: il document fingerprint del checkpoint ('{str(doc_fp)[:8]}...') "
+                f"non corrisponde al documento attivo ('{active_doc_fp[:8]}...'). Verifica rifiutata (politica fail-closed)."
+            )
+        chk_data = self.checkpoint_store.load_checkpoint(str(doc_fp).strip(), str(cfg_fp).strip())
+        if chk_data is None:
+            raise TopicProvenanceError(
+                f"Fingerprint non compatibile o checkpoint assente in SQLite per la run recuperata '{run_id}' (politica fail-closed)."
+            )
+        if chk_data.document_id != document.document_id or chk_data.analysis_type != "discovery":
+            raise TopicProvenanceError(
+                f"Checkpoint incompatibile: document_id '{chk_data.document_id}' o tipo '{chk_data.analysis_type}' "
+                f"non corrispondono a '{document.document_id}' (politica fail-closed)."
+            )
+        if not chk_data.completed_chunk_indices and not chk_data.serialized_results and not chk_data.subchunks:
+            raise TopicProvenanceError(
+                f"Run recuperata '{run_id}' priva di blocchi validati nel checkpoint SQLite."
+            )
+        plan = self.create_analysis_plan(
+            document=document,
+            analysis_type="discovery",
+            max_topics=self.config.max_topics,
+            context_length=self.context_length,
+        )
+        if not validate_checkpoint_evidence_references(checkpoint=chk_data, document=document, chunks=list(plan.chunks)):
+            raise TopicProvenanceError(
+                f"Run recuperata alterata: integrità referenziale dei checkpoint compromessa per la run '{run_id}' (politica fail-closed)."
+            )
+        chk_origin = getattr(chk_data, "origin", None) or ""
+        run_origin = meta.get("origin")
+        if not run_origin or run_origin not in {o.value for o in AnalysisOrigin}:
+            raise TopicProvenanceError(
+                f"Impossibile verificare la run recuperata '{run_id}': origine mancante o non ricostruibile (politica fail-closed)."
+            )
+        if chk_origin and chk_origin in {o.value for o in AnalysisOrigin} and str(chk_origin).strip() != str(run_origin).strip():
+            raise TopicProvenanceError(
+                f"Discrepanza di origine per la run recuperata '{run_id}': metadata='{run_origin}' != checkpoint='{chk_origin}'."
+            )
+
+        # 6. Ricostruzione deterministica dell'aggregazione multi-chunk dai blocchi validati in SQLite
+        # per autenticare i topic aggregati (fusione evidence_ids, ranking deterministico, deduplicazione).
+        deserialized_chunk_results: list[TopicDiscoveryResult] = []
+        if chk_data.serialized_results:
+            sorted_indices = sorted(
+                chk_data.serialized_results.keys(),
+                key=lambda x: int(x) if str(x).isdigit() else str(x),
+            )
+            for s_idx in sorted_indices:
+                s_raw = chk_data.serialized_results[s_idx]
+                try:
+                    c_res = deserialize_discovery_result_from_checkpoint(s_raw)
+                    deserialized_chunk_results.append(c_res)
+                except Exception:
+                    pass
+        elif chk_data.subchunks:
+            for sub in chk_data.subchunks:
+                sub_raw = sub.get("serialized_result")
+                if isinstance(sub_raw, dict):
+                    try:
+                        c_res = deserialize_discovery_result_from_checkpoint(sub_raw)
+                        deserialized_chunk_results.append(c_res)
+                    except Exception:
+                        pass
+
+        eff_max_topics = getattr(self.config, "max_topics", 10) or 10
+        if deserialized_chunk_results:
+            reconstructed_aggregate = aggregate_topic_discovery(
+                chunk_results=deserialized_chunk_results,
+                parent_document_id=document.document_id,
+                max_topics=eff_max_topics,
+            )
+        else:
+            reconstructed_aggregate = TopicDiscoveryResult(
+                topics=(),
+                provenance_document_id=document.document_id,
+                metadata={"aggregation": "empty"},
+            )
+
+        from ai.chunking import canonicalize_topic_label, normalize_topic_label
+
+        checkpoint_topics: dict[str, DiscoveredTopic] = {}
+        for t in reconstructed_aggregate.topics:
+            checkpoint_topics[t.label.strip().casefold()] = t
+            ckey = canonicalize_topic_label(t.label) or normalize_topic_label(t.label)
+            if ckey:
+                checkpoint_topics[ckey.strip().casefold()] = t
+
+        if len(registered_run.topics) != len(reconstructed_aggregate.topics):
+            raise TopicProvenanceError(
+                f"Discrepanza nel numero di topic per la run '{run_id}': registrati={len(registered_run.topics)} != aggregati_checkpoint={len(reconstructed_aggregate.topics)} (politica fail-closed)."
+            )
+
+        valid_evidence_ids = {sec.evidence_id for sec in document.all_evidence_sections}
+
+        for reg_t in registered_run.topics:
+            norm_lbl = reg_t.label.strip().casefold()
+            reg_ckey = (canonicalize_topic_label(reg_t.label) or normalize_topic_label(reg_t.label) or "").strip().casefold()
+            chk_t = checkpoint_topics.get(norm_lbl) or (checkpoint_topics.get(reg_ckey) if reg_ckey else None)
+            if chk_t is None:
+                raise TopicProvenanceError(
+                    f"Topic modificato o non autentico: il topic '{reg_t.label}' non è presente nei blocchi del checkpoint SQLite."
+                )
+            if reg_t.short_description.strip() != chk_t.short_description.strip():
+                raise TopicProvenanceError(
+                    f"Topic modificato: la descrizione di '{reg_t.label}' è stata alterata rispetto al checkpoint."
+                )
+            if tuple(reg_t.evidence_ids) != tuple(chk_t.evidence_ids):
+                raise TopicProvenanceError(
+                    f"Topic modificato: gli evidence_id di '{reg_t.label}' sono stati alterati rispetto al checkpoint."
+                )
+            if not set(reg_t.evidence_ids).issubset(valid_evidence_ids):
+                raise TopicProvenanceError(
+                    f"Evidenze estranee nel topic '{reg_t.label}': contiene evidence_id non appartenenti al documento attivo."
+                )
 
     def verify_discovered_topic(
         self,
@@ -2623,9 +3171,21 @@ class LocalTopicAnalysisService:
         # (Le run devono essere prodotte dal percorso autoritativo run_topic_discovery, mai registrate arbitrariamente qui)
         registered_run = self.get_discovery_run(document.document_id, eff_discovery_run_id)
         if registered_run is None:
-            raise TopicProvenanceError(
-                f"Discovery run inesistente o non registrata per il documento '{document.document_id}': '{eff_discovery_run_id}'."
-            )
+            if (
+                discovery_result is not None
+                and discovery_result.provenance_document_id == document.document_id
+                and bool(
+                    discovery_result.metadata.get("is_persisted_recovery")
+                    or discovery_result.metadata.get("loading_mode") == LoadingMode.CHECKPOINT_RESTORE.value
+                    or discovery_result.metadata.get("recovery_mode") == "CHECKPOINT_RESTORE"
+                )
+            ):
+                self.register_discovery_run(document.document_id, discovery_result)
+                registered_run = self.get_discovery_run(document.document_id, eff_discovery_run_id)
+            if registered_run is None:
+                raise TopicProvenanceError(
+                    f"Discovery run inesistente o non registrata per il documento '{document.document_id}': '{eff_discovery_run_id}'."
+                )
 
         run_origin = (
             registered_run.metadata.get("origin")
@@ -2650,14 +3210,23 @@ class LocalTopicAnalysisService:
                 "non una reference sintetica dimostrativa."
             )
 
-        if (
-            origin_str == AnalysisOrigin.LIVE_LM_STUDIO.value
-            and eff_discovery_run_id not in self._authoritative_live_run_ids
-        ):
-            raise TopicProvenanceError(
-                f"Run '{eff_discovery_run_id}' priva di certificazione autoritativa di esecuzione live. "
-                "La Prova del Nove accetta esclusivamente run live registrate dal percorso operativo."
-            )
+        is_recovered = bool(
+            registered_run.metadata.get("is_persisted_recovery")
+            or registered_run.metadata.get("loading_mode") == LoadingMode.CHECKPOINT_RESTORE.value
+            or registered_run.metadata.get("recovery_mode") == "CHECKPOINT_RESTORE"
+        )
+
+        if origin_str == AnalysisOrigin.LIVE_LM_STUDIO.value:
+            if not is_recovered:
+                if eff_discovery_run_id not in self._authoritative_live_run_ids:
+                    raise TopicProvenanceError(
+                        f"Run '{eff_discovery_run_id}' priva di certificazione autoritativa di esecuzione live. "
+                        "La Prova del Nove accetta esclusivamente run live registrate dal percorso operativo."
+                    )
+            else:
+                self._authenticate_recovered_discovery_run_for_verification(document, registered_run, eff_discovery_run_id)
+        elif is_recovered:
+            self._authenticate_recovered_discovery_run_for_verification(document, registered_run, eff_discovery_run_id)
 
         # Verifica obbligatoria che il topic appartenga alla run registrata con identità positiva completa
         matching_in_run = [

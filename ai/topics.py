@@ -500,17 +500,23 @@ OUTPUT RULES:
             except AiInvalidEvidenceCitationError as cite_err:
                 last_error = cite_err
                 if attempt + 1 < max_attempts and is_op:
+                    invalid_list = getattr(cite_err, "invalid_evidence_ids", ())
+                    invalid_str = ", ".join(f"'{x}'" for x in invalid_list) if invalid_list else "non conformi"
                     if use_aliases:
+                        valid_keys = sorted(alias_to_id.keys()) if alias_to_id else []
+                        valid_sample = ", ".join(f"'{k}'" for k in valid_keys[:20])
                         correction_msg = (
-                            "CORRECTION DIRECTIVE: In your previous response, you cited invalid or hallucinated evidence_id values. "
-                            "Strict forensic requirement: You MUST cite ONLY exact evidence_id aliases that appear in the evidence block provided above (e.g. 'E001', 'E002'). "
-                            "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
+                            f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
+                            f"Strict forensic requirement: You MUST cite ONLY exact alias identifiers assigned to the evidence block of THIS specific chunk. "
+                            f"Available valid aliases in this block: [{valid_sample}]. "
+                            "Do NOT invent IDs, do NOT cite numbers not in this block, do NOT use IDs from other conversations. "
                             "Re-evaluate the topics and return the corrected JSON matching the schema."
                         )
                     else:
+                        valid_sample = ", ".join(f"'{k}'" for k in sorted(valid_evidence_ids)[:20])
                         correction_msg = (
-                            "CORRECTION DIRECTIVE: In your previous response, you cited invalid or hallucinated evidence_id values. "
-                            "Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in the evidence block provided above. "
+                            f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
+                            f"Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in this chunk (e.g. [{valid_sample}]). "
                             "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
                             "Re-evaluate the topics and return the corrected JSON matching the schema."
                         )

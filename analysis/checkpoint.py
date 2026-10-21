@@ -366,6 +366,8 @@ class AnalysisCheckpoint:
     created_at: str
     updated_at: str
     subchunks: tuple[dict[str, Any], ...] = ()
+    origin: str = ""
+    run_id: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         return {
@@ -381,6 +383,8 @@ class AnalysisCheckpoint:
             "created_at": self.created_at,
             "updated_at": self.updated_at,
             "subchunks": list(self.subchunks),
+            "origin": self.origin,
+            "run_id": self.run_id,
         }
 
 
@@ -609,6 +613,16 @@ class AnalysisCheckpointStore:
                     CREATE INDEX IF NOT EXISTS idx_subchunks_parent
                     ON checkpoint_subchunks (document_fingerprint, config_fingerprint, parent_chunk_index);
                 """)
+
+                # Migrazione schema incrementale per tracciabilità forense e origin autenticata
+                try:
+                    conn.execute("ALTER TABLE checkpoints ADD COLUMN origin TEXT DEFAULT '';")
+                except Exception:
+                    pass
+                try:
+                    conn.execute("ALTER TABLE checkpoints ADD COLUMN run_id TEXT DEFAULT '';")
+                except Exception:
+                    pass
 
             if self.db_path.exists():
                 try:
@@ -1035,17 +1049,30 @@ class AnalysisCheckpointStore:
         """Carica internamente un checkpoint da SQLite se presente e valido."""
         try:
             with self._connect() as conn:
-                cur = conn.execute("""
-                    SELECT document_id, analysis_type, model_id, prompt_version,
-                           total_planned_chunks, created_at, updated_at
-                    FROM checkpoints
-                    WHERE document_fingerprint = ? AND config_fingerprint = ?;
-                """, (document_fingerprint, config_fingerprint))
-                main_row = cur.fetchone()
-                if not main_row:
-                    return None
-
-                doc_id, a_type, m_id, p_ver, t_chunks, c_at, u_at = main_row
+                origin_val = ""
+                run_id_val = ""
+                try:
+                    cur = conn.execute("""
+                        SELECT document_id, analysis_type, model_id, prompt_version,
+                               total_planned_chunks, created_at, updated_at, origin, run_id
+                        FROM checkpoints
+                        WHERE document_fingerprint = ? AND config_fingerprint = ?;
+                    """, (document_fingerprint, config_fingerprint))
+                    main_row = cur.fetchone()
+                    if not main_row:
+                        return None
+                    doc_id, a_type, m_id, p_ver, t_chunks, c_at, u_at, origin_val, run_id_val = main_row
+                except Exception:
+                    cur = conn.execute("""
+                        SELECT document_id, analysis_type, model_id, prompt_version,
+                               total_planned_chunks, created_at, updated_at
+                        FROM checkpoints
+                        WHERE document_fingerprint = ? AND config_fingerprint = ?;
+                    """, (document_fingerprint, config_fingerprint))
+                    main_row = cur.fetchone()
+                    if not main_row:
+                        return None
+                    doc_id, a_type, m_id, p_ver, t_chunks, c_at, u_at = main_row
 
                 chunk_cur = conn.execute("""
                     SELECT chunk_index, serialized_result
@@ -1103,6 +1130,8 @@ class AnalysisCheckpointStore:
                     created_at=str(c_at),
                     updated_at=str(u_at),
                     subchunks=tuple(parsed_subs),
+                    origin=str(origin_val or ""),
+                    run_id=str(run_id_val or ""),
                 )
         except Exception:
             return None
@@ -1226,6 +1255,8 @@ class AnalysisCheckpointStore:
         analysis_type: str,
         model_id: str,
         prompt_version: str,
+        origin: str = "",
+        run_id: str = "",
     ) -> None:
         """
         Salva atomicamente il singolo blocco validato nel database SQLite (scrittura incrementale O(1)).
@@ -1244,21 +1275,39 @@ class AnalysisCheckpointStore:
         try:
             with self._lock:
                 with self._connect() as conn:
-                    # Inserisce o aggiorna la testata checkpoint
-                    conn.execute("""
-                        INSERT INTO checkpoints (
+                    # Inserisce o aggiorna la testata checkpoint con origin e run_id
+                    try:
+                        conn.execute("""
+                            INSERT INTO checkpoints (
+                                document_fingerprint, config_fingerprint, document_id,
+                                analysis_type, model_id, prompt_version, total_planned_chunks,
+                                created_at, updated_at, origin, run_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
+                                updated_at = excluded.updated_at,
+                                total_planned_chunks = excluded.total_planned_chunks,
+                                origin = CASE WHEN excluded.origin != '' THEN excluded.origin ELSE checkpoints.origin END,
+                                run_id = CASE WHEN excluded.run_id != '' THEN excluded.run_id ELSE checkpoints.run_id END;
+                        """, (
                             document_fingerprint, config_fingerprint, document_id,
                             analysis_type, model_id, prompt_version, total_planned_chunks,
-                            created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
-                            updated_at = excluded.updated_at,
-                            total_planned_chunks = excluded.total_planned_chunks;
-                    """, (
-                        document_fingerprint, config_fingerprint, document_id,
-                        analysis_type, model_id, prompt_version, total_planned_chunks,
-                        now_iso, now_iso,
-                    ))
+                            now_iso, now_iso, str(origin or ""), str(run_id or ""),
+                        ))
+                    except Exception:
+                        conn.execute("""
+                            INSERT INTO checkpoints (
+                                document_fingerprint, config_fingerprint, document_id,
+                                analysis_type, model_id, prompt_version, total_planned_chunks,
+                                created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
+                                updated_at = excluded.updated_at,
+                                total_planned_chunks = excluded.total_planned_chunks;
+                        """, (
+                            document_fingerprint, config_fingerprint, document_id,
+                            analysis_type, model_id, prompt_version, total_planned_chunks,
+                            now_iso, now_iso,
+                        ))
 
                     # Inserisce o aggiorna il singolo chunk
                     conn.execute("""
@@ -1290,6 +1339,8 @@ class AnalysisCheckpointStore:
         analysis_type: str = "discovery",
         model_id: str = "",
         prompt_version: str = "",
+        origin: str = "",
+        run_id: str = "",
     ) -> None:
         """
         Salva incrementalmente un sotto-blocco validato in SQLite preservando la relazione parent/child.
@@ -1302,19 +1353,36 @@ class AnalysisCheckpointStore:
         try:
             with self._lock:
                 with self._connect() as conn:
-                    conn.execute("""
-                        INSERT INTO checkpoints (
+                    try:
+                        conn.execute("""
+                            INSERT INTO checkpoints (
+                                document_fingerprint, config_fingerprint, document_id,
+                                analysis_type, model_id, prompt_version, total_planned_chunks,
+                                created_at, updated_at, origin, run_id
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
+                                updated_at = excluded.updated_at,
+                                origin = CASE WHEN excluded.origin != '' THEN excluded.origin ELSE checkpoints.origin END,
+                                run_id = CASE WHEN excluded.run_id != '' THEN excluded.run_id ELSE checkpoints.run_id END;
+                        """, (
                             document_fingerprint, config_fingerprint, document_id,
                             analysis_type, model_id, prompt_version, total_planned_chunks,
-                            created_at, updated_at
-                        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
-                        ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
-                            updated_at = excluded.updated_at;
-                    """, (
-                        document_fingerprint, config_fingerprint, document_id,
-                        analysis_type, model_id, prompt_version, total_planned_chunks,
-                        now_iso, now_iso,
-                    ))
+                            now_iso, now_iso, str(origin or ""), str(run_id or ""),
+                        ))
+                    except Exception:
+                        conn.execute("""
+                            INSERT INTO checkpoints (
+                                document_fingerprint, config_fingerprint, document_id,
+                                analysis_type, model_id, prompt_version, total_planned_chunks,
+                                created_at, updated_at
+                            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                            ON CONFLICT(document_fingerprint, config_fingerprint) DO UPDATE SET
+                                updated_at = excluded.updated_at;
+                        """, (
+                            document_fingerprint, config_fingerprint, document_id,
+                            analysis_type, model_id, prompt_version, total_planned_chunks,
+                            now_iso, now_iso,
+                        ))
 
                     conn.execute("""
                         INSERT INTO checkpoint_subchunks (
@@ -1557,30 +1625,60 @@ class AnalysisCheckpointStore:
                     params.append(model_id)
 
                 where_sql = " AND ".join(clauses)
-                sql = f"""
-                    SELECT document_fingerprint, config_fingerprint, document_id,
-                           analysis_type, model_id, prompt_version, total_planned_chunks,
-                           created_at, updated_at
-                    FROM checkpoints
-                    WHERE {where_sql}
-                    ORDER BY updated_at DESC
-                    LIMIT 1;
-                """
-                cur = conn.execute(sql, tuple(params))
-                row = cur.fetchone()
-                if not row:
-                    return None
-                return {
-                    "document_fingerprint": str(row[0]),
-                    "config_fingerprint": str(row[1]),
-                    "document_id": str(row[2]),
-                    "analysis_type": str(row[3]),
-                    "model_id": str(row[4]),
-                    "prompt_version": str(row[5]),
-                    "total_planned_chunks": int(row[6]),
-                    "created_at": str(row[7]),
-                    "updated_at": str(row[8]),
-                }
+                try:
+                    sql = f"""
+                        SELECT document_fingerprint, config_fingerprint, document_id,
+                               analysis_type, model_id, prompt_version, total_planned_chunks,
+                               created_at, updated_at, origin, run_id
+                        FROM checkpoints
+                        WHERE {where_sql}
+                        ORDER BY updated_at DESC
+                        LIMIT 1;
+                    """
+                    cur = conn.execute(sql, tuple(params))
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    return {
+                        "document_fingerprint": str(row[0]),
+                        "config_fingerprint": str(row[1]),
+                        "document_id": str(row[2]),
+                        "analysis_type": str(row[3]),
+                        "model_id": str(row[4]),
+                        "prompt_version": str(row[5]),
+                        "total_planned_chunks": int(row[6]),
+                        "created_at": str(row[7]),
+                        "updated_at": str(row[8]),
+                        "origin": str(row[9] or ""),
+                        "run_id": str(row[10] or ""),
+                    }
+                except Exception:
+                    sql = f"""
+                        SELECT document_fingerprint, config_fingerprint, document_id,
+                               analysis_type, model_id, prompt_version, total_planned_chunks,
+                               created_at, updated_at
+                        FROM checkpoints
+                        WHERE {where_sql}
+                        ORDER BY updated_at DESC
+                        LIMIT 1;
+                    """
+                    cur = conn.execute(sql, tuple(params))
+                    row = cur.fetchone()
+                    if not row:
+                        return None
+                    return {
+                        "document_fingerprint": str(row[0]),
+                        "config_fingerprint": str(row[1]),
+                        "document_id": str(row[2]),
+                        "analysis_type": str(row[3]),
+                        "model_id": str(row[4]),
+                        "prompt_version": str(row[5]),
+                        "total_planned_chunks": int(row[6]),
+                        "created_at": str(row[7]),
+                        "updated_at": str(row[8]),
+                        "origin": "",
+                        "run_id": "",
+                    }
         except Exception as e:
             logger.warning("Impossibile recuperare metadati checkpoint per document_id '%s': %s", document_id, e)
             return None

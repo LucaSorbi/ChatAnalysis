@@ -25,6 +25,7 @@ Principi architetturali (Fasi D, H):
 from __future__ import annotations
 
 import json
+import re
 from typing import Any, Mapping, Sequence
 
 from ai.backend import (
@@ -313,14 +314,15 @@ def validate_topic_discovery_payload(
             remapped_eids_list: list[str] = []
             hallucinated: list[str] = []
             for eid_val in eids_raw:
-                if eid_val in alias_map:
-                    real_id = alias_map[eid_val]
+                eid_clean = eid_val.strip() if isinstance(eid_val, str) else str(eid_val)
+                if eid_clean in alias_map:
+                    real_id = alias_map[eid_clean]
                     if real_id in valid_evidence_ids:
                         remapped_eids_list.append(real_id)
                     else:
                         hallucinated.append(eid_val)
-                elif eid_val in valid_evidence_ids:
-                    remapped_eids_list.append(eid_val)
+                elif eid_clean in valid_evidence_ids:
+                    remapped_eids_list.append(eid_clean)
                 else:
                     hallucinated.append(eid_val)
 

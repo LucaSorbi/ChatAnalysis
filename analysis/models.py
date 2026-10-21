@@ -26,10 +26,24 @@ from ai.models import (
 
 
 class AnalysisOrigin(str, Enum):
-    """Origine dell'esecuzione dell'analisi tematica."""
+    """Origine dell'esecuzione dell'inferenza tematica."""
     LIVE_LM_STUDIO = "LIVE_LM_STUDIO"
     SYNTHETIC_REFERENCE = "SYNTHETIC_REFERENCE"
     MOCK_INSPECTION = "MOCK_INSPECTION"
+
+
+class LoadingMode(str, Enum):
+    """Modalità di caricamento o recupero del risultato di analisi."""
+    IN_MEMORY_EXECUTION = "IN_MEMORY_EXECUTION"
+    CHECKPOINT_RESTORE = "CHECKPOINT_RESTORE"
+
+
+class AttestationLevel(str, Enum):
+    """Livello di attestazione e tracciabilità forense della run."""
+    LIVE_AUTHORITATIVE = "LIVE_AUTHORITATIVE"
+    CHECKPOINT_AUTHENTICATED = "CHECKPOINT_AUTHENTICATED"
+    MOCK_VERIFIED = "MOCK_VERIFIED"
+    UNATTESTED = "UNATTESTED"
 
 
 class ConsistencyStatus(str, Enum):

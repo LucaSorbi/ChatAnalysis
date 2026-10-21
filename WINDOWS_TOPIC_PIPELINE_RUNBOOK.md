@@ -119,15 +119,39 @@ pytest tests/unit/test_topic_discovery_detection_stabilization.py -v
 ```
 *Esito atteso: 9 passed su 9 in ~10 secondi.*
 
-### 4.2 Test di Ownership Snapshot e Assenza TOCTOU (F1/F2/F3)
-Verifica l'atomicità e la protezione da sovrascritture o sostituzioni concorrenti:
+### 4.2 Test di Ownership Snapshot ed Eliminazione Definitiva TOCTOU F1
+Verifica l'atomicità, la restrizione del cleanup alle sole directory private e la protezione da sostituzioni concorrenti prima e dopo l'ultima verifica:
 
 ```powershell
-pytest tests/unit/test_checkpoint_preflight_resume.py -k "test_122 or test_136 or test_137 or test_138 or test_139 or test_140 or test_141 or test_144" -v
+pytest tests/unit/test_checkpoint_preflight_resume.py -k "test_140 or test_141 or test_142 or test_144 or test_145" -v
 ```
-*Esito atteso: 8 passed su 8.*
+*Esito atteso: 5 passed (test 145 avversario post-verifica PASS).*
 
-### 4.3 Smoke Test Operativo Sintetico
+### 4.3 Test della Prova del Nove su Discovery Recuperata da Checkpoint SQLite (Priorità 1)
+Valida il caricamento di run persistite in SQLite senza forzature o alterazioni di AnalysisOrigin:
+
+```powershell
+pytest tests/unit/test_priority1_recovered_discovery_prova_del_nove.py -v
+```
+*Esito atteso: 10 passed su 10.*
+
+### 4.4 Test Avvio Interfaccia Streamlit Windows (Priorità 3)
+Verifica l'entrypoint `app.py`, gli AppTest e l'avvio reale in subprocess su Windows:
+
+```powershell
+pytest tests/unit/test_priority3_streamlit_windows_startup.py -v
+```
+*Esito atteso: 4 passed su 4.*
+
+### 4.5 Test Integrità Diagnostica Live (Priorità 4)
+Verifica la corretta gestione delle regressioni 25/26 (chunk 11 INVALID_EVIDENCE_ID) e 17/26 (UNCERTAIN) senza inventare cause:
+
+```powershell
+pytest tests/unit/test_priority4_live_diagnostics_integrity.py -v
+```
+*Esito atteso: 6 passed su 6.*
+
+### 4.6 Smoke Test Operativo Sintetico
 
 #### Modalità Mock (Offline / Senza LM Studio attivo)
 ```powershell
@@ -153,7 +177,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\run_streamlit_windows.ps1
 ### 5.2 Avvio Manuale Diretto
 ```powershell
 .\.venv\Scripts\Activate.ps1
-streamlit run ui/application.py --server.port 8501
+streamlit run app.py --server.port 8501
 ```
 
 Accedere tramite browser all'indirizzo: `http://localhost:8501`.

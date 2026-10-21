@@ -45,6 +45,7 @@ import sqlite3
 import stat
 import sys
 import tempfile
+import threading
 import time
 from typing import Any, Mapping, Sequence
 import urllib.error
@@ -1358,6 +1359,7 @@ def acquire_forensic_readonly_copy(
     else:
         try:
             created_temp_dir = Path(tempfile.mkdtemp(prefix="chatanalysis_forensic_"))
+            _OWNERSHIP_TRACKER.register_temp_dir(created_temp_dir)
             work_dir = created_temp_dir
         except PermissionError as pe:
             raise SnapshotPermissionDeniedError("Permessi insufficienti per creare la cartella temporanea.") from pe
@@ -1600,8 +1602,8 @@ def acquire_forensic_readonly_copy(
 
     except BaseException:
         _cleanup_owned_files()
-        if created_temp_dir is not None and created_temp_dir.exists():
-            shutil.rmtree(created_temp_dir, ignore_errors=True)
+        if created_temp_dir is not None:
+            _safe_cleanup_owned_temp_dir(created_temp_dir)
         raise
     finally:
         for _, dup_fd, _ in owned_created_files:
@@ -1610,6 +1612,147 @@ def acquire_forensic_readonly_copy(
                     os.close(dup_fd)
                 except Exception:
                     pass
+
+
+class _SnapshotOwnershipTracker:
+    """
+    Rappresentazione thread-safe dell'ownership del ciclo di vita per directory temporanee
+    e file creati dall'invocazione corrente. Non si affida a convenzioni su prefissi o nomi
+    di percorso.
+    Traccia e convalida dinamicamente l'identità fisica reale del filesystem (st_dev, st_ino / file_index)
+    sia al momento della registrazione che al momento della verifica dell'ownership.
+    Se una directory o un file viene rinominato o sostituito da un processo concorrente
+    nello stesso percorso, l'identità decade e la risorsa NON viene considerata posseduta.
+    """
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._owned_dirs: dict[str, tuple[int, int]] = {}
+        self._owned_files: dict[str, tuple[int, int]] = {}
+
+    def register_temp_dir(self, directory: Path | str | None, identity: tuple[int, int] | None = None) -> None:
+        if not directory:
+            return
+        p = Path(directory)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            if identity is None:
+                try:
+                    st = os.lstat(resolved)
+                    if st.st_dev != 0 and st.st_ino != 0:
+                        identity = (int(st.st_dev), int(st.st_ino))
+                except Exception:
+                    identity = None
+            if identity is not None and identity[0] != 0 and identity[1] != 0:
+                self._owned_dirs[resolved] = identity
+
+    def unregister_temp_dir(self, directory: Path | str | None) -> None:
+        if not directory:
+            return
+        p = Path(directory)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            self._owned_dirs.pop(resolved, None)
+
+    def is_owned_dir(self, directory: Path | str | None, identity: tuple[int, int] | None = None) -> bool:
+        """
+        Verifica se la directory è registrata e se l'oggetto attualmente presente su disco
+        allo stesso percorso possiede ESATTAMENTE l'identità (st_dev, st_ino) originariamente registrata.
+        Se la directory è stata sostituita, rimossa o alterata da un concorrente, restituisce False.
+        """
+        if not directory:
+            return False
+        p = Path(directory)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            if resolved not in self._owned_dirs:
+                return False
+            expected_id = self._owned_dirs[resolved]
+            if identity is not None and identity != expected_id:
+                return False
+            try:
+                st = os.lstat(resolved)
+                cur_id = (int(st.st_dev), int(st.st_ino))
+                return cur_id == expected_id
+            except Exception:
+                return False
+
+    def is_registered_dir(self, directory: Path | str | None) -> bool:
+        """Indica se il percorso è presente nel registro storico delle directory."""
+        if not directory:
+            return False
+        p = Path(directory)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            return resolved in self._owned_dirs
+
+    def register_owned_file(self, file_path: Path | str, identity: tuple[int, int]) -> None:
+        if identity is None or identity[0] == 0 or identity[1] == 0:
+            return
+        p = Path(file_path)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            self._owned_files[resolved] = (int(identity[0]), int(identity[1]))
+
+    def unregister_owned_file(self, file_path: Path | str) -> None:
+        p = Path(file_path)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            self._owned_files.pop(resolved, None)
+
+    def is_owned_file(self, file_path: Path | str, identity: tuple[int, int] | None = None) -> bool:
+        """
+        Verifica se il file è registrato e se il file attualmente presente sul filesystem
+        possiede ESATTAMENTE l'identità (st_dev, st_ino) registrata.
+        Se sostituito, alterato o non corrispondente, restituisce False.
+        """
+        p = Path(file_path)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            if resolved not in self._owned_files:
+                return False
+            expected_id = self._owned_files[resolved]
+            if identity is not None and identity != expected_id:
+                return False
+            try:
+                st = os.lstat(resolved)
+                cur_id = (int(st.st_dev), int(st.st_ino))
+                return cur_id == expected_id
+            except Exception:
+                return False
+
+    def is_registered_file(self, file_path: Path | str) -> bool:
+        """Indica se il percorso file è registrato nel tracker storico."""
+        p = Path(file_path)
+        with self._lock:
+            try:
+                resolved = str(p.resolve())
+            except Exception:
+                resolved = str(p.absolute())
+            return resolved in self._owned_files
+
+
+_OWNERSHIP_TRACKER = _SnapshotOwnershipTracker()
 
 
 class SnapshotResult(tuple):
@@ -1624,22 +1767,72 @@ class SnapshotResult(tuple):
     def __init__(self, dest_file: Path, created_temp_dir: Path | None, immutability_metrics: dict[str, Any] | None = None):
         self.immutability_metrics = immutability_metrics or {}
 
+
+def _safe_cleanup_owned_temp_dir(
+    temp_dir: Path | str | None,
+    known_files: Sequence[Path | str] | None = None,
+) -> bool:
+    """
+    Esegue la pulizia sicura della directory temporanea privata creata per l'invocazione.
+
+    GARANZIA F1-C E NESSUN USO DI SHUTIL.RMTREE:
+    Non esegue MAI 'shutil.rmtree()'. Se una directory temporanea viene sostituita da un processo
+    concorrente con una cartella contenente file estranei, 'os.rmdir()' rifiuta categoricamente
+    la rimozione (Directory not empty), garantendo la preservazione assoluta dei dati concorrenti.
+    """
+    if temp_dir is None:
+        return False
+    d = Path(temp_dir)
+    if not _OWNERSHIP_TRACKER.is_owned_dir(d):
+        return False
+
+    # Rimozione dei soli file noti creati dall'invocazione e verificati
+    if known_files:
+        for f in known_files:
+            if not f:
+                continue
+            fp = Path(f)
+            try:
+                if _OWNERSHIP_TRACKER.is_owned_file(fp):
+                    fp.unlink(missing_ok=True)
+                    _OWNERSHIP_TRACKER.unregister_owned_file(fp)
+            except Exception:
+                pass
+
+    # Rimozione non ricorsiva della sola directory vuota
+    try:
+        os.rmdir(str(d))
+        _OWNERSHIP_TRACKER.unregister_temp_dir(d)
+        return True
+    except OSError:
+        # Se la cartella contiene file alieni/concorrenti, os.rmdir fallisce: fail-closed, preservazione totale
+        return False
+
+
 def _perform_atomic_safe_unlink(
     dest_file: Path,
     dest_fd: int | None,
     dest_file_identity: tuple[int, int] | None,
 ) -> bool:
     """
-    Esegue la cancellazione atomica e sicura del file snapshot creato dall'invocazione corrente.
-    Applica rigorosamente il principio fail-closed:
-    - Se l'identità non può essere dimostrata o è incompleta, o se dest_fd è nullo su POSIX, non cancella.
-    - Se tra l'ultima verifica e la cancellazione un processo concorrente ha sostituito o scollegato il file,
-      lo swap viene rilevato (st_nlink == 0 sul descrittore originale o mismatch inode sul path)
-      e la cancellazione viene abortita immediatamente senza toccare il file concorrente.
-    - Su Windows, la gestione degli handle e sharing violation impedisce la cancellazione o sostituzione
-      concorrente mentre il descrittore è attivo; il file viene verificato e rimosso in modo protetto.
+    Esegue la cancellazione sicura e fail-closed del file temporaneo creato dall'invocazione corrente.
+
+    MODELLO DI FIDUCIA E LIMITI ARCHITETTONICI DEL FILESYSTEM:
+    1. Area Temporanea Privata (Trust Boundary):
+       La cancellazione automatica è permessa ESCLUSIVAMENTE all'interno dell'area temporanea privata
+       creata dall'invocazione corrente (tempfile.mkdtemp) e registrata nel tracker di ownership.
+    2. Rifiuto di cancellazione su percorsi esterni o incerti:
+       Per destinazioni esterne esplicite o percorsi in directory non fidate/condivise,
+       non viene eseguita alcuna cancellazione automatica distruttiva. Si privilegia la conservazione
+       di un eventuale file parziale rispetto alla cancellazione di un file estraneo.
+    3. Abbandono del protocollo tombstone e rollback:
+       Non si fa uso di tombstone né di rollback con os.replace(), per eliminare le vulnerabilità
+       di sostituzione concorrente del tombstone (F1-A) o di sovrascrittura durante il rollback (F1-B).
+    4. Verifica rigorosa di identità fisica (dev, ino):
+       Se l'identità è nulla, mutata o se la directory genitrice non risulta comprovatamente posseduta,
+       l'operazione fallisce immediatamente in modo controllato (fail-closed) senza toccare il file.
     """
-    if dest_file_identity is None:
+    if dest_file_identity is None or dest_file_identity[0] == 0 or dest_file_identity[1] == 0:
         if dest_fd is not None:
             try:
                 os.close(dest_fd)
@@ -1647,69 +1840,59 @@ def _perform_atomic_safe_unlink(
                 pass
         return False
 
-    if os.name != "nt":
-        if dest_fd is None:
-            return False
+    parent_dir = dest_file.parent
 
+    # 1. La directory genitrice DEVE essere una directory temporanea privata posseduta e registrata
+    if not _OWNERSHIP_TRACKER.is_owned_dir(parent_dir):
+        if dest_fd is not None:
+            try:
+                os.close(dest_fd)
+            except Exception:
+                pass
+        return False
+
+    # 2. Il file deve essere registrato e corrispondere esattamente all'identità (st_dev, st_ino)
+    if not _OWNERSHIP_TRACKER.is_owned_file(dest_file, dest_file_identity):
+        if dest_fd is not None:
+            try:
+                os.close(dest_fd)
+            except Exception:
+                pass
+        return False
+
+    # 3. Gestione e chiusura del descrittore aperto
+    if dest_fd is not None:
         try:
-            # 1. Verifica preliminare stato del descrittore aperto
-            fd_st = os.fstat(dest_fd)
-            if hasattr(fd_st, "st_nlink") and fd_st.st_nlink == 0:
-                return False  # Il file originale è già stato unlinked/sostituito!
-
-            # 2. Verifica preliminare identità path
-            cur_st = os.lstat(dest_file)
-            if (cur_st.st_dev, cur_st.st_ino) != dest_file_identity:
-                return False  # Path sostituito da concorrente!
-
-            # 3. Verifica atomica immediata prima dell'unlink (zero chiamate intermedie come is_file o exists):
-            # Se un processo concorrente ha sostituito il file tra la verifica e la chiamata unlink,
-            # lo stato su dest_fd riflette immediatamente st_nlink == 0 e lstat riflette il nuovo inode.
-            final_fd_st = os.fstat(dest_fd)
-            if hasattr(final_fd_st, "st_nlink") and final_fd_st.st_nlink == 0:
-                return False
-            final_st = os.lstat(dest_file)
-            if (final_st.st_dev, final_st.st_ino) != dest_file_identity:
-                return False
-
-            dest_file.unlink()
-            return True
+            if os.name != "nt":
+                fd_st = os.fstat(dest_fd)
+                if (int(fd_st.st_dev), int(fd_st.st_ino)) != dest_file_identity:
+                    return False
+                if hasattr(fd_st, "st_nlink") and fd_st.st_nlink == 0:
+                    return False
         except Exception:
             return False
         finally:
-            if dest_fd is not None:
-                try:
-                    os.close(dest_fd)
-                except Exception:
-                    pass
-    else:
-        # Piattaforma Windows:
-        try:
-            if dest_fd is not None:
-                try:
-                    os.close(dest_fd)
-                except Exception:
-                    pass
-                dest_fd = None
+            try:
+                os.close(dest_fd)
+            except Exception:
+                pass
+            dest_fd = None
 
-            can_verify_id = (dest_file_identity[1] != 0)
-            if can_verify_id:
-                try:
-                    cur_st = os.lstat(dest_file)
-                    if (cur_st.st_dev, cur_st.st_ino) != dest_file_identity:
-                        return False
-                except Exception:
-                    return False
-
-            # Verifica finale pre-unlink: rileva se il file è stato sostituito tra il primo controllo e la cancellazione
-            final_st = os.lstat(dest_file)
-            if can_verify_id and (final_st.st_dev, final_st.st_ino) != dest_file_identity:
-                return False
-
-            dest_file.unlink()
-            return True
-        except Exception:
+    # 4. Verifica dello stat prima della rimozione
+    try:
+        cur_st = os.lstat(dest_file)
+        if (int(cur_st.st_dev), int(cur_st.st_ino)) != dest_file_identity:
             return False
+    except Exception:
+        return False
+
+    # 5. Cancellazione diretta della risorsa comprovatamente nostra nell'area privata (senza tombstone)
+    try:
+        dest_file.unlink()
+        _OWNERSHIP_TRACKER.unregister_owned_file(dest_file)
+        return True
+    except Exception:
+        return False
 
 
 def create_consistent_readonly_snapshot(
@@ -1722,15 +1905,18 @@ def create_consistent_readonly_snapshot(
     Crea uno snapshot SQLite consistente e consolidato utilizzando l'acquisizione forense
     a livello filesystem e la Backup API di SQLite eseguita ESCLUSIVAMENTE sulla copia di staging.
 
-    GARANZIE DI IMMUTABILITÀ E ISOLAMENTO (B1, B2, B3):
+    GARANZIE DI IMMUTABILITÀ, ISOLAMENTO E TRUST BOUNDARY:
     - Nessuna connessione SQLite aperta sul database sorgente (zero scritture su DB, WAL e SHM).
     - Preservazione assoluta dell'impronta SHA-256 e dei metadati del file -shm sorgente.
     - Consolidamento transazionale delle pagine WAL e SHM nello snapshot di destinazione.
-    - Validazione preventiva di dest_path e dest_dir PRIMA di creare qualsiasi file o cartella.
-    - Divieto assoluto di snapshot dentro '.checkpoints', nella cartella del DB sorgente o nel repo 'Tesi'.
+    - Area Temporanea Privata: l'intera preparazione e il backup avvengono sempre in un'area
+      privata creata esclusivamente per l'invocazione (tempfile.mkdtemp).
+    - Destinazioni Esterne Esplicite: pubblicazione finale non-overwriting. In caso di
+      errore prima o durante la pubblicazione, nessuna cancellazione distruttiva viene mai eseguita
+      sul percorso esterno esplicito (privilegiando la conservazione dei dati ed eliminando F1-B).
+    - Nessun uso di shutil.rmtree(): pulizia tramite os.rmdir() non ricorsivo che rifiuta la rimozione
+      se la directory contiene file estranei/concorrenti (eliminando F1-C).
     - Rifiuto categorico di symlink e percorsi non-directory.
-    - Creazione esclusiva del file di destinazione (O_CREAT | O_EXCL, permessi 0600).
-    - Cleanup atomico di tutte le risorse temporanee intermediate ed esclusive in caso di errore o interruzione.
     Restituisce (path_file_snapshot, path_dir_temporanea_creata) retrocompatibile con opzione di ritorno metriche.
     """
     src_p = Path(src_db_path)
@@ -1741,6 +1927,7 @@ def create_consistent_readonly_snapshot(
         raise SnapshotPermissionDeniedError("Symlink non consentito per il database sorgente.")
 
     # 1. Validazione preventiva di sicurezza
+    target_file: Path | None = None
     if dest_path is not None:
         target_file = Path(dest_path)
         target_dir = target_file.parent
@@ -1756,22 +1943,21 @@ def create_consistent_readonly_snapshot(
         except OSError as oe:
             raise SnapshotDirectoryInvalidError("Impossibile accedere alla cartella di destinazione.") from oe
 
-        created_temp_dir = None
-        dest_file = target_file
-    else:
-        base_dir = Path(dest_dir) if dest_dir is not None else Path(tempfile.gettempdir())
-        _validate_snapshot_target_safety(src_p, target_dir=base_dir, target_file=None)
+    base_dir = Path(dest_dir) if dest_dir is not None else Path(tempfile.gettempdir())
+    _validate_snapshot_target_safety(src_p, target_dir=base_dir, target_file=None)
 
-        try:
-            base_dir.mkdir(parents=True, exist_ok=True)
-            created_temp_dir = Path(tempfile.mkdtemp(prefix="chatanalysis_snap_", dir=str(base_dir)))
-        except PermissionError as pe:
-            raise SnapshotPermissionDeniedError("Permessi insufficienti per creare la cartella temporanea dello snapshot.") from pe
-        except (NotADirectoryError, OSError) as oe:
-            raise SnapshotDirectoryInvalidError("Impossibile creare la cartella temporanea dello snapshot.") from oe
+    # 2. Creazione dell'area temporanea privata esclusiva (Trust Boundary)
+    try:
+        base_dir.mkdir(parents=True, exist_ok=True)
+        created_temp_dir = Path(tempfile.mkdtemp(prefix="chatanalysis_snap_", dir=str(base_dir)))
+        _OWNERSHIP_TRACKER.register_temp_dir(created_temp_dir)
+    except PermissionError as pe:
+        raise SnapshotPermissionDeniedError("Permessi insufficienti per creare la cartella temporanea dello snapshot.") from pe
+    except (NotADirectoryError, OSError) as oe:
+        raise SnapshotDirectoryInvalidError("Impossibile creare la cartella temporanea dello snapshot.") from oe
 
-        fname = f"snapshot_{os.getpid()}_{hashlib.sha256(os.urandom(16)).hexdigest()[:8]}.db"
-        dest_file = created_temp_dir / fname
+    fname = f"snapshot_{os.getpid()}_{hashlib.sha256(os.urandom(16)).hexdigest()[:8]}.db"
+    dest_file = created_temp_dir / fname
 
     dest_file_owned = False
     dest_file_identity: tuple[int, int] | None = None
@@ -1780,7 +1966,7 @@ def create_consistent_readonly_snapshot(
     staged_conn = None
     dest_conn = None
     try:
-        # 2. Creazione esclusiva del file di destinazione (O_CREAT | O_EXCL, permessi 0600)
+        # 3. Creazione esclusiva del file di lavoro all'interno dell'area privata
         flags = os.O_CREAT | os.O_EXCL | os.O_RDWR
         if hasattr(os, "O_NOFOLLOW"):
             flags |= os.O_NOFOLLOW
@@ -1792,8 +1978,9 @@ def create_consistent_readonly_snapshot(
             dest_fd = os.open(str(dest_file), flags, 0o600)
             try:
                 st = os.fstat(dest_fd)
-                dest_file_identity = (st.st_dev, st.st_ino)
+                dest_file_identity = (int(st.st_dev), int(st.st_ino))
                 dest_file_owned = True
+                _OWNERSHIP_TRACKER.register_owned_file(dest_file, dest_file_identity)
             except Exception as fstat_err:
                 dest_file_identity = None
                 dest_file_owned = False
@@ -1813,26 +2000,73 @@ def create_consistent_readonly_snapshot(
         except PermissionError as pe:
             raise SnapshotPermissionDeniedError("Permessi insufficienti per creare il file di snapshot.") from pe
         except FileExistsError:
-            # F1: Il file esiste già e NON è stato creato da noi -> dest_file_owned rimane False
             raise
         except OSError as oe:
             raise SnapshotDirectoryInvalidError("Impossibile creare il file di snapshot.") from oe
         finally:
             os.umask(old_umask)
 
-        # 3. Acquisizione forense in area di staging isolata (ZERO connessioni SQLite sui sorgenti!)
+        # 4. Acquisizione forense in area di staging isolata (ZERO connessioni SQLite sui sorgenti!)
         staged_db, staged_temp_dir, staged_metrics = acquire_forensic_readonly_copy(src_p)
 
-        # B2: Verifica fail-closed che l'acquisizione abbia certificato l'immutabilità della sorgente
         if not staged_metrics or staged_metrics.get("SOURCE_PHYSICAL_IMMUTABILITY_VERIFIED") is not True:
             raise SnapshotCreationFailedError("Snapshot fallito: immutabilità fisica della sorgente non certificata durante l'acquisizione.")
 
-        # 4. Consolidamento transazionale via SQLite Backup API dalla copia di staging a dest_file
+        # 5. Consolidamento transazionale via SQLite Backup API dalla copia di staging a dest_file
         staged_uri = f"file:{staged_db.resolve().as_posix()}?mode=ro"
         staged_conn = sqlite3.connect(staged_uri, uri=True, timeout=5.0)
         staged_conn.execute("PRAGMA query_only = ON;")
         dest_conn = sqlite3.connect(str(dest_file), timeout=5.0)
         staged_conn.backup(dest_conn)
+
+        # Chiusura connessioni prima di eventuale pubblicazione
+        dest_conn.close()
+        dest_conn = None
+        staged_conn.close()
+        staged_conn = None
+
+        if staged_temp_dir is not None:
+            _safe_cleanup_owned_temp_dir(staged_temp_dir)
+            staged_temp_dir = None
+
+        # 6. Pubblicazione su destinazione esterna esplicita (se richiesta)
+        if target_file is not None:
+            # Controllo non-overwriting preliminare
+            if os.path.lexists(target_file) or target_file.exists():
+                raise FileExistsError("Il file di destinazione snapshot esiste già.")
+
+            published = False
+            try:
+                os.link(str(dest_file), str(target_file))
+                published = True
+            except FileExistsError:
+                raise
+            except (OSError, NotImplementedError):
+                # Fallback per cross-device o filesystem privi di hardlink: creazione esclusiva O_EXCL
+                flags_pub = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+                if hasattr(os, "O_NOFOLLOW"):
+                    flags_pub |= os.O_NOFOLLOW
+                if hasattr(os, "O_CLOEXEC"):
+                    flags_pub |= os.O_CLOEXEC
+                old_um = os.umask(0o077)
+                try:
+                    pub_fd = os.open(str(target_file), flags_pub, 0o600)
+                    try:
+                        with open(pub_fd, "wb", closefd=True) as out_fp:
+                            with open(str(dest_file), "rb") as in_fp:
+                                shutil.copyfileobj(in_fp, out_fp)
+                        published = True
+                    except Exception:
+                        raise
+                finally:
+                    os.umask(old_um)
+
+            # Dopo la pubblicazione con successo, pulizia sicura del file temporaneo privato e della cartella
+            _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
+            dest_file_owned = False
+            _safe_cleanup_owned_temp_dir(created_temp_dir)
+            created_temp_dir = None
+            dest_file = target_file
 
     except BaseException:
         if dest_conn is not None:
@@ -1848,27 +2082,20 @@ def create_consistent_readonly_snapshot(
                 pass
             staged_conn = None
 
-        # F1: Cleanup rigoroso basato sull'ownership fail-closed: cancella dest_file SOLO se creato da questa invocazione
-        if dest_file_owned:
-            try:
-                _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
-                dest_fd = None
-            except Exception:
-                if dest_fd is not None:
-                    try:
-                        os.close(dest_fd)
-                    except Exception:
-                        pass
-                    dest_fd = None
+        # Cleanup confinato ESCLUSIVAMENTE all'area temporanea privata: MAI toccare destinazioni esterne
+        if dest_file_owned and created_temp_dir is not None:
+            _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
+            dest_fd = None
 
-        try:
-            if created_temp_dir is not None and created_temp_dir.exists():
-                if created_temp_dir.name.startswith("chatanalysis_snap_"):
-                    shutil.rmtree(created_temp_dir, ignore_errors=True)
-        except Exception:
-            pass
+        if created_temp_dir is not None:
+            _safe_cleanup_owned_temp_dir(created_temp_dir, known_files=[dest_file])
+
+        if staged_temp_dir is not None:
+            _safe_cleanup_owned_temp_dir(staged_temp_dir)
         raise
     finally:
+        if dest_file is not None and dest_file_owned:
+            _OWNERSHIP_TRACKER.unregister_owned_file(dest_file)
         if dest_conn is not None:
             try:
                 dest_conn.close()
@@ -1887,8 +2114,8 @@ def create_consistent_readonly_snapshot(
             except Exception:
                 pass
             staged_conn = None
-        if staged_temp_dir is not None and staged_temp_dir.exists():
-            shutil.rmtree(staged_temp_dir, ignore_errors=True)
+        if staged_temp_dir is not None:
+            _safe_cleanup_owned_temp_dir(staged_temp_dir)
 
     res = SnapshotResult(dest_file, created_temp_dir, staged_metrics)
     if return_metrics:
@@ -3780,18 +4007,20 @@ def main() -> int:
     finally:
         # Pulizia dello snapshot temporaneo se creato
         if snapshot_cleanup_dir and snapshot_cleanup_dir.is_dir():
-            # Protezione di sicurezza: elimina SOLO se è una directory temporanea creata dal preflight
-            if snapshot_cleanup_dir.name.startswith("chatanalysis_snap_"):
+            # Protezione di sicurezza: elimina SOLO se è una directory temporanea comprovatamente posseduta creata dal preflight
+            if _OWNERSHIP_TRACKER.is_owned_dir(snapshot_cleanup_dir):
                 try:
                     shutil.rmtree(snapshot_cleanup_dir, ignore_errors=True)
+                    _OWNERSHIP_TRACKER.unregister_temp_dir(snapshot_cleanup_dir)
                 except Exception:
                     pass
 
         # Pulizia della cartella temporanea forense se creata
         if forensic_cleanup_dir and forensic_cleanup_dir.is_dir():
-            if forensic_cleanup_dir.name.startswith("chatanalysis_forensic_"):
+            if _OWNERSHIP_TRACKER.is_owned_dir(forensic_cleanup_dir):
                 try:
                     shutil.rmtree(forensic_cleanup_dir, ignore_errors=True)
+                    _OWNERSHIP_TRACKER.unregister_temp_dir(forensic_cleanup_dir)
                 except Exception:
                     pass
 
