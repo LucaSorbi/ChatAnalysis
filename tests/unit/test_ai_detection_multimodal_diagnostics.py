@@ -141,20 +141,27 @@ def test_discovery_provenance_document_id_matches_active_document():
 # 4. VERIFICARE VISION_DESCRIPTION PRESENTE NEL PROMPT
 # ==============================================================================
 def test_vision_description_serialized_and_present_in_prompt():
-    """Verifica che msg::5::VISION_DESCRIPTION e il contenuto del magazzino siano presenti nel prompt."""
-    demo_doc, _, _ = build_synthetic_demo_dataset()
-    serialized = serialize_document_for_llm(demo_doc)
+    """Verifica che VISION_DESCRIPTION e il contenuto del magazzino siano presenti nel prompt.
 
+    Test 4a: serializzazione senza alias — evidence_id grezzo è presente.
+    Test 4b: detect_topic operativo — usa alias deterministici, il contenuto testuale è preservato.
+    """
+    demo_doc, _, _ = build_synthetic_demo_dataset()
+
+    # 4a: Serializzazione raw (nessun alias) — verifica evidence_id grezzo
+    serialized = serialize_document_for_llm(demo_doc)
     assert "msg::5::VISION_DESCRIPTION" in serialized
     assert "magazzino industriale" in serialized
     assert "casse etichettate" in serialized
     assert "porta di sicurezza blindata" in serialized
 
-    # Verifica passaggio nei messaggi LLM
+    # 4b: detect_topic con operational_mode=True (alias auto-abilitati)
+    # L'evidence_id grezzo è rimappato ad alias deterministici (es. 'E007'),
+    # ma il contenuto testuale dell'evidenza è preservato.
     client = FakeLocalLlmClient(
         default_response=json.dumps({
             "decision": "PRESENT",
-            "evidence_ids": ["msg::5::VISION_DESCRIPTION"],
+            "evidence_ids": ["E007"],
             "rationale": "Evidenza fotografica magazzino.",
         }),
         model_name="qwen2.5-7b-instruct",
@@ -164,11 +171,15 @@ def test_vision_description_serialized_and_present_in_prompt():
         label="Logistica e Ispezione Depositi",
         description="Ispezione visiva del magazzino merci con casse sigillate e sicurezza",
     )
-    analyzer.detect_topic(demo_doc, query)
+    res = analyzer.detect_topic(demo_doc, query)
 
     user_msg = client.call_history[-1]["messages"][1]["content"]
-    assert "msg::5::VISION_DESCRIPTION" in user_msg
+    # Con alias attivi, il prompt contiene l'alias E007 invece del raw evidence_id
+    assert "E007" in user_msg
+    assert "VISION_DESCRIPTION" in user_msg
     assert "magazzino industriale" in user_msg
+    # Il risultato rimappa E007 → msg::5::VISION_DESCRIPTION
+    assert "msg::5::VISION_DESCRIPTION" in res.evidence_ids
 
 
 # ==============================================================================

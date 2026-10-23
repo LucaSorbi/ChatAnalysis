@@ -63,6 +63,7 @@ def get_target_file_list(repo_root: Path) -> list[str]:
 
     included_files: set[str] = set()
 
+    baseline_loaded = False
     for base_zip in candidate_baselines:
         if base_zip.is_file():
             print(f"[*] Utilizzo archivio baseline fidata: {base_zip.name}")
@@ -72,7 +73,22 @@ def get_target_file_list(repo_root: Path) -> list[str]:
                         continue
                     if (repo_root / item).is_file():
                         included_files.add(item.replace("\\", "/"))
+            baseline_loaded = True
             break
+
+    if not baseline_loaded:
+        manifest_p = repo_root / MANIFEST_NAME
+        if manifest_p.is_file():
+            print(f"[*] Utilizzo file list da {MANIFEST_NAME} nel workspace.")
+            for line in manifest_p.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line or line.startswith("#"):
+                    continue
+                parts = line.split("  ", 1)
+                if len(parts) == 2:
+                    rel = parts[1].replace("\\", "/")
+                    if (repo_root / rel).is_file():
+                        included_files.add(rel)
 
     # File critici aggiornati e nuovi file vincolanti
     mandatory_files = [

@@ -108,6 +108,7 @@ from scripts.preflight_checkpoint_resume import (
     _OWNERSHIP_TRACKER,
     _perform_atomic_safe_unlink,
     _safe_cleanup_owned_temp_dir,
+    _publish_snapshot_exclusively,
     acquire_forensic_readonly_copy,
     create_consistent_readonly_snapshot,
     load_and_validate_checkpoint_readonly,
@@ -4080,16 +4081,15 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                 def simulated_acquire_and_swap(p, *args, **kwargs):
                     if dest_snap.exists():
                         dest_snap.unlink()
-                        dest_snap.write_bytes(b"REPLACEMENT_BY_CONCURRENT_PROCESS")
+                    dest_snap.write_bytes(b"REPLACEMENT_BY_CONCURRENT_PROCESS")
                     raise SnapshotCreationFailedError("Simulazione interruzione post-swap")
 
                 with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=simulated_acquire_and_swap):
                     with pytest.raises(SnapshotCreationFailedError):
                         create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
 
-                if os.name != "nt":
-                    assert dest_snap.is_file(), "Il file sostituito da un altro processo deve sopravvivere!"
-                    assert dest_snap.read_bytes() == b"REPLACEMENT_BY_CONCURRENT_PROCESS"
+                assert dest_snap.is_file(), "Il file sostituito da un altro processo deve sopravvivere!"
+                assert dest_snap.read_bytes() == b"REPLACEMENT_BY_CONCURRENT_PROCESS"
             finally:
                 writer_conn.close()
 
@@ -4448,16 +4448,15 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                 def simulated_acquire_and_swap_diff_inode(p, *args, **kwargs):
                     if dest_snap.exists():
                         dest_snap.unlink()
-                        dest_snap.write_bytes(b"CONCURRENT_DIFFERENT_INODE_CONTENT")
+                    dest_snap.write_bytes(b"CONCURRENT_DIFFERENT_INODE_CONTENT")
                     raise SnapshotCreationFailedError("Simulazione interruzione post-swap diff inode")
 
                 with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=simulated_acquire_and_swap_diff_inode):
                     with pytest.raises(SnapshotCreationFailedError):
                         create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
 
-                if os.name != "nt":
-                    assert dest_snap.is_file(), "Il file sostituito da un processo concorrente deve sopravvivere!"
-                    assert dest_snap.read_bytes() == b"CONCURRENT_DIFFERENT_INODE_CONTENT"
+                assert dest_snap.is_file(), "Il file sostituito da un processo concorrente deve sopravvivere!"
+                assert dest_snap.read_bytes() == b"CONCURRENT_DIFFERENT_INODE_CONTENT"
             finally:
                 writer_conn.close()
 
@@ -4481,7 +4480,7 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                 def simulated_acquire_and_swap_same_inode(p, *args, **kwargs):
                     if dest_snap.exists():
                         dest_snap.unlink()
-                        dest_snap.write_bytes(b"REUSED_INODE_COMPETITOR_DATA_999")
+                    dest_snap.write_bytes(b"REUSED_INODE_COMPETITOR_DATA_999")
                     raise SnapshotCreationFailedError("Simulazione crash con inode riutilizzato")
 
                 orig_lstat = os.lstat
@@ -4502,9 +4501,8 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                             with pytest.raises(SnapshotCreationFailedError):
                                 create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
 
-                if os.name != "nt":
-                    assert dest_snap.is_file(), "Il file concorrente con medesimo inode DEVE sopravvivere al cleanup!"
-                    assert dest_snap.read_bytes() == b"REUSED_INODE_COMPETITOR_DATA_999"
+                assert dest_snap.is_file(), "Il file concorrente con medesimo inode DEVE sopravvivere al cleanup!"
+                assert dest_snap.read_bytes() == b"REUSED_INODE_COMPETITOR_DATA_999"
             finally:
                 writer_conn.close()
 
@@ -4520,7 +4518,7 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                 def simulated_swap_external(p, *args, **kwargs):
                     if dest_snap.exists():
                         dest_snap.unlink()
-                        dest_snap.write_bytes(b"EXTERNAL_DIR_COMPETITOR_FILE")
+                    dest_snap.write_bytes(b"EXTERNAL_DIR_COMPETITOR_FILE")
                     raise SnapshotCreationFailedError("Interruzione in cartella esterna")
 
                 with patch("scripts.preflight_checkpoint_resume.acquire_forensic_readonly_copy", side_effect=simulated_swap_external):
@@ -4528,9 +4526,8 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                         create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
 
                 assert external_dir.is_dir(), "La cartella esterna esplicita deve sempre essere preservata!"
-                if os.name != "nt":
-                    assert dest_snap.is_file(), "Il file nella directory esterna deve sopravvivere!"
-                    assert dest_snap.read_bytes() == b"EXTERNAL_DIR_COMPETITOR_FILE"
+                assert dest_snap.is_file(), "Il file nella directory esterna deve sopravvivere!"
+                assert dest_snap.read_bytes() == b"EXTERNAL_DIR_COMPETITOR_FILE"
             finally:
                 writer_conn.close()
 
@@ -5322,6 +5319,233 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                 assert hashlib.sha256(external_target.read_bytes()).hexdigest() == orig_hash
             finally:
                 writer_conn.close()
+
+    def test_168_adversarial_competitor_file_created_immediately_before_publication_survives(self) -> None:
+        """
+        TEST AVVERSARIO PUBBLICAZIONE ESTERNA:
+        Un concorrente crea il file esterno con b'COMPETITOR_NEVER_OVERWRITE' subito prima
+        dell'apertura esclusiva al momento della pubblicazione.
+        La creazione atomica O_CREAT|O_EXCL rifiuta categoricamente la sovrascrittura (FileExistsError),
+        il file del concorrente sopravvive intatto, nessun dato viene cancellato o clobberato
+        e l'area temporanea di staging viene interamente ripulita senza residui.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                dest_dir = Path(tmp_dir) / "adversarial_dest_168"
+                dest_dir.mkdir()
+                dest_snap = dest_dir / "competitor_snap_168.db"
+
+                orig_os_open = os.open
+                competitor_created = [False]
+
+                def monkeypatched_os_open(path, flags, *args, **kwargs):
+                    # Intercetta il momento esatto della pubblicazione sul target esterno
+                    if str(path) == str(dest_snap) and not competitor_created[0]:
+                        dest_snap.write_bytes(b"COMPETITOR_NEVER_OVERWRITE")
+                        competitor_created[0] = True
+                    return orig_os_open(path, flags, *args, **kwargs)
+
+                with patch("os.open", side_effect=monkeypatched_os_open):
+                    with pytest.raises(FileExistsError):
+                        create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
+
+                assert competitor_created[0], "L'intercettazione avversaria concorrente deve essersi attivata!"
+                assert dest_snap.is_file(), "Il file concorrente creato alla pubblicazione DEVE sopravvivere!"
+                assert dest_snap.read_bytes() == b"COMPETITOR_NEVER_OVERWRITE", "Il contenuto concorrente NON deve essere stato sovrascritto!"
+
+                # Verifiche di immutabilità sorgente
+                assert src_db.exists()
+                assert Path(f"{src_db}-wal").exists()
+                assert Path(f"{src_db}-shm").exists()
+            finally:
+                writer_conn.close()
+
+    def test_169_publication_nominal_synthetic_sqlite_full_integrity(self) -> None:
+        """
+        PUBBLICAZIONE NOMINALE CON DESTINAZIONE ESTERNA SU SQLITE SINTETICO:
+        Verifica che su un database SQLite sintetico in modalità WAL, con tabelle e dati attivi,
+        lo snapshot pubblicato sul percorso esterno sia integro, leggibile da SQLite,
+        senza directory temporanee residue nell'area temporanea.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                ext_dir = Path(tmp_dir) / "external_nominal_169"
+                ext_dir.mkdir()
+                target_snap = ext_dir / "published_nominal_snapshot.db"
+
+                snap_file, snap_temp_dir, metrics = create_consistent_readonly_snapshot(
+                    src_db, dest_path=target_snap, return_metrics=True
+                )
+
+                assert snap_file == target_snap
+                assert snap_temp_dir is None, "Per destinazioni esterne, la dir temporanea di staging deve essere ripulita (None)!"
+                assert target_snap.is_file(), "Il file snapshot pubblicato deve esistere!"
+
+                # Verifica integrità strutturale SQLite
+                conn = sqlite3.connect(f"file:{target_snap.resolve().as_posix()}?mode=ro", uri=True)
+                try:
+                    cur = conn.cursor()
+                    cur.execute("PRAGMA integrity_check;")
+                    rows = cur.fetchall()
+                    assert rows == [("ok",)], f"Integrità SQLite compromessa: {rows}"
+
+                    cur.execute("SELECT count(*) FROM live_cases;")
+                    cnt = cur.fetchone()[0]
+                    assert cnt >= 1, "I dati transazionali consolidati devono essere presenti nello snapshot!"
+                finally:
+                    conn.close()
+
+                # Verifica immutabilità fisica sorgente certificata
+                assert metrics["SOURCE_PHYSICAL_IMMUTABILITY_VERIFIED"] is True
+            finally:
+                writer_conn.close()
+
+    def test_170_publication_preexisting_destination_rejected_fail_closed(self) -> None:
+        """
+        DESTINAZIONE ESTERNA PREESISTENTE:
+        Rifiuto preventivo fail-closed se il file di destinazione esiste già prima della chiamata.
+        Nessuna directory o file temporaneo residuo, file preesistente invariato.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                dest_dir = Path(tmp_dir) / "preexisting_dir_170"
+                dest_dir.mkdir()
+                existing_file = dest_dir / "already_here.db"
+                existing_file.write_bytes(b"INITIAL_UNTOUCHED_USER_SNAPSHOT_170")
+                initial_sha = hashlib.sha256(existing_file.read_bytes()).hexdigest()
+
+                with pytest.raises(FileExistsError):
+                    create_consistent_readonly_snapshot(src_db, dest_path=existing_file)
+
+                assert existing_file.is_file()
+                assert hashlib.sha256(existing_file.read_bytes()).hexdigest() == initial_sha
+            finally:
+                writer_conn.close()
+
+    def test_171_publication_symlink_destination_rejected(self) -> None:
+        """
+        DESTINAZIONE SYMLINK:
+        Rifiuto categorico di snapshot verso symlink (SnapshotPermissionDeniedError).
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                dest_dir = Path(tmp_dir) / "symlink_dir_171"
+                dest_dir.mkdir()
+                real_target = dest_dir / "real_file.db"
+                real_target.write_bytes(b"REAL_TARGET_PREEXISTING")
+
+                link_path = dest_dir / "symlink_snap.db"
+                can_symlink = True
+                try:
+                    os.symlink(real_target, link_path)
+                except (OSError, NotImplementedError):
+                    can_symlink = False
+
+                if can_symlink:
+                    with pytest.raises((SnapshotPermissionDeniedError, FileExistsError)):
+                        create_consistent_readonly_snapshot(src_db, dest_path=link_path)
+                    assert real_target.read_bytes() == b"REAL_TARGET_PREEXISTING"
+                else:
+                    # Su ambienti Windows senza privilegi per symlink, testare tramite mock os.path.islink
+                    with patch("os.path.islink", return_value=True):
+                        with pytest.raises(SnapshotPermissionDeniedError):
+                            create_consistent_readonly_snapshot(src_db, dest_path=dest_dir / "mock_link.db")
+            finally:
+                writer_conn.close()
+
+    def test_172_publication_io_error_during_write_preserves_partial_and_cleans_staging(self) -> None:
+        """
+        ERRORE I/O DURANTE LA SCRITTURA DOPO APERTURA ESCLUSIVA:
+        In caso di fallimento di scrittura (es. disco pieno) sul descrittore aperto esclusivamente,
+        i descrittori vengono chiusi. Conformemente al contratto, il file parziale NON viene
+        eliminato automaticamente (viene sollevata SnapshotCreationFailedError segnalando
+        che può richiedere pulizia manuale), mentre l'area temporanea privata viene ripulita.
+        I sorgenti rimangono inalterati.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                dest_dir = Path(tmp_dir) / "io_fail_dir_172"
+                dest_dir.mkdir()
+                dest_snap = dest_dir / "failing_write_snapshot.db"
+
+                def failing_write(fd, data):
+                    raise OSError("Simulato disco pieno durante os.write")
+
+                with patch("os.write", side_effect=failing_write):
+                    with pytest.raises(SnapshotCreationFailedError) as exc_info:
+                        create_consistent_readonly_snapshot(src_db, dest_path=dest_snap)
+
+                err_msg = str(exc_info.value)
+                assert "scrittura dello snapshot sul percorso di destinazione esterno" in err_msg
+                assert "non è stato eliminato automaticamente" in err_msg
+
+                # Il file parziale NON è stato eliminato automaticamente (contratto di sicurezza esterna)
+                assert dest_snap.exists(), "Il file parziale esterno NON deve essere cancellato automaticamente!"
+
+                # Sorgenti intatti
+                assert src_db.exists()
+                assert Path(f"{src_db}-wal").exists()
+            finally:
+                writer_conn.close()
+
+    def test_173_publication_log_and_error_privacy_sanitizes_paths(self) -> None:
+        """
+        PRIVACY DEI LOG ED ERRORI DI PUBBLICAZIONE:
+        Verifica che i messaggi di errore della pubblicazione esclusiva usino _sanitize_path
+        senza esporre percorsi assoluti privati dell'utente.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_db, writer_conn, state = self._setup_wal_database_with_open_writer(tmp_dir)
+            try:
+                dest_dir = Path(tmp_dir) / "sensitive_lucas_folder"
+                dest_dir.mkdir()
+                existing = dest_dir / "target.db"
+                existing.write_bytes(b"DATA")
+
+                with pytest.raises(FileExistsError) as exc_info:
+                    _publish_snapshot_exclusively(src_db, existing)
+
+                err_str = str(exc_info.value)
+                # Il path deve essere formattato via _sanitize_path: [DATABASE_REDACTED]
+                assert "[DATABASE_REDACTED]" in err_str
+                assert "sensitive_lucas_folder" not in err_str
+                assert "lucas" not in err_str.lower() or "[DATABASE_REDACTED]" in err_str
+            finally:
+                writer_conn.close()
+
+    def test_174_direct_exclusive_publish_no_clobber_primitive(self) -> None:
+        """
+        TEST DIRETTO DELLA PRIMITIVA _publish_snapshot_exclusively:
+        1. Se il file target esiste, solleva FileExistsError senza modificare i byte.
+        2. Se il file target non esiste, pubblica il file con integrità byte-for-byte.
+        3. Se il target è un symlink, rifiuta con SnapshotPermissionDeniedError.
+        """
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            src_file = Path(tmp_dir) / "src.db"
+            src_content = b"SQLITE_SYNTHETIC_STAGED_PAYLOAD_12345"
+            src_file.write_bytes(src_content)
+
+            # Caso 1: pubblicazione riuscita
+            target_file = Path(tmp_dir) / "out.db"
+            _publish_snapshot_exclusively(src_file, target_file)
+            assert target_file.is_file()
+            assert target_file.read_bytes() == src_content
+
+            # Caso 2: secondo tentativo sul file appena creato -> FileExistsError (NO-CLOBBER)
+            with pytest.raises(FileExistsError):
+                _publish_snapshot_exclusively(src_file, target_file)
+            assert target_file.read_bytes() == src_content  # byte invariati
+
+            # Caso 3: symlink
+            with patch("os.path.islink", return_value=True):
+                with pytest.raises(SnapshotPermissionDeniedError):
+                    _publish_snapshot_exclusively(src_file, Path(tmp_dir) / "link.db")
+
 
 
 

@@ -117,9 +117,15 @@ class TopicDetectionAnalyzer:
         operational_mode: bool | None = None,
         context_length: int = 8192,
         use_evidence_aliases: bool | None = None,
+        on_retry_callback: Any = None,
     ) -> TopicDetectionResult:
         """
         Esegue la detection del topic specificato.
+
+        In modalità operativa (is_operational=True):
+        - Gli alias deterministici sono abilitati di default (coerente con Discovery).
+        - Un retry con direttiva correttiva viene tentato se il modello cita
+          evidence_id inesistenti (AiInvalidEvidenceCitationError), fino a 2 tentativi totali.
         """
         target_model = model_id or self.default_model_id
         valid_evidence_ids = {s.evidence_id for s in document.all_evidence_sections}
@@ -130,7 +136,8 @@ class TopicDetectionAnalyzer:
             else PROMPT_VERSION_DETECTION
         )
 
-        use_aliases = False if use_evidence_aliases is None else use_evidence_aliases
+        # Simmetria con Discovery: in modalità operativa, gli alias sono abilitati di default
+        use_aliases = is_operational if use_evidence_aliases is None else use_evidence_aliases
         id_to_alias: dict[str, str] = {}
         alias_to_id: dict[str, str] = {}
         if use_aliases:
@@ -221,7 +228,7 @@ OUTPUT RULES:
             evidence_id_map=id_to_alias if use_aliases else None,
         )
 
-        messages = [
+        messages: list[dict[str, str]] = [
             {"role": "system", "content": system_content},
             {"role": "user", "content": user_content},
         ]
@@ -240,34 +247,120 @@ OUTPUT RULES:
                     f"Il blocco necessita di ulteriore suddivisione."
                 )
 
-        response = self.client.chat_completion(
-            messages=messages,
-            model_id=target_model,
-            schema=TOPIC_DETECTION_SCHEMA,
-            temperature=temperature,
-            seed=seed,
-            timeout_seconds=timeout_seconds,
-            max_tokens=max_tokens,
-        )
+        # Retry loop per Detection operativa: fino a 2 tentativi con direttiva correttiva
+        # per AiInvalidEvidenceCitationError (simmetrico a Discovery)
+        max_attempts = 2 if is_operational else 1
+        last_error: Exception | None = None
+        response = None
+        attempt_used = 0
 
-        # Verifica Model Mismatch
-        if target_model and response.model != target_model:
-            is_match = False
-            if is_operational:
-                from ai.lmstudio import is_equivalent_operational_model
-                is_match = is_equivalent_operational_model(target_model, response.model, client=self.client)
+        for attempt in range(max_attempts):
+            attempt_used = attempt
+            response = self.client.chat_completion(
+                messages=messages,
+                model_id=target_model,
+                schema=TOPIC_DETECTION_SCHEMA,
+                temperature=temperature,
+                seed=seed,
+                timeout_seconds=timeout_seconds,
+                max_tokens=max_tokens,
+            )
 
-            if not is_match:
-                raise AiModelMismatchError(
-                    f"Model mismatch in Topic Detection: richiesto model_id '{target_model}', "
-                    f"ma il backend ha restituito '{response.model}'."
+            # Verifica Model Mismatch
+            if target_model and response.model != target_model:
+                is_match = False
+                if is_operational:
+                    from ai.lmstudio import is_equivalent_operational_model
+                    is_match = is_equivalent_operational_model(target_model, response.model, client=self.client)
+
+                if not is_match:
+                    raise AiModelMismatchError(
+                        f"Model mismatch in Topic Detection: richiesto model_id '{target_model}', "
+                        f"ma il backend ha restituito '{response.model}'."
+                    )
+
+            try:
+                decision, evidence_ids, rationale = validate_topic_detection_payload(
+                    raw_text=response.content,
+                    valid_evidence_ids=valid_evidence_ids,
+                    alias_map=alias_to_id if use_aliases else None,
                 )
+                last_error = None
+                break
+            except AiInvalidEvidenceCitationError as cite_err:
+                last_error = cite_err
+                if attempt + 1 < max_attempts and is_operational:
+                    # Costruzione direttiva correttiva con elenco alias/ID validi
+                    invalid_list = getattr(cite_err, "invalid_evidence_ids", ())
+                    invalid_str = ", ".join(f"'{x}'" for x in invalid_list) if invalid_list else "non conformi"
+                    if use_aliases:
+                        valid_keys = sorted(alias_to_id.keys()) if alias_to_id else []
+                        valid_sample = ", ".join(f"'{k}'" for k in valid_keys[:20])
+                        correction_msg = (
+                            f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
+                            f"Strict forensic requirement: You MUST cite ONLY exact alias identifiers assigned to the evidence block of THIS specific chunk. "
+                            f"Available valid aliases in this block: [{valid_sample}]. "
+                            "Do NOT invent IDs, do NOT cite numbers not in this block, do NOT use IDs from other conversations. "
+                            "Re-evaluate and return the corrected JSON matching the schema."
+                        )
+                    else:
+                        valid_sample = ", ".join(f"'{k}'" for k in sorted(valid_evidence_ids)[:20])
+                        correction_msg = (
+                            f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
+                            f"Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in this chunk (e.g. [{valid_sample}]). "
+                            "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
+                            "Re-evaluate and return the corrected JSON matching the schema."
+                        )
 
-        decision, evidence_ids, rationale = validate_topic_detection_payload(
-            raw_text=response.content,
-            valid_evidence_ids=valid_evidence_ids,
-            alias_map=alias_to_id if use_aliases else None,
-        )
+                    # Candidato A: Retry contestuale con cronologia assistente
+                    candidate_msgs: list[dict[str, str]] = list(messages)
+                    if response and getattr(response, "content", None):
+                        candidate_msgs.append({"role": "assistant", "content": response.content})
+                    candidate_msgs.append({"role": "user", "content": correction_msg})
+
+                    # Ricalcolo preventivo del budget token input
+                    reserved_out = max_tokens or 512
+                    cand_plan = calculate_token_budget_plan(
+                        context_length=context_length,
+                        messages=candidate_msgs,
+                        reserved_output_tokens=reserved_out,
+                        schema=TOPIC_DETECTION_SCHEMA,
+                    )
+
+                    if cand_plan.fits_in_context and cand_plan.available_headroom >= 256:
+                        messages = candidate_msgs
+                    else:
+                        # Candidato B: Strategia compatta (single-turn) per prevenire context overflow
+                        orig_user_content = messages[1].get("content", "") if len(messages) > 1 else ""
+                        compact_msgs: list[dict[str, str]] = [
+                            messages[0],
+                            {
+                                "role": "user",
+                                "content": f"{orig_user_content}\n\n[DIRETTIVA CORRETTIVA DI PRECISIONE FORENSE]\n{correction_msg}",
+                            },
+                        ]
+                        compact_plan = calculate_token_budget_plan(
+                            context_length=context_length,
+                            messages=compact_msgs,
+                            reserved_output_tokens=reserved_out,
+                            schema=TOPIC_DETECTION_SCHEMA,
+                        )
+                        if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
+                            messages = compact_msgs
+                        else:
+                            # Neppure la strategia compatta rientra nel contesto: propaga l'errore
+                            raise
+
+                    if on_retry_callback:
+                        try:
+                            on_retry_callback(attempt + 1, "invalid_evidence_citation")
+                        except Exception:
+                            pass
+                    continue
+                raise
+
+        if last_error is not None:
+            raise last_error
 
         metadata: dict[str, Any] = {
             "prompt_version": prompt_version,
@@ -287,6 +380,7 @@ OUTPUT RULES:
             "raw_response": response.content,
             "evidence_citation_protocol": "deterministic_alias_v1" if use_aliases else "direct_evidence_id",
             "evidence_aliases_used": bool(use_aliases),
+            "retries": attempt_used,
         }
 
         return TopicDetectionResult(

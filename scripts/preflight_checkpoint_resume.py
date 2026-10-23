@@ -1957,6 +1957,84 @@ def _perform_atomic_safe_unlink(
         return False
 
 
+def _publish_snapshot_exclusively(
+    src_file: Path,
+    target_file: Path,
+    chunk_size: int = 65536,
+) -> None:
+    """
+    Pubblica in modo atomico ed esclusivo lo snapshot consolidato sul percorso di destinazione esterno.
+
+    GARANZIE DI SICUREZZA (NO-CLOBBER, ANTI-TOCTOU, ATOMIC EXCLUSIVE CREATION):
+    - Apertura atomica esclusiva a livello kernel con os.O_CREAT | os.O_EXCL | os.O_WRONLY (e O_NOFOLLOW ove disponibile).
+    - Nessun affidamento su verifiche lexists/exists non atomiche seguite da sovrascritture via shutil.copy2 o os.replace.
+    - Se il file di destinazione esiste già o viene creato concorrentemente in qualsiasi momento prima o durante
+      l'apertura, il kernel solleva istantaneamente un FileExistsError: zero sovrascrittura, zero troncamento.
+    - Rifiuto categorico di symlink sul percorso di destinazione con SnapshotPermissionDeniedError.
+    - Copia controllata a blocchi sul descrittore aperto esclusivamente e flush/fsync per garantire la persistenza fisica.
+    - Gestione fail-closed degli errori di copia (es. I/O o disco pieno): chiusura immediata dei descrittori.
+      Conformemente al contratto di conservazione dei percorsi esterni, il file parziale NON viene eliminato
+      automaticamente; viene sollevata SnapshotCreationFailedError documentando che l'eventuale residuo
+      può richiedere pulizia manuale da parte dell'utente.
+    - I file sorgente (database principale, -wal e -shm) restano rigorosamente immutati.
+    """
+    if os.path.islink(target_file) or target_file.is_symlink():
+        raise SnapshotPermissionDeniedError(
+            f"Symlink non consentito per il file di snapshot: {_sanitize_path(target_file)}"
+        )
+
+    flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
+    if hasattr(os, "O_NOFOLLOW"):
+        flags |= os.O_NOFOLLOW
+    if hasattr(os, "O_CLOEXEC"):
+        flags |= os.O_CLOEXEC
+    if hasattr(os, "O_BINARY"):
+        flags |= os.O_BINARY
+
+    out_fd: int | None = None
+    old_umask = os.umask(0o077)
+    try:
+        try:
+            out_fd = os.open(str(target_file), flags, 0o600)
+        except FileExistsError as fee:
+            raise FileExistsError(
+                f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+            ) from fee
+        except PermissionError as pe:
+            raise SnapshotPermissionDeniedError(
+                f"Permessi insufficienti per creare il file di snapshot: {_sanitize_path(target_file)}"
+            ) from pe
+        except OSError as oe:
+            raise SnapshotDirectoryInvalidError(
+                f"Impossibile creare il file di snapshot: {_sanitize_path(target_file)}"
+            ) from oe
+    finally:
+        os.umask(old_umask)
+
+    try:
+        with open(src_file, "rb") as in_f:
+            while True:
+                buf = in_f.read(chunk_size)
+                if not buf:
+                    break
+                os.write(out_fd, buf)
+        try:
+            os.fsync(out_fd)
+        except OSError:
+            pass
+    except Exception as copy_err:
+        raise SnapshotCreationFailedError(
+            f"Errore durante la scrittura dello snapshot sul percorso di destinazione esterno: {_sanitize_path(target_file)}. "
+            "Il file parziale non è stato eliminato automaticamente e potrebbe richiedere pulizia manuale."
+        ) from copy_err
+    finally:
+        if out_fd is not None:
+            try:
+                os.close(out_fd)
+            except Exception:
+                pass
+
+
 def create_consistent_readonly_snapshot(
     src_db_path: Path,
     dest_path: Path | None = None,
@@ -1973,9 +2051,10 @@ def create_consistent_readonly_snapshot(
     - Consolidamento transazionale delle pagine WAL e SHM nello snapshot di destinazione.
     - Area Temporanea Privata: l'intera preparazione e il backup avvengono sempre in un'area
       privata creata esclusivamente per l'invocazione (tempfile.mkdtemp).
-    - Destinazioni Esterne Esplicite: pubblicazione finale non-overwriting. In caso di
-      errore prima o durante la pubblicazione, nessuna cancellazione distruttiva viene mai eseguita
-      sul percorso esterno esplicito (privilegiando la conservazione dei dati ed eliminando F1-B).
+    - Destinazioni Esterne Esplicite: pubblicazione finale esclusiva atomica (O_CREAT | O_EXCL) senza finestre
+      TOCTOU né affidamento a verifiche non atomiche seguite da sovrascritture. In caso di collisione
+      concorrente o errore prima o durante la pubblicazione, nessuna cancellazione distruttiva viene mai
+      eseguita sul percorso esterno esplicito (privilegiando la conservazione dei dati ed eliminando F1-B).
     - Nessun uso di shutil.rmtree(): pulizia tramite os.rmdir() non ricorsivo che rifiuta la rimozione
       se la directory contiene file estranei/concorrenti (eliminando F1-C).
     - Rifiuto categorico di symlink e percorsi non-directory.
@@ -2098,9 +2177,7 @@ def create_consistent_readonly_snapshot(
 
         # 6. Pubblicazione su destinazione esterna SOLO ad operazione completata con successo
         if target_file is not None:
-            if os.path.lexists(target_file) or target_file.exists():
-                raise FileExistsError("Il file di destinazione snapshot è apparso prima della pubblicazione (sovrascrittura vietata).")
-            shutil.copy2(str(dest_file), str(target_file))
+            _publish_snapshot_exclusively(dest_file, target_file)
             # Pulizia sicura del file e della cartella temporanea privata dopo la copia riuscita
             _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
             dest_fd = None

@@ -2089,7 +2089,7 @@ class TestFinalPreTestUbuntuClosure20261021:
         import tempfile
         import sqlite3
         from unittest.mock import patch
-        from scripts.preflight_checkpoint_resume import create_consistent_readonly_snapshot
+        from scripts.preflight_checkpoint_resume import create_consistent_readonly_snapshot, SnapshotCreationFailedError
 
         with tempfile.TemporaryDirectory() as tmp_dir:
             tmp_p = Path(tmp_dir)
@@ -2116,10 +2116,10 @@ class TestFinalPreTestUbuntuClosure20261021:
             stray_temps = list(tmp_p.glob("chatanalysis_snap_*"))
             assert len(stray_temps) == 0
 
-            # 2. Riproduzione Anomalia: errore durante il processo con dest_path esplicito non preesistente
+            # 2. Riproduzione Anomalia: errore durante la pubblicazione con dest_path esplicito non preesistente
             dest_target_fail = dir_b / "snapshot_should_not_exist.db"
-            with patch("shutil.copy2", side_effect=OSError("Simulazione interruzione copia finale")):
-                with pytest.raises(OSError):
+            with patch("scripts.preflight_checkpoint_resume._publish_snapshot_exclusively", side_effect=SnapshotCreationFailedError("Simulazione interruzione copia finale")):
+                with pytest.raises(SnapshotCreationFailedError):
                     create_consistent_readonly_snapshot(src_db, dest_path=dest_target_fail)
 
             # Il file target esterno non è mai stato pubblicato né cancellato distruttivamente
