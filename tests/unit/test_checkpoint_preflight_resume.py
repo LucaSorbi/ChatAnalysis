@@ -5340,8 +5340,8 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
                 competitor_created = [False]
 
                 def monkeypatched_os_open(path, flags, *args, **kwargs):
-                    # Intercetta il momento esatto della pubblicazione sul target esterno
-                    if str(path) == str(dest_snap) and not competitor_created[0]:
+                    # Intercetta il momento esatto della preparazione/scrittura dello staging prima della pubblicazione
+                    if dest_snap.name in str(path) and not competitor_created[0]:
                         dest_snap.write_bytes(b"COMPETITOR_NEVER_OVERWRITE")
                         competitor_created[0] = True
                     return orig_os_open(path, flags, *args, **kwargs)
@@ -5482,10 +5482,9 @@ class TestForensicSourceIntegrityAndQuiescentAcquisition:
 
                 err_msg = str(exc_info.value)
                 assert "scrittura dello snapshot sul percorso di destinazione esterno" in err_msg
-                assert "non è stato eliminato automaticamente" in err_msg
 
-                # Il file parziale NON è stato eliminato automaticamente (contratto di sicurezza esterna)
-                assert dest_snap.exists(), "Il file parziale esterno NON deve essere cancellato automaticamente!"
+                # Con il modello di staging atomico: nessun file parziale o incompleto è mai visibile o esposto sul percorso target
+                assert not dest_snap.exists(), "Nessun file parziale o incompleto deve essere esposto sul percorso finale!"
 
                 # Sorgenti intatti
                 assert src_db.exists()

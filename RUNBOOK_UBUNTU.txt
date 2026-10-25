@@ -1,0 +1,246 @@
+================================================================================
+CHATANALYSIS — RUNBOOK OPERATIVO PER AMBIENTE UBUNTU / LINUX
+Data: 25 Ottobre 2026
+Release di riferimento: chatAnalysis_snapshot_directory_open_io_failclosed_audit_20261025.zip
+Scopo: Guida passo-passo deterministica per l'accertamento dell'ambiente,
+       esecuzione dei test, avvio di LM Studio locale, pipeline operativa
+       e recovery selettivo senza perdita di dati né falsificazione di metriche.
+================================================================================
+
+INDICE DELLE SEZIONI
+1. PREFLIGHT E AUDIT AMBIENTE UBUNTU (ACCERTAMENTO CODICE ATTIVO)
+2. PROCEDURA DI BACKUP NON DISTRUTTIVO (DATI, CHECKPOINT, BENCHMARK)
+3. CONFIGURAZIONE ED AVVIO LM STUDIO LOCALE
+4. ESECUZIONE DELLA SUITE DI TEST SANITIZZATA
+5. ESECUZIONE DELLA PIPELINE OPERATIVA (DISCOVERY -> DETECTION -> CONSISTENCY)
+6. RACCOLTA ED ESPORTAZIONE DEI REPORT JSON (VERIFICA METRICHE E PRIVACY)
+7. PROCEDURA DI RECOVERY SELETTIVO PER CHUNK FALLITI
+
+--------------------------------------------------------------------------------
+1. PREFLIGHT E AUDIT AMBIENTE UBUNTU (ACCERTAMENTO CODICE ATTIVO)
+--------------------------------------------------------------------------------
+PRIMA di eseguire qualsiasi inferenza o test, verificare in quale ambiente Python
+risiede il runtime e se i moduli importati corrispondono esattamente alla directory
+di lavoro.
+
+Comandi shell da eseguire sul sistema Ubuntu:
+
+```bash
+# 1.1 Posizionamento nella root del progetto
+cd /path/to/Tesi
+
+# 1.2 Identificazione directory e stato Git
+pwd
+git status
+git rev-parse HEAD
+
+# 1.3 Attivazione dell'ambiente virtuale dedicato (NON usare il python di sistema /usr/bin/python3)
+# Se si usa venv:
+source .venv/bin/activate
+# Oppure se si usa pipenv:
+# pipenv shell
+
+# 1.4 Verifica versione ed interprete attivo
+which python3
+python3 --version
+pip --version
+
+# 1.5 Risoluzione percorsi moduli (deve puntare alla directory corrente, NON a vecchie installazioni globali)
+python3 -c "
+import sys, os
+import analysis.service
+import ai.topics
+import ai.structured
+import analysis.export
+import scripts.preflight_checkpoint_resume
+
+print('Python executable:', sys.executable)
+print('analysis.service:             ', analysis.service.__file__)
+print('ai.topics:                    ', ai.topics.__file__)
+print('ai.structured:                ', ai.structured.__file__)
+print('analysis.export:              ', analysis.export.__file__)
+print('scripts.preflight_checkpoint: ', scripts.preflight_checkpoint_resume.__file__)
+"
+
+# 1.6 Verifica SHA-256 dei moduli chiave rispetto alla release
+sha256sum ai/topics.py analysis/export.py analysis/models.py analysis/service.py analysis/consistency.py scripts/preflight_checkpoint_resume.py
+```
+
+--------------------------------------------------------------------------------
+2. PROCEDURA DI BACKUP NON DISTRUTTIVO (DATI, CHECKPOINT, BENCHMARK)
+--------------------------------------------------------------------------------
+REGOLA IMPERATIVA: Non cancellare né sovrascrivere mai i checkpoint reali o
+i benchmark storici acquisiti il 21/10/2026.
+
+```bash
+# 2.1 Creazione cartella di backup con timestamp
+BACKUP_DIR="backup_pre_rebuild_$(date +%Y%m%d_%H%M%S)"
+mkdir -p "$BACKUP_DIR"
+
+# 2.2 Backup dei checkpoint esistenti (se presenti)
+if [ -d ".checkpoints" ]; then
+    cp -r .checkpoints "$BACKUP_DIR/.checkpoints_backup"
+    echo "[OK] Checkpoints salvati in $BACKUP_DIR/.checkpoints_backup"
+fi
+
+# 2.3 Backup dei database SQLite e file WAL/SHM
+find . -maxdepth 2 -name "*.db*" -exec cp {} "$BACKUP_DIR/" \;
+echo "[OK] File database copiati in $BACKUP_DIR"
+
+# 2.4 Backup esterno dei benchmark storici (CONSERVAZIONE ARCHIVIO ESTERNO)
+# NOTA BENE: I risultati dei benchmark storici originali (9 run reali) sono conservati
+# nell'archivio esterno (chat-20261021T182727Z-1-001.zip) e non sono tracciati dentro
+# questo repository per evitare alterazioni. Se estratti in una directory esterna:
+if [ -d "../benchmark_results" ]; then
+    cp -r ../benchmark_results "$BACKUP_DIR/benchmark_results_backup"
+    echo "[OK] Benchmark storici esterni archiviati in $BACKUP_DIR"
+fi
+```
+
+--------------------------------------------------------------------------------
+3. CONFIGURAZIONE ED AVVIO LM STUDIO LOCALE
+--------------------------------------------------------------------------------
+Per evitare discrepanze e fallimenti per context overflow o disallineamento parametri:
+
+- Applicazione: LM Studio (Desktop Linux o daemon locale `lms`)
+- Modello selezionato: `qwen2.5-7b-instruct` (oppure GGUF esatto: `Qwen/Qwen2.5-7B-Instruct-GGUF/qwen2.5-7b-instruct-q4_k_m.gguf`)
+- Endpoint HTTP: `http://localhost:1234/v1`
+- Parametri di configurazione runtime LM Studio:
+  * Context Length (n_ctx): 8192 token (FONDAMENTALE: non usare valori inferiori come 2048/4096)
+  * Temperature: 0.0 (deterministica, sia per Discovery che per Detection)
+  * Top P: 1.0 (o disabilitato)
+  * Repeat Penalty: 1.0
+  * Max Output Tokens: 1024 per Discovery, 512 per Detection
+  * GPU Offload: Massimo consentito da VRAM (es. 28-33 layer per 8GB VRAM)
+
+Verifica connettività e modello caricato:
+```bash
+curl -s http://localhost:1234/v1/models | python3 -m json.tool
+```
+Assicurarsi che il model ID restituito corrisponda alla configurazione impostata in ChatAnalysis.
+
+--------------------------------------------------------------------------------
+4. ESECUZIONE DELLA SUITE DI TEST SANITIZZATA
+--------------------------------------------------------------------------------
+Eseguire la suite di test nell'ambiente virtuale attivo. I log devono essere
+completamente privi di informazioni personali o credenziali.
+
+```bash
+# 4.1 Verifica specifica dei test di preflight/checkpoint (inclusi 122, 136, 137, 138, 144, 151)
+pytest tests/unit/test_checkpoint_preflight_resume.py -v --tb=short | tee test_checkpoint_preflight.log
+
+# 4.2 Verifica delle stabilizzazioni Discovery e Detection (inclusi 26 chunk sintetici con alias e retry)
+pytest tests/unit/test_topic_discovery_detection_stabilization.py -v --tb=short | tee test_stabilization.log
+
+# 4.3 Esecuzione test avversari e bloccanti audit 20261024
+pytest tests/unit/test_audit_rebuild_blockers_20261024.py -v --tb=short | tee test_audit_blockers.log
+
+# 4.4 Smoke test degli import e dei comandi del runbook
+pytest tests/unit/test_runbook_smoke.py -v --tb=short | tee test_runbook_smoke.log
+
+# 4.5 Esecuzione intera suite unitaria
+pytest tests/unit -q --tb=short --ignore=tests/integration/test_cloud_live.py | tee test_suite_unit.log
+
+# 4.6 Sanitizzazione immediata dei log (rimozione percorsi utente sensibili prima di qualsiasi condivisione)
+sed -i 's/\/home\/[a-zA-Z0-9_-]*\//\/home\/USER\//g' test_*.log
+```
+
+--------------------------------------------------------------------------------
+5. ESECUZIONE DELLA PIPELINE OPERATIVA (DISCOVERY -> DETECTION -> CONSISTENCY)
+--------------------------------------------------------------------------------
+La pipeline reale deve operare con gli alias deterministici attivi (`E001..En`)
+e con il retry limitato abilitato.
+
+Passaggio 5.1: Esecuzione Sintetica di Controllo (Demo / End-to-End preliminare)
+Prima di processare i messaggi reali, validare il flusso su un set sintetico:
+```bash
+python3 -c "
+from analysis.service import LocalTopicAnalysisService
+from ai.lmstudio import LmStudioClient
+from analysis.models import OperationalProfile
+
+print('Avvio test preliminare sintetico...')
+# Inizializzazione del client LM Studio e del service
+client = LmStudioClient(
+    base_url='http://localhost:1234',
+    model_id='qwen2.5-7b-instruct',
+    default_timeout_seconds=30.0,
+)
+service = LocalTopicAnalysisService(client=client)
+print('Client LM Studio e LocalTopicAnalysisService inizializzati con successo.')
+"
+```
+
+Passaggio 5.2: Avvio Topic Discovery Operativa
+Avviare l'elaborazione dei chunk (26 chunk previsti per il dataset autorizzato):
+- Monitorare il log per verificare che per i chunk non compaiano UNKNOWN_ERROR/GENERIC_ERROR non gestiti.
+- CONTRATTO DI RETRY ED ERRORI HTTP:
+  * Errori permanenti HTTP 400 (parametri non validi, schema JSON rifiutato, context overflow non risolvibile
+    a livello di chunk): il sistema fallisce chiuso immediatamente (FAIL-CLOSED, zero retry, attempts = 1)
+    senza sprecare compute su richieste non recuperabili.
+  * Errori transienti (HTTP 502/503/504, HTTP 429 rate limit o timeout di backend) ed errori di output
+    strutturato (AiStructuredOutputError da parsing o risposte troncate): il sistema applica un singolo
+    retry controllato (attempts = 2) con registrazione fedele del conteggio tentativi e token cumulati.
+
+Passaggio 5.3: Avvio Topic Detection Operativa
+- Verificare che ciascun chunk utilizzi alias biiettivi locali (`E001..En`).
+- Se il modello tenta di citare un ID non ammesso o in formato non conforme, scatterà il
+  retry guidato che fornisce ESCLUSIVAMENTE la lista degli alias validi per quel chunk.
+- Verificare nei log che i tentativi per chunk siano tracciati fedelmente (`attempts = 1` o `attempts = 2`).
+
+Passaggio 5.4: Valutazione della Consistenza Semantica Indipendente
+- Al termine della Detection, il servizio `ConsistencyService` valuta la concordanza semantica
+  in un'inferenza separata e deterministica, senza contaminazione tra Discovery e Detection.
+- Se la Detection si conclude con stato `PARTIAL`, il report di consistenza marcherà
+  esplicitamente `consistency_completeness = 'PARTIAL'` con avviso forense.
+
+--------------------------------------------------------------------------------
+6. RACCOLTA ED ESPORTAZIONE DEI REPORT JSON (VERIFICA METRICHE E PRIVACY)
+--------------------------------------------------------------------------------
+All'atto dell'esportazione:
+- Verificare che `execution_software_commit` sia valorizzato con il commit Git effettivo
+  che ha eseguito l'inferenza (non più `NOT_RECORDED`).
+- Verificare che `execution.error_count` corrisponda al numero reale di fallimenti:
+  se 2 chunk falliscono, `error_count` DEVE essere >= 2.
+- Verificare che nessun testo privato di messaggio sia trapelato nelle sezioni diagnostiche.
+- I codici di errore devono appartenere esclusivamente all'allowlist sicura (nessun trace non filtrato).
+
+Comando di validazione JSON esportato:
+```bash
+python3 -c "
+import json, sys
+
+path = sys.argv[1] if len(sys.argv) > 1 else 'latest_run.json'
+with open(path, 'r', encoding='utf-8') as f:
+    data = json.load(f)
+
+exec_commit = data.get('execution_software_commit')
+err_count = data.get('execution', {}).get('error_count', 0)
+failed_chunks = len([c for c in data.get('chunk_diagnostics', []) if c.get('status') == 'FAILED'])
+
+print(f'Execution Git Commit: {exec_commit}')
+print(f'Execution Error Count: {err_count}')
+print(f'Failed Chunks Count:  {failed_chunks}')
+assert exec_commit != 'NOT_RECORDED', 'ATTENZIONE: execution_software_commit non registrato!'
+assert err_count >= failed_chunks, 'ATTENZIONE: error_count inferiore ai chunk falliti!'
+print('Verifica report superata con successo!')
+"
+```
+
+--------------------------------------------------------------------------------
+7. PROCEDURA DI RECOVERY SELETTIVO PER CHUNK FALLITI
+--------------------------------------------------------------------------------
+Se al termine dell'esecuzione rimangono chunk falliti (es. a causa di sovraccarico di VRAM
+o riavvio demone LM Studio):
+
+1. NON cancellare la cartella `.checkpoints`.
+2. I chunk completati con esito SUCCESS risiedono intatti nei file checkpoint.
+3. Riavviare l'analisi abilitando `enable_checkpointing=True` e `resume_run_id=<RUN_ID>`.
+4. Il sistema verificherà crittograficamente la compatibilità (stesso modello, stesso prompt template,
+   stesso chunk plan e checksum dataset).
+5. I chunk già riusciti verranno caricati con provenienza `RECOVERED_CHECKPOINT`.
+6. Verranno re-inferiti ESCLUSIVAMENTE i chunk precedentemente falliti.
+7. È severamente proibito fondere checkpoint tra modelli differenti (es. Qwen con Llama)
+   o con chunk plan differenti: in tali casi il preflight bloccherà l'operazione per prevenire
+   inquinamento dei dati forensi.
+================================================================================

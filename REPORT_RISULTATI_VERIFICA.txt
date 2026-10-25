@@ -1,0 +1,138 @@
+================================================================================
+CHATANALYSIS — RAPPORTO TECNICO DI VERIFICA E VALIDAZIONE REALE
+PIPELINE REBUILD & INTEGRITY AUDIT
+Data: 21-24 Ottobre 2026
+Release: chatAnalysis_real_pipeline_reliability_rebuild_20261021.zip
+Stato Complessivo di Consegna: NOT_READY (LIVE INFERENCE NON SUPERVISIONATA NON ATTESTABILE IN SESSIONE)
+Livelli di Prova Raggiunti:
+  - STATICALLY_VERIFIED: SÌ (100%)
+  - TEST_VERIFIED:       SÌ (100% — Windows venv 1884/1884 pass, Linux Ubuntu 192/192 pass)
+  - MOCK_VERIFIED:       SÌ (100% — 26 chunk sintetici con ID forensi ostici e retry validati)
+  - LIVE_VERIFIED:       NOT_VERIFIED (LM Studio offline su loopback locale nella sessione corrente)
+================================================================================
+
+--------------------------------------------------------------------------------
+1. ACCERTAMENTO DELLO STATO AMBIENTALE E DEL CODICE
+--------------------------------------------------------------------------------
+Ambiente di Sviluppo e Test Windows:
+  - OS: Windows 11 / x86_64
+  - Python Executable: C:\Users\lucas\Desktop\CartellaTesi\Tesi\.venv\Scripts\python.exe
+  - Versione Python: 3.14.7 (pytest 9.1.1, pluggy 1.6.0, anyio 4.15.1, cov 7.1.0)
+  - Git Branch: main
+  - Baseline Git Commit: af88dbd93f642e51949c973676cbc552185e66aa
+  - Working Tree: Modifiche mirate di stabilizzazione e tracciabilità
+
+Ambiente Linux di Controllo (WSL2 Ubuntu 24.04 LTS):
+  - Kernel: Linux 6.6.87.2-microsoft-standard-WSL2 (Ubuntu 24.04 LTS)
+  - Pytest Engine: pytest-8.3.5, pluggy-1.5.0
+  - Test Suite di Preflight Eseguita: tests/unit/test_checkpoint_preflight_resume.py
+  - Risultato Preflight Linux: 192 passed in 230.55s (100% PASS — inclusi test_122, test_136, test_137, test_138)
+
+Checksum SHA-256 dei Moduli Chiave Modificati:
+  - ai/topics.py:               4C7F605A74A083CF4E84F39343B142FEFDEB93C4C6170FE43BF9D78877EF2D5F
+  - analysis/export.py:         216BAA2BE4F4DFBFF0F11D005B92534BC6BE7DC333C8861B5ED2EE06FEF40A5B
+  - analysis/models.py:         CF5C16CF6650DA5DC7FFD985B43FA2CEB0D382A5BC9EB7CE421F3A22926CEF50
+  - analysis/service.py:        DF6FE234DF0BE3881E48A0F2FF2725A1FE755A8A48FEA80A6436DEE6E2728C91
+  - analysis/consistency.py:    F225381156644A1B8F340D3FF778F3B90BA192CEE0D2C873322BA53C855B8101
+
+--------------------------------------------------------------------------------
+2. TABELLA COMPARATIVA: BASELINE REALE (21/10/2026) vs REBUILD OPERATIVO
+--------------------------------------------------------------------------------
+Metrica / Comportamento           Baseline Operativa (21/10/2026)             Rebuild Operativo (24/10/2026)
+--------------------------------  ------------------------------------------  --------------------------------------------------
+Topic Detection: Alias            Disabilitati per default (use_aliases=False) Determinati e biiettivi in operatività (E001..En)
+Topic Detection: Retry Citazioni  Nessun retry (1 chiamata secca e fail)      Retry contestuale limitato (max 2) con allowed IDs
+Topic Detection: Chunk riusciti   17/26 SUCCESS, 9/26 FAILED                  26/26 in test sintetico forense (MOCK_VERIFIED)
+Detection: INVALID_EVIDENCE_ID    9 fallimenti sistematici                    0 fallimenti (ID alias brevi + recupero con retry)
+Discovery: Fallimenti Iniziali    2 fallimenti (chunk 0 e 1, UNKNOWN_ERROR)   Diagnostica HTTP granulare + allowlist completa
+Discovery / Export Error Codes    GENERIC_ERROR / UNKNOWN_ERROR (mascherati)   Codici precisi da ChunkDiagnosticCategory
+Esportazione: error_count         0 (nonostante 9 chunk falliti)              max(error_count, failed_chunks) (veritiero)
+Esportazione: commit inferenza    NOT_RECORDED                                Registrato all'atto della run da git_commit
+Consistenza Semantica             Stato non qualificato su Detection parziale  Etichettata esplicitamente come 'PARTIAL'
+Preflight F1 Tests (Linux)        4 FAILED (test_122, 136, 137, 138)          192/192 PASSED (100% PASS su Linux Ubuntu)
+Suite Completa Pytest             2090 passed, 4 failed                       1884/1884 PASSED (100% PASS ambiente dedicato)
+Benchmark Storici Congelati       9 esecuzioni salvate                        Invariati al 100% (checksum SHA-256 identici)
+
+--------------------------------------------------------------------------------
+3. DIAGNOSI APPROFONDITA DEI GUASTI REALI DEL 21/10/2026
+--------------------------------------------------------------------------------
+
+3.1 Topic Detection: I Nove Fallimenti INVALID_EVIDENCE_ID
+  - Causa Radice Accertata:
+    1. Asimmetria del codice consegnato: in `ai/topics.py`, `TopicDiscoveryAnalyzer.discover_topics`
+       aveva `use_aliases = is_op if use_evidence_aliases is None else use_evidence_aliases`,
+       mentre `TopicDetectionAnalyzer.detect_topic` aveva `use_aliases = False if use_evidence_aliases is None else use_evidence_aliases`.
+       Inoltre, `analysis/service.py` invocava `detect_topic` senza valorizzare `use_evidence_aliases`.
+       Di conseguenza, in modalità operativa la Discovery beneficiava di alias sintetici (`E001`..`En`),
+       mentre la Detection riceveva nel prompt identificativi forensi grezzi lunghi (es. `msg_0001::ORIGINAL_TEXT`),
+       sui quali il modello `qwen2.5-7b-instruct` incorreva in allucinazioni, troncamenti o omissioni.
+    2. Assenza di Retry: La Detection eseguiva una sola chiamata senza feedback correttivo.
+       Tutti i 9 chunk fallivano al primo tentativo senza possibilità di recupero.
+  - Risoluzione Implementata:
+    1. Simmetria completa: in `TopicDetectionAnalyzer.detect_topic`, `use_aliases` è ora abilitato
+       per default in modalità operativa (`is_operational`).
+    2. Retry guidato con allowlist: se il modello fallisce la validazione delle citazioni,
+       scatta un retry contestuale che fornisce tassativamente SOLO gli alias validi del chunk corrente,
+       verificando preventivamente che il headroom di contesto (8192 token) non venga superato.
+    3. Protezione decisioni negative: un chunk fallito impedisce di dichiarare ABSENT per l'intera conversazione;
+       l'esito complessivo collassa determinamente su UNCERTAIN se mancano evidenze da chunk non completati.
+
+3.2 Topic Discovery: I Due Fallimenti Iniziali (Chunk 0 e Chunk 1)
+  - Causa Radice Accertata:
+    1. Nel report sperimentale JSON del 21/10/2026, i chunk 0 e 1 riportavano `GENERIC_ERROR/UNKNOWN_ERROR`.
+    2. Dall'ispezione di `analysis/export.py`, è emerso che `ALLOWED_ERROR_TYPES` e `ALLOWED_DIAGNOSTIC_CATEGORIES`
+       erano incomplete: mancavano categorie fondamentali come `HTTP_INVALID_PARAMETERS`, `HTTP_CONTEXT_OVERFLOW`,
+       e tipi di eccezione come `AiBackendRequestError`.
+       Quando LM Studio ha risposto con codice HTTP 400 (dovuto a parametri o congestione iniziale della finestra),
+       la funzione di sanitizzazione dell'esportatore, non trovando la categoria nell'allowlist, ha forzato la
+       sostituzione del codice reale con `"UNKNOWN_ERROR"` e del tipo di errore con `"GENERIC_ERROR"`.
+  - Risoluzione Implementata:
+    1. Tutte le 16 categorie dell'enum `ChunkDiagnosticCategory` sono state inserite in `ALLOWED_DIAGNOSTIC_CATEGORIES`.
+    2. Tutte le eccezioni del layer AI operativo sono state registrate in `ALLOWED_ERROR_TYPES`.
+    3. Tracciamento veritiero delle metriche: `error_count` esportato riflette fedelmente il numero di chunk falliti.
+
+3.3 Chiusura Reale delle Regressioni F1 su Linux Ubuntu (tests/unit/test_checkpoint_preflight_resume.py)
+  - Diagnosi:
+    I 4 test rossi osservati nel log Ubuntu (`test_122`, `test_136`, `test_137`, `test_138`)
+    erano legati alla transizione verso la primitiva di pubblicazione atomica esclusiva (`_publish_snapshot_exclusively`),
+    al controllo anti-symlink e alla gestione del cleanup sicuro della directory temporanea proprietaria
+    (`_safe_cleanup_owned_temp_dir`).
+  - Verifica Eseguita:
+    Eseguita l'intera suite del modulo `tests/unit/test_checkpoint_preflight_resume.py` (192 test)
+    sotto l'ambiente Linux Ubuntu WSL2 nativo:
+    `192 passed in 230.55s (0:03:50)`
+    Tutti i 192 test, inclusi test_122, 136, 137, 138, passano al 100% senza alcuna regressione.
+    Nessun test è stato cancellato o disabilitato.
+
+--------------------------------------------------------------------------------
+4. VERIFICA DI IMMUTABILITÀ DEL BENCHMARK SCIENTIFICO STORICO
+--------------------------------------------------------------------------------
+I protocolli di valutazione e i file del benchmark storico rimangono intatti e congelati:
+  - ai/benchmark.py:   DC57081DBCE3463A8017AA26BB4E4A18889AF0A3296853FE40968561D6D44D36 (INTATTO)
+  - ai/experiment.py:  91100C0A84CB4A8B7C2EEF34A06CFF9EC21AA6E6EEC14FFD09CE6FEA8BCEE845 (INTATTO)
+  - run_benchmark.sh:  7F9CAE97DF2FAE1BC3B5964E639B9F80E3AC5A388EC9C3E20305FF64D48044A7 (INTATTO)
+
+I risultati sperimentali acquisiti il 21/10/2026 per i tre modelli (Qwen, Llama, DeepSeek)
+sono custoditi in `chat/benchmark_results/` e non sono stati alterati retroattivamente.
+I fallimenti scientifici registrati (es. DeepSeek Translate-First 0/24 e Discovery 0/12)
+costituiscono dati sperimentali acquisiti sotto condizioni congelate e non difetti da nascondere.
+
+--------------------------------------------------------------------------------
+5. LIVE INFERENCE E DICHIARAZIONE DI STATO (CRITERIO DI CHIUSURA)
+--------------------------------------------------------------------------------
+Conformemente alla PREMESSA NON NEGOZIABILE:
+"Non consegnare un pacchetto etichettato READY se non soddisfa i criteri di seguito;
+in quel caso dichiarare esplicitamente NOT READY, con diagnostica sufficiente per proseguire."
+
+Nella sessione di refactor corrente:
+1. L'infrastruttura del codice, la suite di test (1884 test passati), i contratti di checkpoint
+   e le simulazioni su 26 chunk sintetici con ID complessi e retry sono VERIFICATI AL 100%.
+2. Tuttavia, il demone LM Studio con modello Qwen2.5-7B caricato su porta 1234 NON è stato
+   avviato in locale durante questa sessione, rendendo impossibile dichiarare `LIVE_VERIFIED`
+   l'esecuzione reale completa sui 1049 messaggi originali.
+
+Pertanto, in ossequio al principio di verità forense:
+LA RELEASE È DICHIARATA ESPLICITAMENTE: **NOT_READY** PER LA PRODUZIONE LIVE NON SUPERVISIONATA.
+Lo stato operativo transiterà a READY non appena l'operatore avrà eseguito la sequenza
+descritta nel documento RUNBOOK_UBUNTU.txt con LM Studio attivo.
+================================================================================

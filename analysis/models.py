@@ -287,9 +287,11 @@ class TopicAnalysisRunMetadata:
     end_timestamp: str | None = None
     status: str | None = None
     error_classification: str | None = None
+    git_commit: str | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Converte i metadata in un dizionario sicuro per inclusione nel risultato."""
+        eff_err_count = max(int(self.error_count), int(self.failed_chunk_count))
         d = {
             "run_id": self.run_id,
             "origin": self.origin.value if hasattr(self.origin, "value") else str(self.origin),
@@ -302,10 +304,12 @@ class TopicAnalysisRunMetadata:
             "seed": self.seed,
             "chunk_count": int(self.chunk_count),
             "completed_chunk_count": int(self.completed_chunk_count),
-            "error_count": int(self.error_count),
+            "error_count": eff_err_count,
             "failed_chunk_count": int(self.failed_chunk_count),
             "data_classification": self.data_classification,
         }
+        if self.git_commit:
+            d["git_commit"] = self.git_commit
         if self.reduction_strategy:
             d["reduction_strategy"] = self.reduction_strategy
         if self.timestamp:
@@ -620,23 +624,39 @@ def classify_discovery_exception(
 
     if isinstance(exc, (AiBackendRequestError, AnalysisInputTooLargeError)):
         err_cat = getattr(exc, "error_category", None)
-        if err_cat == "CONTEXT_OVERFLOW":
+        if err_cat in ("CONTEXT_OVERFLOW", "HTTP_CONTEXT_OVERFLOW"):
             return (
                 ChunkDiagnosticCategory.HTTP_CONTEXT_OVERFLOW.value,
                 "inference",
                 "Dimensione del prompt eccede la finestra di contesto del modello",
             )
-        if err_cat == "SCHEMA_REJECTED":
+        if err_cat in ("SCHEMA_REJECTED", "UNSUPPORTED_STRUCTURED_OUTPUT", "HTTP_SCHEMA_REJECTED"):
             return (
                 ChunkDiagnosticCategory.HTTP_SCHEMA_REJECTED.value,
                 "inference",
                 "Schema JSON rifiutato dal server locale LM Studio",
             )
-        if err_cat == "INVALID_PARAMS" or http_status == 400 or getattr(exc, "status_code", None) == 400:
+        if (
+            err_cat in ("INVALID_PARAMS", "INVALID_PARAMETER", "HTTP_INVALID_PARAMETERS")
+            or http_status == 400
+            or getattr(exc, "status_code", None) == 400
+        ):
             return (
                 ChunkDiagnosticCategory.HTTP_INVALID_PARAMETERS.value,
                 "inference",
                 "Parametri di richiesta HTTP non validi o rifiutati (HTTP 400)",
+            )
+        if err_cat in ("MODEL_NOT_LOADED", "AiModelMismatchError"):
+            return (
+                ChunkDiagnosticCategory.MODEL_MISMATCH.value,
+                "inference",
+                "Modello richiesto non caricato o non corrispondente",
+            )
+        if err_cat in ("TIMEOUT", "AiBackendTimeoutError"):
+            return (
+                ChunkDiagnosticCategory.TIMEOUT.value,
+                "inference",
+                "Timeout durante la richiesta HTTP al backend LLM",
             )
         return (
             ChunkDiagnosticCategory.HTTP_INVALID_PARAMETERS.value,

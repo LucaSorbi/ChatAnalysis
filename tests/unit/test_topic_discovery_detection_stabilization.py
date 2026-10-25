@@ -624,10 +624,90 @@ def test_control_case_vision_description_serialization():
 
     # Verifica serializzazione nel prompt
     all_content = " ".join(m.get("content", "") for m in captured_prompt)
-    assert "msg::5::VISION_DESCRIPTION" in all_content, "L'ID VISION_DESCRIPTION deve comparire nel prompt inviato al modello!"
+    assert "msg::5::VISION_DESCRIPTION" in all_content or ("msg::5" in all_content and "VISION_DESCRIPTION" in all_content), "L'evidenza VISION_DESCRIPTION deve comparire nel prompt inviato al modello!"
     assert "porta di sicurezza blindata" in all_content
 
     # Risultato Detection corretto
     assert res.decision == TopicDecision.PRESENT
     assert "msg::5::VISION_DESCRIPTION" in res.evidence_ids
     assert res.provenance_document_id == doc.document_id
+
+
+def test_detection_26_chunks_synthetic_forensic_ids_with_retry_and_recovery():
+    """
+    Verifica indipendente richiesta (Sezione 6.C):
+    - 26 chunk SINTETICI con ID forensi lunghi e complessi.
+    - Risposte simulate con fallimento iniziale (citazione non valida / cross-chunk),
+      poi correzione con alias valido a seguito della direttiva di retry.
+    - Misurazione effettiva di attempts=2 sui chunk ritentati.
+    - Rigetto assoluto di citazioni esterne o inventate.
+    """
+    doc = _create_synthetic_26_chunk_document("doc_synth_26_forensic_ids")
+    topic = TopicQuery(topic_id="q_forensic", label="Contratto riservato", description="Accordo e firme")
+
+    chunk_call_attempts: dict[int, int] = {}
+
+    class DynamicRetryForensicClient(FakeLocalLlmClient):
+        def __init__(self):
+            super().__init__(model_name="qwen2.5-7b-instruct", models=("qwen2.5-7b-instruct",))
+
+        def chat_completion(self, messages: list[dict[str, str]], model_id: str | None = None, **kwargs: Any) -> LlmCompletionResponse:
+            user_msg = messages[-1].get("content", "")
+            is_correction = "CORRECTION DIRECTIVE" in user_msg or "DIRETTIVA CORRETTIVA" in user_msg
+
+            chunk_num = 0
+            for i in range(26):
+                if f"appartenente al chunk {i}" in user_msg:
+                    chunk_num = i
+                    break
+
+            chunk_call_attempts[chunk_num] = chunk_call_attempts.get(chunk_num, 0) + 1
+
+            if chunk_num in (3, 8) and not is_correction:
+                # Tentativo 1 fallace: cita ID inventato / cross-chunk
+                resp_payload = {
+                    "decision": "PRESENT",
+                    "evidence_ids": ["E999_FABRICATED_CROSS_CHUNK_ID"],
+                    "rationale": "Tentativo con ID non valido",
+                }
+            else:
+                # Tentativo nominale o corretto su retry: cita alias 'E001'
+                resp_payload = {
+                    "decision": "PRESENT",
+                    "evidence_ids": ["E001"],
+                    "rationale": f"Tema rilevato nel blocco {chunk_num}",
+                }
+
+            return LlmCompletionResponse(
+                content=json.dumps(resp_payload),
+                model=model_id or "qwen2.5-7b-instruct",
+            )
+
+    client = DynamicRetryForensicClient()
+    service = LocalTopicAnalysisService(
+        default_model="qwen2.5-7b-instruct",
+        profile=OperationalProfile.BALANCED,
+        context_length=8192,
+    )
+
+    res = service.run_topic_detection(document=doc, topic=topic, client=client)
+
+    # 1. 26/26 chunk analizzati e completati con successo
+    assert res.decision == TopicDecision.PRESENT
+    assert res.metadata["chunk_count"] == 26
+    assert res.metadata["completed_chunk_count"] == 26
+    assert res.metadata["failed_chunk_count"] == 0
+    assert res.metadata["status"] == "SUCCESS"
+
+    # 2. I chunk 3 e 8 hanno eseguito esattamente 2 tentativi, gli altri 1
+    chunk_diags = {d["chunk_index"]: d for d in res.metadata["chunk_diagnostics"]}
+    assert chunk_diags[3]["attempts"] == 2, f"Il blocco 3 doveva registrare 2 tentativi, registrati: {chunk_diags[3]['attempts']}"
+    assert chunk_diags[8]["attempts"] == 2, f"Il blocco 8 doveva registrare 2 tentativi, registrati: {chunk_diags[8]['attempts']}"
+    assert chunk_diags[0]["attempts"] == 1
+    assert chunk_diags[15]["attempts"] == 1
+
+    # 3. Nessuna citazione inventata è stata accettata: tutte le evidence_ids sono mappate su ID validi del documento
+    valid_doc_eids = {s.evidence_id for s in doc.all_evidence_sections}
+    for eid in res.evidence_ids:
+        assert eid in valid_doc_eids, f"Evidence ID '{eid}' non presente nel documento originario!"
+    assert "E999_FABRICATED_CROSS_CHUNK_ID" not in res.evidence_ids

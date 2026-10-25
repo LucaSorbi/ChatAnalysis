@@ -1,0 +1,186 @@
+================================================================================
+CHATANALYSIS — DIFF SUMMARY & ARCHITECTURAL RATIONALE
+Data: 21-24 Ottobre 2026
+Baseline Commit: af88dbd93f642e51949c973676cbc552185e66aa
+Pacchetto di riferimento: chatAnalysis_real_pipeline_reliability_rebuild_20261021.zip
+================================================================================
+
+1. INTRODUZIONE ED OBIETTIVI DELL'INTERVENTO
+Il presente documento attesta in modo analitico e trasparente tutte le modifiche
+apportate alla pipeline operativa di ChatAnalysis, specificando per ciascun modulo
+la motivazione tecnica, le garanzie preservate e l'impatto sulla riproducibilità.
+I risultati storici congelati (benchmark Qwen, Llama, DeepSeek) sono stati protetti
+e preservati al 100% senza alterazione alcuna dei protocolli o dei file scientifici.
+
+--------------------------------------------------------------------------------
+2. MODULI MODIFICATI E MOTIVAZIONI ARCHITETTURALI
+--------------------------------------------------------------------------------
+
+A) ai/topics.py
+   - TopicDetectionAnalyzer.detect_topic:
+     * Simmetria degli Alias: Abilitazione di alias deterministici per default in
+       modalità operativa (is_operational=True), speculare a TopicDiscoveryAnalyzer.
+       Genera mappe biiettive locali al singolo chunk (E001..En), eliminando il fallimento
+       sistematico degli LLM dovuto a ID forensi lunghi o complessi (causa primaria dei
+       9 INVALID_EVIDENCE_ID osservati il 21/10/2026).
+     * Retry Loop Limitato (max 2 tentativi): Introduzione di tentativi correttivi
+       esclusivamente in modalità operativa.
+       - Su AiInvalidEvidenceCitationError: costruisce direttiva correttiva indicando
+         esclusivamente gli alias ammessi del chunk specifico. Include verifica preventiva
+         del headroom di contesto (Candidate A: multi-turn; Candidate B: single-turn compatta
+         per prevenire context overflow; se insufficiente, fail-closed).
+       - Su AiStructuredOutputError: intercetta fallimenti di parsing JSON o violazione
+         schema e richiede correzione del formato.
+       - Su AiBackendRequestError / AiBackendTimeoutError: intercetta errori transienti
+         HTTP 400 / timeout e concede 1 retry con backoff di 0.5s.
+     * Tracciamento Accurato: I metadata registrano sempre gli 'attempts' reali
+       (es. 2 se ritentato), 'retries' effettivi e 'finish_reason' estratto dalla risposta.
+   - TopicDiscoveryAnalyzer.discover_topics:
+     * Protezione Inferenza HTTP: Chiamata client.chat_completion() racchiusa in try/except
+       per intercettare AiBackendRequestError / AiBackendTimeoutError. In caso di errore
+       transiente HTTP 400 (causa dei chunk 0 e 1 falliti il 21/10/2026), esegue 1 retry
+       riducendo i target topics e ricalcolando il dynamic output budget con backoff.
+     * Metadata: Aggiunti 'attempts' (attempts_used + 1) e 'finish_reason' esplicito.
+
+B) analysis/export.py
+   - Allowlists Diagnostiche (Safe by Default):
+     * ALLOWED_DIAGNOSTIC_CATEGORIES: Esteso per includere tutti i 16 valori enumerati
+       in ChunkDiagnosticCategory (HTTP_CONTEXT_OVERFLOW, HTTP_INVALID_PARAMETERS,
+       HTTP_SCHEMA_REJECTED, JSON_DECODE_ERROR, OUTPUT_TRUNCATED, DUPLICATE_EVIDENCE_ID,
+       EMPTY_EVIDENCE, EXCESS_TOPICS, PROVENANCE_MISMATCH, CHECKPOINT_SAVE_ERROR,
+       MODEL_MISMATCH, INTERNAL_VALIDATION_ERROR).
+       In precedenza, l'assenza di HTTP_INVALID_PARAMETERS causava la coercizione forzata
+       a "UNKNOWN_ERROR" dei chunk 0 e 1 di Discovery.
+     * ALLOWED_ERROR_TYPES: Inclusione di tutte le eccezioni operative del layer AI
+       (AiBackendRequestError, AiBackendTimeoutError, AnalysisInputTooLargeError,
+       AiModelMismatchError, OperationalAnalysisFailedError, TopicProvenanceError,
+       InsufficientContextHeadroomError, ecc.), eliminando la mascheratura a "GENERIC_ERROR".
+   - Metriche di Errore (Truthfulness):
+     * 'execution.error_count': Corretta logica di calcolo in esportazione sia per Detection
+       sia per Discovery: max(safe_int(meta.get("error_count")) or 0, failed_chunks or 0).
+       Eliminato il bug per cui con 9 chunk FAILED veniva esportato error_count=0.
+   - Tracciabilità Commit:
+     * 'execution_software_commit': Correttamente popolato all'atto della run da meta["git_commit"],
+       distinto da 'export_software_commit' valorizzato all'esportazione.
+   - Consistenza Semantica:
+     * 'semantic_consistency_info': Inclusi 'consistency_completeness' ("PARTIAL" vs "COMPLETE")
+       e 'is_partial_detection' (bool). Se la Detection è parziale, la consistenza viene
+       esplicitamente etichettata come PARTIAL.
+
+C) analysis/models.py
+   - TopicAnalysisRunMetadata:
+     * Aggiunto campo 'git_commit: str | None = None'.
+     * In to_dict(), 'error_count' sincronizzato con max(error_count, failed_chunk_count).
+   - classify_discovery_exception:
+     * Mappatura strutturata di tutti gli errori HTTP restituiti da LM Studio:
+       status 400 con context overflow -> HTTP_CONTEXT_OVERFLOW (fase inference)
+       status 400 con invalid parameters -> HTTP_INVALID_PARAMETERS (fase inference)
+       status 400 con schema rejected -> HTTP_SCHEMA_REJECTED (fase inference)
+       AiBackendTimeoutError -> TIMEOUT (fase inference)
+       AiModelMismatchError -> MODEL_MISMATCH (fase inference).
+
+D) analysis/service.py
+   - run_topic_detection:
+     * Cattura immediata di current_git_commit = get_git_commit() alla creazione della run.
+     * Passaggio di on_retry_callback ad analyzer.detect_topic per contare i tentativi.
+     * ChunkDiagnosticRecord popola 'attempts' effettivi da metadata["attempts"] (non più hardcoded 1).
+     * Popola prompt_tokens, completion_tokens, total_tokens, finish_reason.
+     * Assegnazione di git_commit e error_count sia nel dataclass TopicAnalysisRunMetadata sia in meta dict.
+     * Se l'esecuzione è parziale (failed_count > 0), imposta meta["is_partial_detection"] = True
+       e meta["coverage_status"] = "PARTIAL".
+   - run_topic_discovery:
+     * Cattura immediata di current_git_commit = get_git_commit() alla creazione della run.
+     * Assegnazione di git_commit ed error_count in TopicAnalysisRunMetadata e in meta dict.
+
+E) analysis/consistency.py
+   - ConsistencyService.evaluate:
+     * Rilevamento dello stato di completamento della Detection (tramite detection_result.metadata).
+     * Se la Detection è PARTIAL, integra nel rationale un avviso forense esplicito:
+       l'attestazione di consistenza copre esclusivamente le sezioni analizzate e non
+       costituisce verifica esaustiva dell'intero documento né verità fattuale.
+     * Metadata di ConsistencyResult valorizzati con is_partial_detection=True e
+       consistency_completeness="PARTIAL".
+
+G) scripts/preflight_checkpoint_resume.py (Snapshot Durability & No-Clobber Publication)
+   - Eliminazione Fallback POSIX check-then-rename (Chiusura Vulnerabilità TOCTOU):
+     * Eliminato il ramo di fallback basato su 'if not lexists(target): os.rename(...)'.
+       Su sistemi POSIX, 'os.rename' sovrascrive atomicamente e silenziosamente il target
+       qualora un processo concorrente lo crei nella finestra temporale tra check e rename,
+       violando il contratto NO-CLOBBER e la preservazione di file altrui.
+     * Su POSIX, se 'os.link' non è supportato (EOPNOTSUPP, ENOSYS) o fallisce per errore I/O o
+       permessi (EACCES, EIO, ENOSPC), l'operazione abortisce in modo rigorosamente FAIL-CLOSED
+       sollevando SnapshotCreationFailedError. Lo staging temporaneo posseduto viene rimosso,
+       mentre qualsiasi oggetto concorrente o preesistente viene categoricamente preservato intatto.
+     * Su Windows, preservata la semantica atomica nativa NO-CLOBBER di os.rename (che solleva
+       FileExistsError senza sovrascrittura) qualora os.link non sia supportato dal filesystem.
+     * Aggiornata docstring di _publish_snapshot_exclusively per rimuovere riferimenti obsoleti
+       a controlli lexists/exists e documentare il fail-closed senza rename su POSIX.
+   - Trattamento Rigoroso Apertura Directory ed fsync (Chiusura Falsi Successi):
+     * Rimosso il costrutto permissivo 'except (PermissionError, OSError): dir_sync_supported = False'.
+     * Classificazione formale degli errori all'apertura di target_dir per fsync:
+       - Errori fisici reali di I/O o storage pieno (EIO, ENOSPC, EROFS, EDQUOT): sollevano categoricamente
+         SnapshotDirectorySyncFailedError con durability_status='DURABILITY_UNCERTAIN' ed errno_code tracciato.
+         Il target_file pubblicato viene rigorosamente preservato (nessun unlink o corruzione).
+       - Errori di permessi operativi (EACCES, EPERM): su POSIX/Linux non vengono mascherati da mancato supporto
+         filesystem e sollevano SnapshotDirectorySyncFailedError (DURABILITY_UNCERTAIN), preservando il target.
+         Su Windows nativo (non-mocked), dove la CRT non supporta fd su directory sollevando EACCES/EINVAL,
+         il mancato supporto architetturale è documentato e tracciato come 'NON_VERIFIED'.
+       - Mancato supporto provato filesystem/piattaforma (ENOSYS, ENOTSUP, EOPNOTSUPP, EINVAL): documentato
+         e tracciato come 'directory_metadata_durability': 'NON_VERIFIED' senza falsi positivi VERIFIED.
+     * Trattamento os.fsync(dir_fd): rimossi EPERM ed EACCES da unsupported_errnos; qualsiasi errore non
+       architetturale (EIO, ENOSPC, EROFS, EDQUOT, EACCES, EPERM) solleva SnapshotDirectorySyncFailedError
+       preservando il target_file integro sul filesystem.
+
+H) Suite di Test
+   - tests/unit/test_audit_rebuild_blockers_20261024.py:
+     * 27 test mirati e completi superati al 100%:
+       - Riproduzione e verifica: fallimento os.open directory con EIO -> fail-closed, target integro preservato,
+         DURABILITY_UNCERTAIN esposto.
+       - Riproduzione e verifica: fallimento os.open directory con ENOSPC -> fail-closed, target preservato.
+       - Riproduzione e verifica: fallimento os.open directory con EACCES/EPERM su POSIX -> non confuso con
+         mancato supporto, solleva SnapshotDirectorySyncFailedError con DURABILITY_UNCERTAIN.
+       - Test integrativo SQLite in WAL mode con fallimento os.open directory -> verifica PRAGMA integrity_check='ok',
+         zero residui di staging, database sorgente e sidecar (-wal, -shm) byte-identici.
+       - Riproduzione e verifica: fallimento os.link con EOPNOTSUPP + creazione concorrente target ->
+         fail-closed e preservazione byte concorrenti intatti (nessun clobber).
+       - Riproduzione e verifica: os.link con EACCES/EIO/ENOSPC -> fail-closed senza tentativi di rename.
+       - Riproduzione e verifica: fsync directory con EIO post-pubblicazione -> solleva
+         SnapshotDirectorySyncFailedError, preserva il target al 100% (nessuna cancellazione o mascheramento).
+       - Riproduzione e verifica: fsync directory non supportato -> registrazione esplicita di
+         directory_metadata_durability='NON_VERIFIED' senza eccezioni.
+       - Test di isolamento snapshot SQLite WAL sintetici, verifica PRAGMA integrity_check='ok',
+         assenza di residui orfani, gestione short-write e zero-byte atomicamente verificata.
+   - tests/unit/test_runbook_smoke.py:
+     * Sincronizzazione denominazione pacchetto release verificato e 6/6 test superati.
+   - tests/unit/test_checkpoint_preflight_resume.py:
+     * Suite forense e snapshot: 120 passed, 3 skipped (FIFO/inode specifici Windows), 0 failed.
+   - tests/unit/test_ai_detection_multimodal_diagnostics.py:
+     * Risolto problema di isolamento cache SQLite in test_mandatory_control_case_demo_dataset
+       (enable_checkpointing=False).
+   - tests/unit/test_realworld_topic_improvements.py:
+     * Aggiornato test_detection_rejects_hallucinated_evidence_id per verificare che la
+       reiterata allucinazione dopo retry generi l'attesa AiInvalidEvidenceCitationError.
+   - tests/unit/test_topic_discovery_detection_stabilization.py:
+     * Aggiornato test_control_case_vision_description_serialization per supportare
+       la rappresentazione alias (E007) mantenendo invariata la validazione semantica.
+     * Aggiunto test_detection_26_chunks_synthetic_forensic_ids_with_retry_and_recovery:
+       verifica specifica su 26 chunk con ID forensi complessi, fallimento iniziale per
+       citazione non ammessa, retry correttivo con alias e misurazione di attempts=2.
+
+--------------------------------------------------------------------------------
+3. VERIFICA IMMUTABILITÀ BENCHMARK SCIENTIFICO STORICO
+--------------------------------------------------------------------------------
+Come imposto dalle regole di integrità forense e dal protocollo sperimentale,
+i seguenti file storici non sono stati modificati e conservano i checksum esatti:
+
+File                              SHA-256 Checksum                                                    Stato
+--------------------------------  ------------------------------------------------------------------  -------
+ai/benchmark.py                   DC57081DBCE3463A8017AA26BB4E4A18889AF0A3296853FE40968561D6D44D36  INTATTO
+ai/experiment.py                  91100C0A84CB4A8B7C2EEF34A06CFF9EC21AA6E6EEC14FFD09CE6FEA8BCEE845  INTATTO
+run_benchmark.sh                  7F9CAE97DF2FAE1BC3B5964E639B9F80E3AC5A388EC9C3E20305FF64D48044A7  INTATTO
+
+I nove benchmark acquisiti il 21/10/2026 (Qwen, Llama, DeepSeek) rimangono inalterati
+e conservati sotto chat/benchmark_results/. I fallimenti di DeepSeek sotto le condizioni
+congelate (0/24 Translate-First, 0/12 Discovery) rimangono documentati storicamente
+senza alcuna alterazione retroattiva.
+================================================================================

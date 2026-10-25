@@ -66,6 +66,7 @@ from analysis.progress import (
     AnalysisProgressEvent,
     AnalysisProgressTracker,
 )
+from analysis.export import get_git_commit
 from analysis.checkpoint import (
     AnalysisCheckpointStore,
     CheckpointSaveError,
@@ -1054,6 +1055,7 @@ class LocalTopicAnalysisService:
         run_id = f"run_det_{uuid.uuid4().hex[:10]}"
         start_time = time.perf_counter()
         start_iso = datetime.now(timezone.utc).isoformat()
+        current_git_commit = get_git_commit()
 
         target_client, resolved_model = self._prepare_client_and_model(client, model_name)
 
@@ -1180,6 +1182,12 @@ class LocalTopicAnalysisService:
                 else:
                     tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
                     t_chunk_start = time.perf_counter()
+                    chunk_attempts = 1
+
+                    def _on_single_detect_retry(att: int, reason: str) -> None:
+                        nonlocal chunk_attempts
+                        chunk_attempts = max(chunk_attempts, att + 1)
+
                     try:
                         result = analyzer.detect_topic(
                             document=chunks[0],
@@ -1192,6 +1200,7 @@ class LocalTopicAnalysisService:
                             max_tokens=eff_max_tokens,
                             operational_mode=operational_mode,
                             context_length=self.context_length,
+                            on_retry_callback=_on_single_detect_retry,
                         )
                         dur = round(time.perf_counter() - t_chunk_start, 3)
                         tracker.chunk_success(1, record_request=False)
@@ -1200,10 +1209,14 @@ class LocalTopicAnalysisService:
                             chunk_index=0,
                             chunk_id=chunks[0].document_id,
                             status=ChunkLifecycleStatus.SUCCESS.value,
-                            attempts=1,
+                            attempts=int(result.metadata.get("attempts", chunk_attempts)),
                             duration_seconds=dur,
                             model_id=resolved_model,
                             http_status=200,
+                            finish_reason=result.metadata.get("finish_reason"),
+                            prompt_tokens=result.metadata.get("prompt_tokens"),
+                            completion_tokens=result.metadata.get("completion_tokens"),
+                            total_tokens=result.metadata.get("total_tokens"),
                             diagnostic_category="SUCCESS",
                             failure_phase="none",
                             error_detail="",
@@ -1388,11 +1401,13 @@ class LocalTopicAnalysisService:
                     seed=eff_seed,
                     chunk_count=int(total_units),
                     completed_chunk_count=int(completed_count),
+                    error_count=int(failed_count),
                     failed_chunk_count=int(failed_count),
                     data_classification=classification,
                     timestamp=now_ts,
                     document_id=document.document_id,
                     analysis_type="DETECTION",
+                    git_commit=current_git_commit,
                     resolved_model_key=(
                         getattr(target_client, "_active_binding", None).resolved_model_key
                         if getattr(target_client, "_active_binding", None)
@@ -1415,6 +1430,8 @@ class LocalTopicAnalysisService:
 
                 meta = dict(result.metadata)
                 meta.update(run_meta.to_dict())
+                meta["git_commit"] = current_git_commit
+                meta["error_count"] = int(failed_count)
                 meta["chunk_count"] = int(total_units)
                 meta["completed_chunk_count"] = int(completed_count)
                 meta["failed_chunk_count"] = int(failed_count)
@@ -1473,6 +1490,12 @@ class LocalTopicAnalysisService:
 
                 tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
                 t_chunk_start = time.perf_counter()
+                chunk_attempts = 1
+
+                def _on_chunk_detect_retry(att: int, reason: str) -> None:
+                    nonlocal chunk_attempts
+                    chunk_attempts = max(chunk_attempts, att + 1)
+
                 try:
                     res = analyzer.detect_topic(
                         document=chunk,
@@ -1485,6 +1508,7 @@ class LocalTopicAnalysisService:
                         max_tokens=eff_max_tokens,
                         operational_mode=operational_mode,
                         context_length=self.context_length,
+                        on_retry_callback=_on_chunk_detect_retry,
                     )
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     outcomes.append(
@@ -1499,10 +1523,14 @@ class LocalTopicAnalysisService:
                         chunk_index=idx,
                         chunk_id=chunk.document_id,
                         status=ChunkLifecycleStatus.SUCCESS.value,
-                        attempts=1,
+                        attempts=int(res.metadata.get("attempts", chunk_attempts)),
                         duration_seconds=dur,
                         model_id=resolved_model,
                         http_status=200,
+                        finish_reason=res.metadata.get("finish_reason"),
+                        prompt_tokens=res.metadata.get("prompt_tokens"),
+                        completion_tokens=res.metadata.get("completion_tokens"),
+                        total_tokens=res.metadata.get("total_tokens"),
                         diagnostic_category="SUCCESS",
                         failure_phase="none",
                         error_detail="",
@@ -1587,7 +1615,7 @@ class LocalTopicAnalysisService:
                             chunk_index=idx,
                             chunk_id=chunk.document_id,
                             status=ChunkLifecycleStatus.FAILED.value,
-                            attempts=1,
+                            attempts=int(chunk_attempts),
                             duration_seconds=dur,
                             model_id=resolved_model,
                             http_status=getattr(fatal_err, "status_code", None),
@@ -1716,11 +1744,13 @@ class LocalTopicAnalysisService:
             seed=eff_seed,
             chunk_count=int(total_units),
             completed_chunk_count=int(completed_count),
+            error_count=int(failed_count),
             failed_chunk_count=int(failed_count),
             data_classification=classification,
             timestamp=now_ts,
             document_id=document.document_id,
             analysis_type="DETECTION",
+            git_commit=current_git_commit,
             resolved_model_key=(
                 getattr(target_client, "_active_binding", None).resolved_model_key
                 if getattr(target_client, "_active_binding", None)
@@ -1743,9 +1773,14 @@ class LocalTopicAnalysisService:
 
         meta = dict(aggregated.metadata)
         meta.update(run_meta.to_dict())
+        meta["git_commit"] = current_git_commit
+        meta["error_count"] = int(failed_count)
         meta["chunk_count"] = int(total_units)
         meta["completed_chunk_count"] = int(completed_count)
         meta["failed_chunk_count"] = int(failed_count)
+        if det_status == "PARTIAL":
+            meta["is_partial_detection"] = True
+            meta["coverage_status"] = "PARTIAL"
         meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
         is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
         meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
@@ -1798,6 +1833,7 @@ class LocalTopicAnalysisService:
         run_id = f"run_disc_{uuid.uuid4().hex[:10]}"
         start_time = time.perf_counter()
         start_iso = datetime.now(timezone.utc).isoformat()
+        current_git_commit = get_git_commit()
 
         target_client, resolved_model = self._prepare_client_and_model(client, model_name)
 
@@ -2203,12 +2239,14 @@ class LocalTopicAnalysisService:
                     seed=eff_seed,
                     chunk_count=int(total_units),
                     completed_chunk_count=int(completed_count),
+                    error_count=int(failed_count),
                     failed_chunk_count=int(failed_count),
                     reduction_strategy="none",
                     data_classification=classification,
                     timestamp=now_ts,
                     document_id=document.document_id,
                     analysis_type="DISCOVERY",
+                    git_commit=current_git_commit,
                     resolved_model_key=(
                         getattr(target_client, "_active_binding", None).resolved_model_key
                         if getattr(target_client, "_active_binding", None)
@@ -2231,6 +2269,8 @@ class LocalTopicAnalysisService:
 
                 meta = dict(disc_res.metadata)
                 meta.update(run_meta.to_dict())
+                meta["git_commit"] = current_git_commit
+                meta["error_count"] = int(failed_count)
                 meta["chunk_count"] = int(total_units)
                 meta["expected_chunk_count"] = int(total_units)
                 meta["completed_chunk_count"] = int(completed_count)
@@ -2664,12 +2704,14 @@ class LocalTopicAnalysisService:
             seed=eff_seed,
             chunk_count=int(total_units),
             completed_chunk_count=int(completed_count),
+            error_count=int(failed_count),
             failed_chunk_count=int(failed_count),
             reduction_strategy=aggregated.metadata.get("reduction_strategy", "none"),
             data_classification=classification,
             timestamp=now_ts,
             document_id=document.document_id,
             analysis_type="DISCOVERY",
+            git_commit=current_git_commit,
             resolved_model_key=(
                 getattr(target_client, "_active_binding", None).resolved_model_key
                 if getattr(target_client, "_active_binding", None)
@@ -2692,6 +2734,8 @@ class LocalTopicAnalysisService:
 
         meta = dict(aggregated.metadata)
         meta.update(run_meta.to_dict())
+        meta["git_commit"] = current_git_commit
+        meta["error_count"] = int(failed_count)
         meta["chunk_count"] = int(total_units)
         meta["expected_chunk_count"] = int(total_units)
         meta["completed_chunk_count"] = int(completed_count)

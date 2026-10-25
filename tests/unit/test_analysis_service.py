@@ -201,10 +201,10 @@ def test_service_multi_chunk_failure_produces_uncertain_not_absent():
     doc = ConversationEvidenceDocument(document_id="doc_fail", source_name="test", bundles=tuple(bundles))
     query = TopicQuery(topic_id="t1", label="Controllo errori", description="Verifica gestione eccezioni")
 
-    # Primo chunk restituisce JSON non valido che provocherà errore di parsing
+    # Primo chunk restituisce JSON non valido che provocherà errore di parsing persistente
     class FailingClient(DummyLlmClient):
         def chat_completion(self, *args, **kwargs):
-            if self.call_count == 0:
+            if self.call_count < 2:
                 self.call_count += 1
                 return LlmCompletionResponse(
                     content="INVALID NOT JSON",

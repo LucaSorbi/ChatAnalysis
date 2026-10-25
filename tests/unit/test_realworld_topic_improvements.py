@@ -315,12 +315,13 @@ def test_detection_rejects_hallucinated_evidence_id():
     doc = _build_car_purchase_document()
     query = build_topic_query(label="Acquisto automobile", description=None)
 
+    invalid_resp = {
+        "decision": "PRESENT",
+        "evidence_ids": ["unified:whatsapp_txt:1::ORIGINAL_TEXT", "NON_EXISTING_EVID_999"],
+        "rationale": "Trovato",
+    }
     mock_client = ControllableMockLlmClient(
-        responses=[{
-            "decision": "PRESENT",
-            "evidence_ids": ["unified:whatsapp_txt:1::ORIGINAL_TEXT", "NON_EXISTING_EVID_999"],
-            "rationale": "Trovato",
-        }]
+        responses=[invalid_resp, invalid_resp]
     )
 
     analyzer = TopicDetectionAnalyzer(client=mock_client, operational_mode=True)

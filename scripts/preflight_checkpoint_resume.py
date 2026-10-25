@@ -33,6 +33,7 @@ from contextlib import contextmanager
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
 from enum import Enum
+import errno
 import hashlib
 import ipaddress
 import json
@@ -1059,11 +1060,32 @@ class SnapshotCreationFailedError(SnapshotError, RuntimeError):
         super().__init__(message, error_code="SNAPSHOT_CREATION_FAILED")
 
 
+class SnapshotDirectorySyncFailedError(SnapshotCreationFailedError):
+    """
+    Sollevata quando il file di snapshot è stato pubblicato e il suo contenuto è integro,
+    ma la sincronizzazione su disco dei metadati della directory genitrice (fsync directory)
+    è fallita con un errore di I/O (es. EIO o ENOSPC).
+    Il file di destinazione viene preservato intatto (DURABILITY_UNCERTAIN).
+    """
+    def __init__(
+        self,
+        message: str = "fsync della directory genitrice fallito con errore I/O. File preservato (DURABILITY_UNCERTAIN).",
+        target_file: Path | None = None,
+        errno_code: int | None = None,
+    ):
+        super().__init__(message)
+        self.error_code = "SNAPSHOT_DIRECTORY_SYNC_FAILED"
+        self.target_file = target_file
+        self.errno_code = errno_code
+        self.durability_status = "DURABILITY_UNCERTAIN"
+
+
 _SNAPSHOT_ERROR_MESSAGES: dict[str, str] = {
     "SNAPSHOT_DESTINATION_FORBIDDEN": "Destinazione dello snapshot non consentita dai criteri di isolamento forense.",
     "SNAPSHOT_DIRECTORY_INVALID": "Directory specificata per lo snapshot non valida o non accessibile.",
     "SNAPSHOT_PERMISSION_DENIED": "Permessi insufficienti o collegamento simbolico non consentito per lo snapshot.",
     "SNAPSHOT_CREATION_FAILED": "Creazione dello snapshot SQLite non riuscita durante la procedura di backup.",
+    "SNAPSHOT_DIRECTORY_SYNC_FAILED": "fsync della directory genitrice fallito con errore I/O. File preservato (DURABILITY_UNCERTAIN).",
 }
 
 
@@ -1963,25 +1985,55 @@ def _publish_snapshot_exclusively(
     chunk_size: int = 65536,
 ) -> None:
     """
-    Pubblica in modo atomico ed esclusivo lo snapshot consolidato sul percorso di destinazione esterno.
+    Pubblica in modo atomico, durabile ed esclusivo lo snapshot consolidato sul percorso di destinazione esterno.
 
-    GARANZIE DI SICUREZZA (NO-CLOBBER, ANTI-TOCTOU, ATOMIC EXCLUSIVE CREATION):
-    - Apertura atomica esclusiva a livello kernel con os.O_CREAT | os.O_EXCL | os.O_WRONLY (e O_NOFOLLOW ove disponibile).
-    - Nessun affidamento su verifiche lexists/exists non atomiche seguite da sovrascritture via shutil.copy2 o os.replace.
-    - Se il file di destinazione esiste già o viene creato concorrentemente in qualsiasi momento prima o durante
-      l'apertura, il kernel solleva istantaneamente un FileExistsError: zero sovrascrittura, zero troncamento.
-    - Rifiuto categorico di symlink sul percorso di destinazione con SnapshotPermissionDeniedError.
-    - Copia controllata a blocchi sul descrittore aperto esclusivamente e flush/fsync per garantire la persistenza fisica.
-    - Gestione fail-closed degli errori di copia (es. I/O o disco pieno): chiusura immediata dei descrittori.
-      Conformemente al contratto di conservazione dei percorsi esterni, il file parziale NON viene eliminato
-      automaticamente; viene sollevata SnapshotCreationFailedError documentando che l'eventuale residuo
-      può richiedere pulizia manuale da parte dell'utente.
-    - I file sorgente (database principale, -wal e -shm) restano rigorosamente immutati.
+    GARANZIE DI SICUREZZA E DURABILITÀ (NO-CLOBBER, ANTI-TOCTOU, ATOMIC VISIBILITY, FSYNC DURABILITY):
+    - Staging isolato nella directory di destinazione (stesso filesystem/mount point).
+    - Nessun file parziale o incompleto è mai visibile sul percorso target_file durante la scrittura.
+    - Apertura atomica esclusiva del file di staging con os.O_CREAT | os.O_EXCL | os.O_WRONLY (e O_NOFOLLOW ove disponibile).
+    - Ciclo completo anti short-write con gestione di scritture a blocchi e rifiuto di zero-byte write.
+    - Sincronizzazione obbligatoria su disco via os.fsync(staging_fd); qualsiasi errore I/O (OSError)
+      viene propagato categoricamente come SnapshotCreationFailedError senza falsi successi.
+    - Verifica di corrispondenza esatta delle dimensioni su disco prima della pubblicazione.
+    - Chiusura ordinata del descrittore prima della transizione atomica.
+    - Pubblicazione atomica senza sovrascrittura (NO-CLOBBER):
+      * Utilizzo primario di os.link(staging_file, target_file) che garantisce sia atomicità a livello di inode
+        sia rifiuto immediato (FileExistsError) se target_file esiste o compare concorrentemente (Linux e Windows NTFS).
+      * Rifiuto tassativo di qualsiasi fallback basato su check-then-rename su POSIX: se os.link non è supportato
+        o fallisce, l'operazione abortisce rigorosamente FAIL-CLOSED con SnapshotCreationFailedError, preservando qualsiasi file concorrente.
+      * Su Windows, se os.link non è supportato dal filesystem (FAT32/exFAT), viene utilizzato os.rename
+        che garantisce nativamente NO-CLOBBER sollevando FileExistsError senza sovrascrittura.
+      * MAI utilizzata os.replace incondizionata che cancellerebbe un target concorrente.
+    - Pulizia sicura del file temporaneo di staging (.tmp_...) sia a valle della pubblicazione riuscita,
+      sia in caso di errore/fallimento fsync.
+    - Nessuna cancellazione o alterazione di file esterni non posseduti o preesistenti sul percorso target.
+    - Sincronizzazione della directory genitore (ove supportata dall'OS).
     """
     if os.path.islink(target_file) or target_file.is_symlink():
         raise SnapshotPermissionDeniedError(
             f"Symlink non consentito per il file di snapshot: {_sanitize_path(target_file)}"
         )
+
+    # Verifica preventiva per evitare staging non necessario se il target esiste già
+    if os.path.lexists(target_file) or target_file.exists():
+        raise FileExistsError(
+            f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+        )
+
+    target_dir = target_file.parent
+    try:
+        target_dir.mkdir(parents=True, exist_ok=True)
+    except PermissionError as pe:
+        raise SnapshotPermissionDeniedError(
+            f"Permessi insufficienti per accedere alla cartella di destinazione: {_sanitize_path(target_dir)}"
+        ) from pe
+    except OSError as oe:
+        raise SnapshotDirectoryInvalidError(
+            f"Impossibile accedere alla cartella di destinazione: {_sanitize_path(target_dir)}"
+        ) from oe
+
+    staging_name = f".{target_file.name}.tmp_{os.getpid()}_{hashlib.sha256(os.urandom(16)).hexdigest()[:8]}"
+    staging_file = target_dir / staging_name
 
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY
     if hasattr(os, "O_NOFOLLOW"):
@@ -1991,46 +2043,298 @@ def _publish_snapshot_exclusively(
     if hasattr(os, "O_BINARY"):
         flags |= os.O_BINARY
 
-    out_fd: int | None = None
-    old_umask = os.umask(0o077)
+    staging_fd: int | None = None
     try:
-        try:
-            out_fd = os.open(str(target_file), flags, 0o600)
-        except FileExistsError as fee:
-            raise FileExistsError(
-                f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
-            ) from fee
-        except PermissionError as pe:
-            raise SnapshotPermissionDeniedError(
-                f"Permessi insufficienti per creare il file di snapshot: {_sanitize_path(target_file)}"
-            ) from pe
-        except OSError as oe:
-            raise SnapshotDirectoryInvalidError(
-                f"Impossibile creare il file di snapshot: {_sanitize_path(target_file)}"
-            ) from oe
-    finally:
-        os.umask(old_umask)
+        staging_fd = os.open(str(staging_file), flags, 0o600)
+    except FileExistsError as fee:
+        raise SnapshotCreationFailedError(
+            f"Collisione temporanea durante la preparazione dello snapshot: {_sanitize_path(staging_file)}"
+        ) from fee
+    except PermissionError as pe:
+        raise SnapshotPermissionDeniedError(
+            f"Permessi insufficienti per creare il file temporaneo di snapshot: {_sanitize_path(target_file)}"
+        ) from pe
+    except OSError as oe:
+        raise SnapshotDirectoryInvalidError(
+            f"Impossibile creare il file temporaneo di snapshot: {_sanitize_path(target_file)}"
+        ) from oe
 
+    if hasattr(os, "fchmod"):
+        try:
+            os.fchmod(staging_fd, 0o600)
+        except OSError:
+            pass
+
+    published = False
     try:
+        total_written = 0
         with open(src_file, "rb") as in_f:
             while True:
                 buf = in_f.read(chunk_size)
                 if not buf:
                     break
-                os.write(out_fd, buf)
+                buf_len = len(buf)
+                buf_written = 0
+                while buf_written < buf_len:
+                    n = os.write(staging_fd, buf[buf_written:])
+                    if n <= 0:
+                        raise OSError(
+                            f"Zero bytes written during snapshot publish (needed {buf_len - buf_written} more bytes)"
+                        )
+                    buf_written += n
+                total_written += buf_len
+
+        # Sincronizzazione obbligatoria su disco (DURABILITÀ FSYNC):
+        # Qualsiasi fallimento di fsync DEVE propagarsi e abortire la pubblicazione.
         try:
-            os.fsync(out_fd)
-        except OSError:
-            pass
+            os.fsync(staging_fd)
+        except OSError as sync_err:
+            raise SnapshotCreationFailedError(
+                f"fsync fallito durante la pubblicazione dello snapshot su {_sanitize_path(target_file)}: {sync_err}"
+            ) from sync_err
+
+        expected_size = src_file.stat().st_size
+        try:
+            staging_stat = os.fstat(staging_fd)
+            actual_size = staging_stat.st_size
+        except Exception:
+            actual_size = staging_file.stat().st_size
+
+        if actual_size != expected_size:
+            raise OSError(
+                f"Incomplete snapshot publish: expected {expected_size} bytes, wrote {actual_size} bytes"
+            )
+
+        # Chiusura ordinata del file descriptor prima della pubblicazione atomica
+        os.close(staging_fd)
+        staging_fd = None
+
+        # Controllo symlink e collisione target finale prima del link/rename
+        if os.path.islink(target_file) or target_file.is_symlink():
+            raise SnapshotPermissionDeniedError(
+                f"Symlink non consentito per il file di snapshot: {_sanitize_path(target_file)}"
+            )
+        if os.path.lexists(target_file) or target_file.exists():
+            raise FileExistsError(
+                f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+            )
+
+        # PUBBLICAZIONE ATOMICA NO-CLOBBER:
+        link_success = False
+        try:
+            os.link(str(staging_file), str(target_file))
+            link_success = True
+            published = True
+        except (FileExistsError, ) as fee:
+            raise FileExistsError(
+                f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+            ) from fee
+        except OSError as link_err:
+            if getattr(link_err, "errno", None) == errno.EEXIST:
+                raise FileExistsError(
+                    f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+                ) from link_err
+
+            # Su Windows, se os.link fallisce specificamente per mancato supporto filesystem
+            # (es. volumi FAT32/exFAT che sollevano ENOSYS o EOPNOTSUPP o ENOTSUP):
+            # os.rename su Windows usa MoveFileExW SENZA MOVEFILE_REPLACE_EXISTING,
+            # quindi garantisce nativamente NO-CLOBBER e fallisce atomicamente con FileExistsError se target esiste.
+            fs_unsupported = {errno.ENOSYS}
+            if hasattr(errno, "EOPNOTSUPP"):
+                fs_unsupported.add(errno.EOPNOTSUPP)
+            if hasattr(errno, "ENOTSUP"):
+                fs_unsupported.add(errno.ENOTSUP)
+
+            if sys.platform == "win32" and getattr(link_err, "errno", None) in fs_unsupported:
+                try:
+                    os.rename(str(staging_file), str(target_file))
+                    published = True
+                except FileExistsError as fee:
+                    raise FileExistsError(
+                        f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+                    ) from fee
+                except OSError as rename_err:
+                    if getattr(rename_err, "errno", None) == errno.EEXIST:
+                        raise FileExistsError(
+                            f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+                        ) from rename_err
+                    raise SnapshotCreationFailedError(
+                        f"Fallback rename su Windows fallito durante la pubblicazione dello snapshot: {_sanitize_path(target_file)}: {rename_err}"
+                    ) from rename_err
+            else:
+                # Su POSIX (e per errori Windows diversi da mancato supporto filesystem, come EACCES, EIO, ENOSPC):
+                # NESSUN fallback basato su rename che possa sovrascrivere un file concorrente.
+                # FAIL-CLOSED conservativo: abortire l'operazione, preservare intatti gli oggetti esterni
+                # e pulire soltanto lo staging posseduto.
+                raise SnapshotCreationFailedError(
+                    f"Impossibile pubblicare atomicamente lo snapshot sul percorso {_sanitize_path(target_file)} "
+                    f"senza violare il contratto NO-CLOBBER (hard link fallito: {link_err}). "
+                    "Operazione abortita fail-closed: nessun file esterno sovrascritto."
+                ) from link_err
+        except (AttributeError, NotImplementedError) as not_impl:
+            if sys.platform == "win32":
+                try:
+                    os.rename(str(staging_file), str(target_file))
+                    published = True
+                except FileExistsError as fee:
+                    raise FileExistsError(
+                        f"Il file di destinazione snapshot esiste già o è apparso concorrentemente: {_sanitize_path(target_file)}"
+                    ) from fee
+            else:
+                raise SnapshotCreationFailedError(
+                    f"Piattaforma o ambiente privo di primitiva atomica no-clobber per {_sanitize_path(target_file)}. "
+                    "Operazione abortita fail-closed per preservare il contratto NO-CLOBBER."
+                ) from not_impl
+
+        # Rimuove il file di staging rimasto dopo hard link
+        if link_success:
+            try:
+                if staging_file.exists():
+                    os.unlink(str(staging_file))
+            except Exception:
+                pass
+
+        # Sincronizzazione della directory genitrice per persistenza dei metadati (fsync directory)
+        dir_fd: int | None = None
+        dir_sync_supported = True
+        is_windows = (sys.platform == "win32" or os.name == "nt")
+
+        # Classificazione formale degli errori di piattaforma e filesystem
+        unsupported_platform_errnos = {
+            errno.ENOSYS,
+            errno.EINVAL,
+        }
+        if hasattr(errno, "ENOTSUP"):
+            unsupported_platform_errnos.add(errno.ENOTSUP)
+        if hasattr(errno, "EOPNOTSUPP"):
+            unsupported_platform_errnos.add(errno.EOPNOTSUPP)
+
+        physical_io_errnos = {errno.EIO, errno.ENOSPC}
+        if hasattr(errno, "EROFS"):
+            physical_io_errnos.add(errno.EROFS)
+        if hasattr(errno, "EDQUOT"):
+            physical_io_errnos.add(errno.EDQUOT)
+
+        dir_flags = os.O_RDONLY
+        if hasattr(os, "O_DIRECTORY"):
+            dir_flags |= os.O_DIRECTORY
+        if hasattr(os, "O_CLOEXEC"):
+            dir_flags |= os.O_CLOEXEC
+
+        try:
+            dir_fd = os.open(str(target_dir), dir_flags)
+        except OSError as open_dir_err:
+            open_errno = getattr(open_dir_err, "errno", None)
+
+            # 1. Errori fisici di I/O o storage pieno (EIO, ENOSPC, EROFS, EDQUOT):
+            # MAI considerare come mancato supporto del filesystem!
+            if open_errno in physical_io_errnos:
+                raise SnapshotDirectorySyncFailedError(
+                    f"Apertura della directory genitrice fallita con errore I/O ({open_dir_err}) "
+                    f"per {_sanitize_path(target_file)}. Il file di snapshot è stato pubblicato ed è integro "
+                    f"ma la durabilità dei metadati della directory è incerta (DURABILITY_UNCERTAIN). "
+                    "Il file di destinazione è stato preservato.",
+                    target_file=target_file,
+                    errno_code=open_errno,
+                ) from open_dir_err
+
+            # 2. Errori di permessi operativi (EACCES / EPERM):
+            # Su POSIX/Linux, EACCES/EPERM durante l'apertura di una directory per fsync
+            # rappresentano un errore operativo reale di permessi negati, NON un mancato supporto filesystem.
+            # Su Windows (non-mocked), la CRT Microsoft _open() solleva sempre EACCES (PermissionError 13)
+            # sulle directory perché l'architettura Win32 non supporta file descriptor POSIX su cartelle.
+            if open_errno in {errno.EACCES, errno.EPERM}:
+                if not is_windows:
+                    raise SnapshotDirectorySyncFailedError(
+                        f"Apertura della directory genitrice fallita per permessi negati ({open_dir_err}) "
+                        f"per {_sanitize_path(target_file)}. Il file di snapshot è stato pubblicato ed è integro "
+                        f"ma la durabilità dei metadati della directory è incerta (DURABILITY_UNCERTAIN). "
+                        "Il file di destinazione è stato preservato.",
+                        target_file=target_file,
+                        errno_code=open_errno,
+                    ) from open_dir_err
+                else:
+                    dir_sync_supported = False
+                    dir_fd = None
+
+            # 3. Mancato supporto provato della piattaforma / filesystem (ENOSYS, ENOTSUP, EOPNOTSUPP, EINVAL):
+            elif open_errno in unsupported_platform_errnos:
+                dir_sync_supported = False
+                dir_fd = None
+
+            # 4. Qualsiasi altro errore inatteso: fail-closed con SnapshotDirectorySyncFailedError
+            else:
+                if is_windows:
+                    dir_sync_supported = False
+                    dir_fd = None
+                else:
+                    raise SnapshotDirectorySyncFailedError(
+                        f"Apertura della directory genitrice fallita con errore inatteso ({open_dir_err}) "
+                        f"per {_sanitize_path(target_file)}. Il file di snapshot è stato pubblicato ed è integro "
+                        f"ma la durabilità dei metadati della directory è incerta (DURABILITY_UNCERTAIN). "
+                        "Il file di destinazione è stato preservato.",
+                        target_file=target_file,
+                        errno_code=open_errno,
+                    ) from open_dir_err
+
+        if dir_fd is not None:
+            try:
+                os.fsync(dir_fd)
+            except OSError as sync_dir_err:
+                sync_errno = getattr(sync_dir_err, "errno", None)
+                unsupported_sync_errnos = {
+                    errno.EINVAL,
+                    errno.ENOSYS,
+                    errno.EBADF,
+                }
+                if hasattr(errno, "ENOTSUP"):
+                    unsupported_sync_errnos.add(errno.ENOTSUP)
+                if hasattr(errno, "EOPNOTSUPP"):
+                    unsupported_sync_errnos.add(errno.EOPNOTSUPP)
+
+                if sync_errno in unsupported_sync_errnos:
+                    dir_sync_supported = False
+                else:
+                    # Errore fisico reale di I/O o permessi operativi (es. EIO, ENOSPC, EROFS, EDQUOT, EACCES, EPERM):
+                    # Il file è stato pubblicato sul percorso target ed è integro,
+                    # MA la durabilità dei metadati della directory è incerta (DURABILITY_UNCERTAIN).
+                    # NON cancellare il file target esterno!
+                    raise SnapshotDirectorySyncFailedError(
+                        f"fsync della directory genitrice fallito con errore I/O ({sync_dir_err}) "
+                        f"per {_sanitize_path(target_file)}. Il file di snapshot è stato pubblicato ed è integro "
+                        f"ma la durabilità dei metadati della directory è incerta (DURABILITY_UNCERTAIN). "
+                        "Il file di destinazione è stato preservato.",
+                        target_file=target_file,
+                        errno_code=sync_errno,
+                    ) from sync_dir_err
+            finally:
+                try:
+                    os.close(dir_fd)
+                except Exception:
+                    pass
+
+        return {
+            "file_durability_verified": True,
+            "directory_metadata_durability": "VERIFIED" if dir_sync_supported else "NON_VERIFIED",
+            "directory_fsync_supported": dir_sync_supported,
+        }
+
+    except (FileExistsError, SnapshotPermissionDeniedError, SnapshotCreationFailedError, SnapshotDirectoryInvalidError):
+        raise
     except Exception as copy_err:
         raise SnapshotCreationFailedError(
-            f"Errore durante la scrittura dello snapshot sul percorso di destinazione esterno: {_sanitize_path(target_file)}. "
-            "Il file parziale non è stato eliminato automaticamente e potrebbe richiedere pulizia manuale."
+            f"Errore durante la scrittura dello snapshot sul percorso di destinazione esterno: {_sanitize_path(target_file)}."
         ) from copy_err
     finally:
-        if out_fd is not None:
+        if staging_fd is not None:
             try:
-                os.close(out_fd)
+                os.close(staging_fd)
+            except Exception:
+                pass
+        if not published or staging_file.exists():
+            try:
+                if staging_file.exists():
+                    os.unlink(str(staging_file))
             except Exception:
                 pass
 
@@ -2177,7 +2481,9 @@ def create_consistent_readonly_snapshot(
 
         # 6. Pubblicazione su destinazione esterna SOLO ad operazione completata con successo
         if target_file is not None:
-            _publish_snapshot_exclusively(dest_file, target_file)
+            pub_metrics = _publish_snapshot_exclusively(dest_file, target_file)
+            if isinstance(pub_metrics, dict):
+                staged_metrics.update(pub_metrics)
             # Pulizia sicura del file e della cartella temporanea privata dopo la copia riuscita
             _perform_atomic_safe_unlink(dest_file, dest_fd, dest_file_identity)
             dest_fd = None
@@ -4147,22 +4453,30 @@ def main() -> int:
         return 3
 
     finally:
-        # Pulizia dello snapshot temporaneo se creato
+        # Pulizia dello snapshot temporaneo se creato (non distruttivo, zero rmtree)
         if snapshot_cleanup_dir and snapshot_cleanup_dir.is_dir():
             # Protezione di sicurezza: elimina SOLO se è una directory temporanea comprovatamente posseduta creata dal preflight
             if _OWNERSHIP_TRACKER.is_owned_dir(snapshot_cleanup_dir):
                 try:
-                    shutil.rmtree(snapshot_cleanup_dir, ignore_errors=True)
-                    _OWNERSHIP_TRACKER.unregister_temp_dir(snapshot_cleanup_dir)
+                    cleaned = _safe_cleanup_owned_temp_dir(snapshot_cleanup_dir)
+                    if not cleaned:
+                        logger.debug(
+                            "Snapshot temp dir non rimossa completamente (conservata per sicurezza dei dati): %s",
+                            snapshot_cleanup_dir,
+                        )
                 except Exception:
                     pass
 
-        # Pulizia della cartella temporanea forense se creata
+        # Pulizia della cartella temporanea forense se creata (non distruttivo, zero rmtree)
         if forensic_cleanup_dir and forensic_cleanup_dir.is_dir():
             if _OWNERSHIP_TRACKER.is_owned_dir(forensic_cleanup_dir):
                 try:
-                    shutil.rmtree(forensic_cleanup_dir, ignore_errors=True)
-                    _OWNERSHIP_TRACKER.unregister_temp_dir(forensic_cleanup_dir)
+                    cleaned = _safe_cleanup_owned_temp_dir(forensic_cleanup_dir)
+                    if not cleaned:
+                        logger.debug(
+                            "Forensic temp dir non rimossa completamente (conservata per sicurezza dei dati): %s",
+                            forensic_cleanup_dir,
+                        )
                 except Exception:
                     pass
 

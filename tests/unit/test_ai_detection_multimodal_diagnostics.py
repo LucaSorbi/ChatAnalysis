@@ -526,6 +526,7 @@ def test_mandatory_control_case_demo_dataset():
         client=client,
         model_id="qwen2.5-7b-instruct",
         operational_mode=True,
+        enable_checkpointing=False,
     )
 
     assert det_res.decision == TopicDecision.PRESENT
@@ -545,7 +546,7 @@ def test_mandatory_control_case_demo_dataset():
     assert "Do not infer beyond the supplied evidence." in sent_system
 
     user_payload = client.call_history[-1]["messages"][1]["content"]
-    assert "msg::5::VISION_DESCRIPTION" in user_payload
+    assert "VISION_DESCRIPTION" in user_payload
     assert "magazzino industriale" in user_payload
 
 

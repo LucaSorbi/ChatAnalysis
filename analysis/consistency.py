@@ -11,7 +11,7 @@ Principi architetturali (FASE 7):
 """
 from __future__ import annotations
 
-from typing import Sequence
+from typing import Any, Sequence
 
 from ai.models import (
     DiscoveredTopic,
@@ -99,6 +99,31 @@ class ConsistencyService:
                 f"indipendente. Rationale Detection: {detection_result.rationale}"
             )
 
+        meta_dict: dict[str, Any] = {
+            "discovery_evidence_count": len(discovery_eids),
+            "detection_evidence_count": len(detection_eids),
+            "overlap_count": len(overlap),
+            "detection_decision": decision.value,
+        }
+
+        is_partial = (
+            detection_result.metadata.get("status") == "PARTIAL"
+            or detection_result.metadata.get("coverage_status") == "PARTIAL"
+            or detection_result.metadata.get("is_partial_detection") is True
+        )
+        if is_partial:
+            meta_dict["is_partial_detection"] = True
+            meta_dict["consistency_completeness"] = "PARTIAL"
+            rationale += (
+                " [AVVISO FORENSE: La verifica di consistenza semantica si fonda su una Topic Detection "
+                "con esecuzione PARZIALE (alcuni chunk non sono stati completati). L'esito di consistenza "
+                "attesta la concordanza solo sulle porzioni analizzate e non costituisce verifica esaustiva "
+                "dell'intera conversazione né verità fattuale assoluta]."
+            )
+        else:
+            meta_dict["is_partial_detection"] = False
+            meta_dict["consistency_completeness"] = "COMPLETE"
+
         return ConsistencyResult(
             document_id=document_id,
             discovery_run_id=discovery_run_id,
@@ -109,10 +134,5 @@ class ConsistencyService:
             overlap_evidence_ids=overlap,
             status=status,
             rationale=rationale,
-            metadata={
-                "discovery_evidence_count": len(discovery_eids),
-                "detection_evidence_count": len(detection_eids),
-                "overlap_count": len(overlap),
-                "detection_decision": decision.value,
-            },
+            metadata=meta_dict,
         )

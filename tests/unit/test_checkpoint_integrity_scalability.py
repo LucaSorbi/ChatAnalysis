@@ -301,7 +301,7 @@ def test_03_resumption_with_new_service_instance() -> None:
         resp1 = json.dumps({"decision": "PRESENT", "evidence_ids": [ev_0], "rationale": "Chunk 1 ok"})
         resp2 = AiBackendTimeoutError("Timeout simulato sul chunk 2")
 
-        client1 = ControlledMockClient(responses=[resp1, resp2])
+        client1 = ControlledMockClient(responses=[resp1, resp2, resp2])
         svc1 = LocalTopicAnalysisService(
             client=client1,
             checkpoint_store=store,
@@ -367,9 +367,9 @@ def test_03_resumption_with_new_service_instance() -> None:
         # Zero chiamate duplicate: chunk 0 NON è stato rieseguito da client2
         assert client2.call_count == 3
         # Numero totale di interrogazioni esatto:
-        # 2 nella prima sessione (1 completata + 1 fallita con timeout) + 3 nella seconda sessione = 5
-        assert client1.call_count == 2
-        assert client1.call_count + client2.call_count == 5
+        # 3 nella prima sessione (1 completata + 2 tentativi con timeout su chunk 1) + 3 nella seconda sessione = 6
+        assert client1.call_count == 3
+        assert client1.call_count + client2.call_count == 6
 
 
 # 4. Ripresa dopo cambio dell'identificativo di istanza LM Studio, a parità di modello verificato
@@ -384,7 +384,7 @@ def test_04_resumption_after_lm_studio_instance_id_change() -> None:
         resp2 = AiBackendTimeoutError("Timeout")
 
         # Client con loaded_instance_id = "inst_AAA"
-        client1 = ControlledMockClient(responses=[resp1, resp2])
+        client1 = ControlledMockClient(responses=[resp1, resp2, resp2])
         client1._loaded_instance_id = "inst_AAA_111"
 
         svc1 = LocalTopicAnalysisService(
@@ -437,9 +437,9 @@ def test_04_resumption_after_lm_studio_instance_id_change() -> None:
         assert final_res.provenance_document_id == doc.document_id
         # Verifica zero chiamate duplicate sul chunk 0 recuperato
         assert client2.call_count == 1
-        # Numero totale esatto di chiamate: 2 nel client1 + 1 nel client2 = 3
-        assert client1.call_count == 2
-        assert client1.call_count + client2.call_count == 3
+        # Numero totale esatto di chiamate: 3 nel client1 (1 chunk 0 + 2 tentativi chunk 1) + 1 nel client2 = 4
+        assert client1.call_count == 3
+        assert client1.call_count + client2.call_count == 4
 
 
 # 5. Invalidazione con modello o configurazione incompatibile

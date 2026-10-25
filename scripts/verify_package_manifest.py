@@ -89,16 +89,27 @@ def verify_zip_manifest(zip_path: Path, run_tests: bool = True) -> tuple[bool, d
                 results["errors"].append(f"Nome file grezzo duplicato nell'archivio ZIP: '{raw_name}'")
             seen_raw_names.add(raw_name)
 
-        # 2. Verifica presenza del manifest all'interno dell'archivio
-        manifest_info = None
+        # 2. Verifica presenza del manifest all'interno dell'archivio (rigetto collisioni di casing)
+        manifest_infos = []
         for info in file_entries:
-            if info.filename.replace("\\", "/") == "manifest_sha256.txt":
-                manifest_info = info
-                break
+            if info.filename.replace("\\", "/").casefold() == "manifest_sha256.txt":
+                manifest_infos.append(info)
 
-        if not manifest_info:
+        if not manifest_infos:
             results["errors"].append("Il file obbligatorio 'manifest_sha256.txt' è ASSENTE dall'archivio ZIP.")
             return False, results
+        if len(manifest_infos) > 1:
+            results["duplicate_entries"] += len(manifest_infos) - 1
+            results["errors"].append(
+                f"Rilevati manifest multipli in collisione di casing nello ZIP: {[i.filename for i in manifest_infos]}"
+            )
+
+        manifest_info = manifest_infos[0]
+        if manifest_info.filename.replace("\\", "/") != "manifest_sha256.txt":
+            results["errors"].append(
+                f"Il manifest presenta un nome non canonico: '{manifest_info.filename}'. "
+                "Il nome deve essere rigorosamente 'manifest_sha256.txt' (tutto minuscolo)."
+            )
 
         try:
             manifest_content = zf.read(manifest_info).decode("utf-8")
@@ -128,8 +139,8 @@ def verify_zip_manifest(zip_path: Path, run_tests: bool = True) -> tuple[bool, d
                 )
 
             # Verifica divieto auto-referenzialità
-            if rel_path == "manifest_sha256.txt":
-                results["errors"].append("Il manifest non deve referenziare se stesso ('manifest_sha256.txt').")
+            if rel_path.casefold() == "manifest_sha256.txt":
+                results["errors"].append(f"Il manifest non deve referenziare se stesso ('{rel_path}').")
 
             if rel_path in manifest_records:
                 results["duplicate_entries"] += 1
@@ -142,12 +153,14 @@ def verify_zip_manifest(zip_path: Path, run_tests: bool = True) -> tuple[bool, d
         # 4. Costruzione della mappa dei file presenti nello ZIP con rilevazione collisioni e percorsi non sicuri
         zip_files_map: dict[str, zipfile.ZipInfo] = {}
         seen_normalized_names: dict[str, str] = {}
+        seen_casefold_names: dict[str, str] = {}
 
         for info in file_entries:
             raw_name = info.filename
             norm_name = raw_name.replace("\\", "/")
+            cf_name = norm_name.casefold()
 
-            if norm_name == "manifest_sha256.txt":
+            if cf_name == "manifest_sha256.txt":
                 continue
 
             # Rifiuto di separatori ambigui (es. // o \\)
@@ -172,7 +185,17 @@ def verify_zip_manifest(zip_path: Path, run_tests: bool = True) -> tuple[bool, d
                 )
             else:
                 seen_normalized_names[norm_name] = raw_name
-                zip_files_map[norm_name] = info
+
+            # Rilevazione collisioni case-insensitive / Unicode (es. su filesystem Windows/macOS)
+            if cf_name in seen_casefold_names:
+                results["duplicate_entries"] += 1
+                results["errors"].append(
+                    f"Collisione case-insensitive/Unicode rilevata nello ZIP: '{seen_casefold_names[cf_name]}' e '{raw_name}'"
+                )
+            else:
+                seen_casefold_names[cf_name] = raw_name
+
+            zip_files_map[norm_name] = info
 
         # 5. Verifica completezza bidirezionale: ZIP vs Manifest
         unlisted = set(zip_files_map.keys()) - set(manifest_records.keys())

@@ -150,6 +150,18 @@ ALLOWED_DIAGNOSTIC_CATEGORIES = {
     "EVIDENCE_VALIDATION_ERROR",
     "INVALID_EVIDENCE_ID",
     "INFERENCE_ERROR",
+    "HTTP_CONTEXT_OVERFLOW",
+    "HTTP_INVALID_PARAMETERS",
+    "HTTP_SCHEMA_REJECTED",
+    "JSON_DECODE_ERROR",
+    "OUTPUT_TRUNCATED",
+    "DUPLICATE_EVIDENCE_ID",
+    "EMPTY_EVIDENCE",
+    "EXCESS_TOPICS",
+    "PROVENANCE_MISMATCH",
+    "CHECKPOINT_SAVE_ERROR",
+    "MODEL_MISMATCH",
+    "INTERNAL_VALIDATION_ERROR",
 }
 
 ALLOWED_FAILURE_PHASES = {
@@ -191,6 +203,22 @@ ALLOWED_ERROR_TYPES = {
     "SnapshotCreationFailedError",
     "AiPromptError",
     "AiExecutionError",
+    "AiBackendError",
+    "AiBackendUnavailableError",
+    "LmStudioUnavailableError",
+    "AiBackendTimeoutError",
+    "AnalysisInputTooLargeError",
+    "AiModelNotSpecifiedError",
+    "AiModelNotInstalledError",
+    "AiModelMismatchError",
+    "AiBackendProtocolError",
+    "AiBackendRequestError",
+    "AiModelAmbiguousError",
+    "AiModelLoadError",
+    "OperationalAnalysisFailedError",
+    "AnalysisNoEvidenceError",
+    "TopicProvenanceError",
+    "InsufficientContextHeadroomError",
     "None",
 }
 
@@ -1169,6 +1197,9 @@ def build_topic_detection_export_report(
         else:
             independence_verified = None
 
+        is_partial_detection = (verified_status != "COMPLETE") or bool(meta.get("is_partial_detection", False))
+        consistency_completeness = "PARTIAL" if is_partial_detection else "COMPLETE"
+
         semantic_consistency_info = {
             "origin_flow": "DISCOVERY_VERIFICATION",
             "source_discovery_run_id": src_disc_run,
@@ -1177,6 +1208,8 @@ def build_topic_detection_export_report(
             "authentication_status": attestation,
             "detection_decision": detection_result.decision.value,
             "consistency_status": consistency_result.status.value,
+            "consistency_completeness": consistency_result.metadata.get("consistency_completeness", consistency_completeness),
+            "is_partial_detection": bool(consistency_result.metadata.get("is_partial_detection", is_partial_detection)),
             "consistency_rationale": sanitize_topic_text(consistency_result.rationale, redact=redact_sensitive_topics),
             "discovery_evidence_ids": [sanitize_evidence_id(e, redact=redact_sensitive_topics) for e in consistency_result.discovery_evidence_ids],
             "detection_evidence_ids": [sanitize_evidence_id(e, redact=redact_sensitive_topics) for e in consistency_result.detection_evidence_ids],
@@ -1253,7 +1286,7 @@ def build_topic_detection_export_report(
             "reported_execution_status": reported_status,
             "verified_execution_status": verified_status,
             "global_status": verified_status,
-            "error_count": safe_int(meta.get("error_count")) if meta.get("error_count") is not None else (failed_chunks if failed_chunks is not None else None),
+            "error_count": max(safe_int(meta.get("error_count")) or 0, failed_chunks or 0) if (meta.get("error_count") is not None or failed_chunks is not None) else None,
             "retry_count": safe_int(meta.get("retry_count")) if meta.get("retry_count") is not None else None,
             "subchunks_used": bool(meta.get("subchunks_used", False)) if meta.get("subchunks_used") is not None else None,
         },
@@ -1650,7 +1683,7 @@ def build_topic_discovery_export_report(
             "reported_execution_status": reported_status,
             "verified_execution_status": verified_status,
             "global_status": verified_status,
-            "error_count": safe_int(meta.get("error_count")) if meta.get("error_count") is not None else (failed_chunks if failed_chunks is not None else None),
+            "error_count": max(safe_int(meta.get("error_count")) or 0, failed_chunks or 0) if (meta.get("error_count") is not None or failed_chunks is not None) else None,
             "retry_count": safe_int(meta.get("retry_count")) if meta.get("retry_count") is not None else None,
             "subchunks_used": bool(meta.get("subchunks_used", False)) if meta.get("subchunks_used") is not None else None,
         },
