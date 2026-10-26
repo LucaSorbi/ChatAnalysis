@@ -133,6 +133,7 @@ FATAL_BACKEND_ERRORS = (
     AiBackendTimeoutError,
     AiBackendRequestError,
     AnalysisInputTooLargeError,
+    AiStructuredOutputError,
 )
 
 SYSTEMIC_BACKEND_ERRORS = (
@@ -209,7 +210,7 @@ class LocalTopicAnalysisService:
         enable_checkpointing: bool = False,
         checkpoint_dir: str | Path | None = None,
     ) -> None:
-        if checkpoint_dir is not None and checkpoint_store is None:
+        if (checkpoint_dir is not None or enable_checkpointing) and checkpoint_store is None:
             checkpoint_store = AnalysisCheckpointStore(checkpoint_dir=checkpoint_dir)
         cfg = config or OperationalAnalysisConfig()
         if profile is not None:
@@ -790,6 +791,7 @@ class LocalTopicAnalysisService:
         parent_chunk_index: int = 0,
         parent_document_id: str = "",
         total_planned_chunks: int = 1,
+        eff_max_tokens: int | None = None,
     ) -> tuple[list[DiscoveryChunkOutcome], list[TopicDiscoveryResult]]:
         """Esegue suddivisione controllata di un blocco di discovery oversize con persistenza incrementale e recupero dei sotto-blocchi."""
         mid = len(chunk.bundles) // 2
@@ -889,6 +891,13 @@ class LocalTopicAnalysisService:
             # Esecuzione inferenza sul sotto-blocco mancante
             tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/{total_subs}", record_request=False)
             t_sub_start = time.perf_counter()
+            sub_attempts = 1
+
+            def _on_sub_retry(att: int, r: str) -> None:
+                nonlocal sub_attempts
+                sub_attempts = max(sub_attempts, att + 1)
+                tracker.chunk_retry(sub_display_idx, f"sub{s_idx}:{r}")
+
             try:
                 res = analyzer.discover_topics(
                     document=sub,
@@ -897,9 +906,10 @@ class LocalTopicAnalysisService:
                     seed=eff_seed,
                     timeout_seconds=self.timeout_seconds,
                     max_topics=chunk_target_topics,
+                    max_tokens=eff_max_tokens or self.default_max_tokens or 1280,
                     operational_mode=True,
                     context_length=self.context_length,
-                    on_retry_callback=lambda att, r: tracker.chunk_retry(sub_display_idx, f"sub{s_idx}:{r}"),
+                    on_retry_callback=_on_sub_retry,
                 )
                 dur = round(time.perf_counter() - t_sub_start, 3)
                 chk_saved = False
@@ -967,11 +977,12 @@ class LocalTopicAnalysisService:
                 cat, phase, safe_desc = classify_discovery_exception(s_exc)
                 is_val_err = isinstance(s_exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
                 tracker.chunk_failed(sub_display_idx, str(s_exc), is_protocol_or_validation=is_val_err)
+                eff_sub_att = int(getattr(s_exc, "attempts", sub_attempts))
                 sub_diag = ChunkDiagnosticRecord(
                     chunk_index=sub_display_idx - 1,
                     chunk_id=sub.document_id,
                     status=ChunkLifecycleStatus.FAILED.value,
-                    attempts=1,
+                    attempts=eff_sub_att,
                     duration_seconds=0.0,
                     model_id=resolved_model,
                     http_status=getattr(s_exc, "status_code", None),
@@ -997,7 +1008,7 @@ class LocalTopicAnalysisService:
                         safe_error_code=cat,
                         diagnostic=sub_diag,
                         chunk_index=sub_display_idx - 1,
-                        attempts=1,
+                        attempts=eff_sub_att,
                         duration_seconds=0.0,
                     )
                 )
@@ -1113,6 +1124,10 @@ class LocalTopicAnalysisService:
                 extra_params={
                     "strategy": strategy.value if hasattr(strategy, "value") else str(strategy),
                     "operational_mode": operational_mode,
+                    "loaded_instance_id": (
+                        getattr(target_client, "_loaded_instance_id", None)
+                        or (getattr(target_client, "_active_binding", None).loaded_instance_id if getattr(target_client, "_active_binding", None) else None)
+                    ),
                     "resolved_model_key": (
                         getattr(target_client, "_active_binding", None).resolved_model_key
                         if getattr(target_client, "_active_binding", None)
@@ -1272,11 +1287,21 @@ class LocalTopicAnalysisService:
                     except FATAL_BACKEND_ERRORS as fatal_err:
                         dur = round(time.perf_counter() - t_chunk_start, 3)
                         cat, phase, safe_desc = classify_discovery_exception(fatal_err)
-                        if (
+                        is_truncation = (
+                            isinstance(fatal_err, AiStructuredOutputError)
+                            and (
+                                getattr(fatal_err, "finish_reason", None) == "length"
+                                or "finish_reason=length" in str(fatal_err)
+                                or "Unterminated string" in str(fatal_err)
+                                or "JSONDecodeError" in str(fatal_err)
+                                or "prima del completamento" in str(fatal_err)
+                            )
+                        )
+                        is_context_overflow = (
                             isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
                             and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
-                            and len(chunks[0].bundles) > 1
-                        ):
+                        )
+                        if (is_context_overflow or is_truncation) and len(chunks[0].bundles) > 1:
                             tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
                             sub_outcomes = self._process_subchunks_detection(
                                 chunk=chunks[0],
@@ -1586,12 +1611,22 @@ class LocalTopicAnalysisService:
                 except FATAL_BACKEND_ERRORS as fatal_err:
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     cat, phase, safe_desc = classify_discovery_exception(fatal_err)
-                    # Se è un CONTEXT_OVERFLOW recuperabile su chunk con più di un bundle, tenta suddivisione
-                    if (
+                    # Se è un CONTEXT_OVERFLOW o troncamento token recuperabile su chunk con più di un bundle, tenta suddivisione
+                    is_truncation = (
+                        isinstance(fatal_err, AiStructuredOutputError)
+                        and (
+                            getattr(fatal_err, "finish_reason", None) == "length"
+                            or "finish_reason=length" in str(fatal_err)
+                            or "Unterminated string" in str(fatal_err)
+                            or "JSONDecodeError" in str(fatal_err)
+                            or "prima del completamento" in str(fatal_err)
+                        )
+                    )
+                    is_context_overflow = (
                         isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
                         and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
-                        and len(chunk.bundles) > 1
-                    ):
+                    )
+                    if (is_context_overflow or is_truncation) and len(chunk.bundles) > 1:
                         tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
                         sub_outcomes = self._process_subchunks_detection(
                             chunk=chunk,
@@ -1641,7 +1676,12 @@ class LocalTopicAnalysisService:
                             except Exception:
                                 pass
                         tracker.chunk_failed(current_tracker_idx, str(fatal_err))
-                        if isinstance(fatal_err, SYSTEMIC_BACKEND_ERRORS) or not operational_mode or (chk_store is not None):
+                        should_abort = (
+                            isinstance(fatal_err, SYSTEMIC_BACKEND_ERRORS)
+                            or not operational_mode
+                            or (isinstance(fatal_err, AiBackendTimeoutError) and self.enable_checkpointing)
+                        )
+                        if should_abort:
                             tracker.fail(str(fatal_err))
                             raise
                         outcomes.append(
@@ -1664,7 +1704,7 @@ class LocalTopicAnalysisService:
                         chunk_index=idx,
                         chunk_id=chunk.document_id,
                         status=ChunkLifecycleStatus.FAILED.value,
-                        attempts=1,
+                        attempts=int(getattr(exc, "attempts", chunk_attempts)),
                         duration_seconds=dur,
                         model_id=resolved_model,
                         http_status=getattr(exc, "status_code", None),
@@ -1724,7 +1764,7 @@ class LocalTopicAnalysisService:
         if failed_count == 0:
             tracker.complete(f"Topic Detection completata: {completed_count}/{total_units} blocchi analizzati.")
             det_status = "SUCCESS"
-            if chk_store is not None:
+            if chk_store is not None and doc_fp and cfg_fp:
                 chk_store.clear_checkpoint(doc_fp, cfg_fp)
         else:
             tracker.partial(f"Topic Detection completata parzialmente: {completed_count}/{total_units} blocchi analizzati.")
@@ -2029,6 +2069,7 @@ class LocalTopicAnalysisService:
                             parent_chunk_index=0,
                             parent_document_id=document.document_id,
                             total_planned_chunks=1,
+                            eff_max_tokens=eff_max_tokens,
                         )
                         chunk_outcomes.extend(sub_outs)
                         for so in sub_outs:
@@ -2160,11 +2201,21 @@ class LocalTopicAnalysisService:
                                     logger.warning("Salvataggio diagnostica blocco 1 non riuscito: %s", diag_err)
                                     tracker.phase = f"Avviso: Salvataggio diagnostica blocco 1 su SQLite non riuscito ({diag_err})"
                         except FATAL_BACKEND_ERRORS as fatal_err:
-                            if (
+                            is_truncation = (
+                                isinstance(fatal_err, AiStructuredOutputError)
+                                and (
+                                    getattr(fatal_err, "finish_reason", None) == "length"
+                                    or "finish_reason=length" in str(fatal_err)
+                                    or "Unterminated string" in str(fatal_err)
+                                    or "JSONDecodeError" in str(fatal_err)
+                                    or "prima del completamento" in str(fatal_err)
+                                )
+                            )
+                            is_context_overflow = (
                                 isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
                                 and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
-                                and len(chunks[0].bundles) > 1
-                            ):
+                            )
+                            if (is_context_overflow or is_truncation) and len(chunks[0].bundles) > 1:
                                 tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
                                 sub_outs, sub_res = self._process_subchunks_discovery(
                                     chunk=chunks[0],
@@ -2491,11 +2542,21 @@ class LocalTopicAnalysisService:
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     cat, phase, safe_desc = classify_discovery_exception(fatal_err)
                     is_val_err = isinstance(fatal_err, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
-                    if (
+                    is_truncation = (
+                        isinstance(fatal_err, AiStructuredOutputError)
+                        and (
+                            getattr(fatal_err, "finish_reason", None) == "length"
+                            or "finish_reason=length" in str(fatal_err)
+                            or "Unterminated string" in str(fatal_err)
+                            or "JSONDecodeError" in str(fatal_err)
+                            or "prima del completamento" in str(fatal_err)
+                        )
+                    )
+                    is_context_overflow = (
                         isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
                         and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
-                        and len(chunk.bundles) > 1
-                    ):
+                    )
+                    if (is_context_overflow or is_truncation) and len(chunk.bundles) > 1:
                         tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
                         sub_outs, sub_res = self._process_subchunks_discovery(
                             chunk=chunk,
@@ -2512,6 +2573,7 @@ class LocalTopicAnalysisService:
                             parent_chunk_index=idx,
                             parent_document_id=document.document_id,
                             total_planned_chunks=len(chunks),
+                            eff_max_tokens=eff_max_tokens,
                         )
                         chunk_outcomes.extend(sub_outs)
                         successful_results.extend(sub_res)
@@ -2526,25 +2588,27 @@ class LocalTopicAnalysisService:
                         raise
                     else:
                         tracker.chunk_failed(current_tracker_idx, str(fatal_err), is_protocol_or_validation=is_val_err)
-                        http_st = getattr(fatal_err, "status_code", None)
+                        http_st = getattr(fatal_err, "status_code", None) or (200 if isinstance(fatal_err, (AiInvalidEvidenceCitationError, AiStructuredOutputError)) else None)
                         obs_f_reason = getattr(fatal_err, "finish_reason", None)
+                        eff_att = int(getattr(fatal_err, "attempts", chunk_attempts))
+                        is_inv_ev = (cat == ChunkDiagnosticCategory.INVALID_EVIDENCE_ID.value or isinstance(fatal_err, AiInvalidEvidenceCitationError))
                         diag = ChunkDiagnosticRecord(
                             chunk_index=idx,
                             chunk_id=chunk.document_id,
                             status=ChunkLifecycleStatus.FAILED.value,
-                            attempts=chunk_attempts,
+                            attempts=eff_att,
                             duration_seconds=dur,
                             model_id=resolved_model,
                             http_status=http_st,
                             finish_reason=obs_f_reason,
-                            prompt_tokens=None,
-                            completion_tokens=None,
+                            prompt_tokens=getattr(fatal_err, "prompt_tokens", None),
+                            completion_tokens=getattr(fatal_err, "completion_tokens", None),
                             error_type=type(fatal_err).__name__,
                             diagnostic_category=cat,
                             failure_phase=phase,
                             error_detail=safe_desc,
-                            json_valid=False,
-                            schema_valid=False,
+                            json_valid=(cat != ChunkDiagnosticCategory.JSON_DECODE_ERROR.value and not (isinstance(fatal_err, AiStructuredOutputError) and "JSON" in str(fatal_err))),
+                            schema_valid=is_inv_ev,
                             evidence_valid=False,
                             checkpoint_saved=False,
                         )
@@ -2675,11 +2739,8 @@ class LocalTopicAnalysisService:
             if failed_count == 0:
                 tracker.complete(f"Topic Discovery completata: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
                 disc_status = "COMPLETE"
-                if chk_store is not None:
-                    try:
-                        chk_store.clear_checkpoint(doc_fp, cfg_fp)
-                    except Exception:
-                        pass
+                if chk_store is not None and doc_fp and cfg_fp:
+                    chk_store.clear_checkpoint(doc_fp, cfg_fp)
             else:
                 tracker.partial(f"Topic Discovery completata parzialmente: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
                 disc_status = "PARTIAL"
@@ -3316,17 +3377,22 @@ class LocalTopicAnalysisService:
         )
 
         # Seconda inferenza di Topic Detection completamente INDIPENDENTE
-        det_result = self.run_topic_detection(
-            document=document,
-            topic=query,
-            client=client,
-            model_name=model_name,
-            strategy=strategy,
-            temperature=temperature,
-            seed=seed,
-            preserve_raw_response=preserve_raw_response,
-            progress_callback=progress_callback,
-        )
+        try:
+            det_result = self.run_topic_detection(
+                document=document,
+                topic=query,
+                client=client,
+                model_name=model_name,
+                strategy=strategy,
+                temperature=temperature,
+                seed=seed,
+                preserve_raw_response=preserve_raw_response,
+                progress_callback=progress_callback,
+            )
+        except (AiInvalidEvidenceCitationError, AiStructuredOutputError) as det_err:
+            raise TopicProvenanceError(
+                f"Errore di conformità evidenze durante la verifica indipendente: {det_err}"
+            ) from det_err
 
         # Validazione degli evidence_ids restituiti dalla detection rispetto al documento
         for eid in det_result.evidence_ids:

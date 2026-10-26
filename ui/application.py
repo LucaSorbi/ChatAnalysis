@@ -14,6 +14,7 @@ Principi architetturali:
 from __future__ import annotations
 
 import hashlib
+import os
 from pathlib import Path
 import re
 from typing import Iterable, Mapping, MutableMapping, MutableSet, Optional, Sequence
@@ -451,20 +452,32 @@ def get_operational_analysis_service(
 
     resolved_checkpoint_store = checkpoint_store
     if resolved_checkpoint_store is None and enable_checkpointing:
-        try:
-            from ui import state
-            resolved_checkpoint_store = state.get_checkpoint_store()
-        except Exception:
-            resolved_checkpoint_store = None
-        if resolved_checkpoint_store is None:
+        chk_env = os.environ.get("CHATANALYSIS_CHECKPOINT_DIR")
+        if chk_env or checkpoint_dir:
+            effective_dir = checkpoint_dir or Path(chk_env)
             resolved_checkpoint_store = AnalysisCheckpointStore(
-                checkpoint_dir=checkpoint_dir or Path(".checkpoints")
+                checkpoint_dir=effective_dir
             )
             try:
                 from ui import state
                 state.set_checkpoint_store(resolved_checkpoint_store)
             except Exception:
                 pass
+        else:
+            try:
+                from ui import state
+                resolved_checkpoint_store = state.get_checkpoint_store()
+            except Exception:
+                resolved_checkpoint_store = None
+            if resolved_checkpoint_store is None:
+                resolved_checkpoint_store = AnalysisCheckpointStore(
+                    checkpoint_dir=Path(".checkpoints")
+                )
+                try:
+                    from ui import state
+                    state.set_checkpoint_store(resolved_checkpoint_store)
+                except Exception:
+                    pass
 
     return LocalTopicAnalysisService(
         base_url=base_url,

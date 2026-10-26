@@ -182,7 +182,7 @@ class OperationalAnalysisConfig:
     model_spec: str = "qwen2.5-7b-instruct"
     context_length: int = 8192
     timeout_seconds: float = 240.0
-    max_tokens: int = 512
+    max_tokens: int = 1280
     temperature: float = 0.0
     seed: int | None = 42
     max_topics: int = 10
@@ -635,6 +635,12 @@ def classify_discovery_exception(
                 ChunkDiagnosticCategory.HTTP_SCHEMA_REJECTED.value,
                 "inference",
                 "Schema JSON rifiutato dal server locale LM Studio",
+            )
+        if err_cat in ("INFERENCE_BACKEND_ERROR", "SERVER_ERROR"):
+            return (
+                ChunkDiagnosticCategory.UNKNOWN_ERROR.value,
+                "inference",
+                "Errore del motore di inferenza locale LM Studio durante la generazione (crash stream/grammar)",
             )
         if (
             err_cat in ("INVALID_PARAMS", "INVALID_PARAMETER", "HTTP_INVALID_PARAMETERS")

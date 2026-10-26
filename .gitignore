@@ -16,6 +16,7 @@ MANIFEST
 
 # Virtual environments
 .venv/
+.venv312/
 venv/
 env/
 ENV/
@@ -169,7 +170,9 @@ ubuntu_smoke_gate_bundle/
 # Checkpoint di analisi reali e dati diagnostici investigativi — MAI versionare
 # =============================================================================
 .checkpoints/
+.checkpoints*/
 */.checkpoints/
+checkpoints_archive*/
 *checkpoint_chunk_diagnostics*
 *diagnostic*.csv
 *diagnostic*.json

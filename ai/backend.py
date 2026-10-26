@@ -73,7 +73,10 @@ class AiInvalidEvidenceCitationError(AiStructuredOutputError):
 
 class AnalysisInputTooLargeError(AiBackendError):
     """Sollevata quando l'input supera la dimensione massima gestibile dal contesto o dal chunker."""
-    pass
+
+    def __init__(self, message: str, error_category: str = "CONTEXT_OVERFLOW") -> None:
+        super().__init__(message)
+        self.error_category = error_category
 
 
 class AiModelNotSpecifiedError(AiBackendError):

@@ -44,15 +44,12 @@ APP_PATH = str(Path(__file__).resolve().parents[2] / "app.py")
 
 
 @pytest.fixture(autouse=True)
-def clean_checkpoints():
-    chk_dir = Path(".checkpoints")
-    if chk_dir.exists():
-        import shutil
-        shutil.rmtree(chk_dir, ignore_errors=True)
-    yield
-    if chk_dir.exists():
-        import shutil
-        shutil.rmtree(chk_dir, ignore_errors=True)
+def isolated_apptest_checkpoints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Garantisce l'isolamento dei checkpoint di test su directory temporanea univoca pytest."""
+    chk_dir = tmp_path / "apptest_checkpoints"
+    chk_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CHATANALYSIS_CHECKPOINT_DIR", str(chk_dir))
+    yield chk_dir
 
 
 class MockAppLlmClient(BaseLlmClient):

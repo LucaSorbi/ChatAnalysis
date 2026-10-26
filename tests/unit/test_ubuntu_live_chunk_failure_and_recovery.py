@@ -844,19 +844,26 @@ def test_corrective_retry_context_overflow_prevention() -> None:
     assert client.total_calls <= 2
 
 
-def test_accurate_observed_metrics_attempts_finish_reason_http_status() -> None:
+def test_accurate_observed_metrics_attempts_finish_reason_http_status(monkeypatch) -> None:
     """
-    Verifica (Requisito 4):
-    Le metriche diagnostiche riflettono fedelmente i dati realmente osservati:
-    - Un fallimento al primo tentativo ha attempts=1 (non hardcoded 2).
-    - In assenza di risposta completata, finish_reason non viene presunto 'stop'.
-    - Un errore HTTP o timeout registra lo status corretto.
+    Verifica (Requisito 4, 5 e 6):
+    Le metriche diagnostiche riflettono fedelmente i dati realmente osservati per identità di blocco:
+    - Comportamento isolato per chunk_idx (non contatore globale self.calls).
+    - Chunk 0: Timeout in entrambi i tentativi -> attempts=2, finish_reason=None, http_status=None, diagnostic_category=TIMEOUT.
+    - Chunk 1: HTTP 500 in entrambi i tentativi -> attempts=2, finish_reason=None, http_status=500.
+    - Chunk 2: Successo al primo tentativo -> attempts=1, http_status=200, finish_reason='stop', diagnostic_category=NONE.
+    - Contabilità esatta: 2 + 2 + 1 = 5 chiamate HTTP totali, nessuna attribuzione a blocchi errati.
+    - Caso timeout->success: attempts=2, status=SUCCESS, http_status=200, finish_reason='stop'.
+    - Caso HTTP 400 permanente: non ritentato, attempts=1, http_status=400, status=FAILED.
     """
-    class ScriptedFailureClient(BaseLocalLlmClient):
+    monkeypatch.setattr(time, "sleep", lambda _: None)
+
+    class PerChunkScriptedClient(BaseLocalLlmClient):
         def __init__(self) -> None:
             super().__init__()
             self.base_url = "http://127.0.0.1:1234"
-            self.calls = 0
+            self.calls_by_chunk: dict[int, int] = {}
+            self.total_calls = 0
 
         def is_available(self, timeout_seconds: float = 2.0) -> bool:
             return True
@@ -864,30 +871,48 @@ def test_accurate_observed_metrics_attempts_finish_reason_http_status() -> None:
         def list_models(self) -> Sequence[str]:
             return ("qwen2.5-7b-instruct",)
 
-        def chat_completion(self, *args: Any, **kwargs: Any) -> LlmCompletionResponse:
-            self.calls += 1
-            if self.calls == 1:
-                # Chunk 0: Errore di connessione / timeout (nessun HTTP status, nessun finish_reason)
-                raise AiBackendTimeoutError("Timeout connessione LM Studio")
-            elif self.calls == 2:
-                # Chunk 1: Errore HTTP 500
-                err = AiBackendRequestError("Internal Server Error da LM Studio")
+        def chat_completion(
+            self,
+            messages: Sequence[Mapping[str, str]],
+            *args: Any,
+            **kwargs: Any,
+        ) -> LlmCompletionResponse:
+            self.total_calls += 1
+            user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
+            m_chunk = re.search(r"msg_doc_obs_metrics_(\d+)", user_msg)
+            if not m_chunk:
+                m_chunk = re.search(r"bundle\s+(\d+)", user_msg)
+            if not m_chunk:
+                raise ValueError("Impossibile identificare chunk dal prompt")
+
+            chunk_idx = int(m_chunk.group(1))
+            self.calls_by_chunk[chunk_idx] = self.calls_by_chunk.get(chunk_idx, 0) + 1
+            call_num = self.calls_by_chunk[chunk_idx]
+
+            if chunk_idx == 0:
+                # Chunk 0: Errore di timeout in entrambi i tentativi
+                raise AiBackendTimeoutError(f"Timeout connessione LM Studio su chunk 0 (att {call_num})")
+            elif chunk_idx == 1:
+                # Chunk 1: Errore HTTP 500 in entrambi i tentativi
+                err = AiBackendRequestError(f"Internal Server Error 500 da LM Studio su chunk 1 (att {call_num})")
                 err.status_code = 500
                 raise err
-            else:
-                # Chunk 2: Successo con metadati reali
+            elif chunk_idx == 2:
+                # Chunk 2: Successo al primo tentativo con metadati osservati reali
                 return LlmCompletionResponse(
                     content=json.dumps({"topics": []}),
                     model="qwen2.5-7b-instruct",
                     prompt_tokens=150,
                     completion_tokens=40,
                     total_tokens=190,
-                    latency_seconds=0.5,
+                    latency_seconds=0.01,
                     raw_response={"finish_reason": "stop"},
                 )
+            else:
+                raise ValueError(f"Chunk imprevisto {chunk_idx}")
 
     doc = _create_synthetic_forensic_doc("doc_obs_metrics", num_bundles=3)
-    client = ScriptedFailureClient()
+    client = PerChunkScriptedClient()
     service = LocalTopicAnalysisService(
         enable_checkpointing=False,
         default_model="qwen2.5-7b-instruct",
@@ -903,24 +928,144 @@ def test_accurate_observed_metrics_attempts_finish_reason_http_status() -> None:
     diags = res.metadata["chunk_diagnostics"]
     assert len(diags) == 3
 
-    # Chunk 0: Timeout -> attempts=1, finish_reason=None, http_status=None
+    # Contabilita' chiamate per identita' del blocco:
+    assert client.calls_by_chunk[0] == 2, "Chunk 0 doveva eseguire esattamente 2 tentativi (timeout + retry)"
+    assert client.calls_by_chunk[1] == 2, "Chunk 1 doveva eseguire esattamente 2 tentativi (HTTP 500 + retry)"
+    assert client.calls_by_chunk[2] == 1, "Chunk 2 doveva eseguire esattamente 1 tentativo (successo)"
+    assert client.total_calls == 5
+
+    # Chunk 0: Timeout -> attempts=2, finish_reason=None, http_status=None (nessun 200 inventato!)
     diag0 = diags[0]
-    assert diag0["attempts"] == 1
+    assert diag0["chunk_index"] == 0
+    assert diag0["attempts"] == 2
+    assert diag0["status"] == ChunkLifecycleStatus.FAILED.value
     assert diag0["finish_reason"] is None
     assert diag0["http_status"] is None
     assert diag0["diagnostic_category"] == ChunkDiagnosticCategory.TIMEOUT.value
 
-    # Chunk 1: HTTP 500 -> attempts=1, http_status=500, finish_reason=None
+    # Chunk 1: HTTP 500 -> attempts=2, http_status=500, finish_reason=None
     diag1 = diags[1]
-    assert diag1["attempts"] == 1
+    assert diag1["chunk_index"] == 1
+    assert diag1["attempts"] == 2
+    assert diag1["status"] == ChunkLifecycleStatus.FAILED.value
     assert diag1["http_status"] == 500
     assert diag1["finish_reason"] is None
 
     # Chunk 2: Successo -> attempts=1, http_status=200, finish_reason="stop"
     diag2 = diags[2]
+    assert diag2["chunk_index"] == 2
     assert diag2["attempts"] == 1
+    assert diag2["status"] == ChunkLifecycleStatus.SUCCESS.value
     assert diag2["http_status"] == 200
     assert diag2["finish_reason"] == "stop"
+    assert diag2["diagnostic_category"] == ChunkDiagnosticCategory.NONE.value
+
+    # =========================================================================
+    # Caso isolato 1: Timeout transitorio al 1° tentativo e successo al 2°
+    # =========================================================================
+    doc_trans = _create_synthetic_forensic_doc("doc_obs_trans_timeout", num_bundles=1)
+
+    class TransientTimeoutClient(BaseLocalLlmClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base_url = "http://127.0.0.1:1234"
+            self.calls = 0
+
+        def is_available(self, timeout_seconds: float = 2.0) -> bool:
+            return True
+
+        def list_models(self) -> Sequence[str]:
+            return ("qwen2.5-7b-instruct",)
+
+        def chat_completion(self, *args: Any, **kwargs: Any) -> LlmCompletionResponse:
+            self.calls += 1
+            if self.calls == 1:
+                raise AiBackendTimeoutError("Timeout transitorio primo tentativo")
+            return LlmCompletionResponse(
+                content=json.dumps({"topics": []}),
+                model="qwen2.5-7b-instruct",
+                prompt_tokens=120,
+                completion_tokens=30,
+                total_tokens=150,
+                latency_seconds=0.01,
+                raw_response={"finish_reason": "stop"},
+            )
+
+    client_trans = TransientTimeoutClient()
+    res_trans = service.run_topic_discovery(doc_trans, client=client_trans, model_name="qwen2.5-7b-instruct")
+    diag_trans = res_trans.metadata["chunk_diagnostics"][0]
+    assert diag_trans["attempts"] == 2
+    assert diag_trans["status"] == ChunkLifecycleStatus.SUCCESS.value
+    assert diag_trans["http_status"] == 200
+    assert diag_trans["finish_reason"] == "stop"
+    assert diag_trans["diagnostic_category"] == ChunkDiagnosticCategory.NONE.value
+    assert client_trans.calls == 2
+
+    # =========================================================================
+    # Caso isolato 2: Errore permanente HTTP 400 (parametri non validi / schema rifiutato)
+    # Non deve essere ritentato (fallisce chiuso a 1 tentativo).
+    # Con 2 chunk (uno riuscito, uno con HTTP 400), l'analisi parziale registra attempts=1.
+    # =========================================================================
+    doc_perm = _create_synthetic_forensic_doc("doc_obs_perm_400", num_bundles=2)
+
+    class Permanent400Client(BaseLocalLlmClient):
+        def __init__(self) -> None:
+            super().__init__()
+            self.base_url = "http://127.0.0.1:1234"
+            self.calls_by_chunk: dict[int, int] = {}
+            self.total_calls = 0
+
+        def is_available(self, timeout_seconds: float = 2.0) -> bool:
+            return True
+
+        def list_models(self) -> Sequence[str]:
+            return ("qwen2.5-7b-instruct",)
+
+        def chat_completion(
+            self,
+            messages: Sequence[Mapping[str, str]],
+            *args: Any,
+            **kwargs: Any,
+        ) -> LlmCompletionResponse:
+            self.total_calls += 1
+            user_msg = next((m["content"] for m in messages if m.get("role") == "user"), "")
+            m_chunk = re.search(r"msg_doc_obs_perm_400_(\d+)", user_msg)
+            if not m_chunk:
+                m_chunk = re.search(r"bundle\s+(\d+)", user_msg)
+            chunk_idx = int(m_chunk.group(1)) if m_chunk else 0
+            self.calls_by_chunk[chunk_idx] = self.calls_by_chunk.get(chunk_idx, 0) + 1
+
+            if chunk_idx == 0:
+                # Chunk 0: successo
+                return LlmCompletionResponse(
+                    content=json.dumps({"topics": []}),
+                    model="qwen2.5-7b-instruct",
+                    prompt_tokens=100,
+                    completion_tokens=20,
+                    total_tokens=120,
+                    latency_seconds=0.01,
+                    raw_response={"finish_reason": "stop"},
+                )
+            else:
+                # Chunk 1: Errore permanente HTTP 400
+                err = AiBackendRequestError("Bad request: parametri HTTP non validi o schema rifiutato")
+                err.status_code = 400
+                err.error_category = "HTTP_INVALID_PARAMETERS"
+                raise err
+
+    client_perm = Permanent400Client()
+    res_perm = service.run_topic_discovery(doc_perm, client=client_perm, model_name="qwen2.5-7b-instruct")
+    assert res_perm.metadata["status"] == "PARTIAL"
+    diags_perm = res_perm.metadata["chunk_diagnostics"]
+    diag_perm1 = diags_perm[1]
+    assert diag_perm1["attempts"] == 1
+    assert diag_perm1["status"] == ChunkLifecycleStatus.FAILED.value
+    assert diag_perm1["http_status"] == 400
+    assert diag_perm1["finish_reason"] is None
+    assert diag_perm1["diagnostic_category"] == ChunkDiagnosticCategory.HTTP_INVALID_PARAMETERS.value
+    # Deve aver effettuato ESATTAMENTE 1 chiamata per Chunk 1 (nessun retry)
+    assert client_perm.calls_by_chunk[1] == 1
+    assert client_perm.total_calls == 2
 
 
 def test_failed_chunk_diagnostics_persisted_to_sqlite() -> None:

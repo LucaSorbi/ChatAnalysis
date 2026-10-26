@@ -1104,6 +1104,9 @@ def classify_lmstudio_http_error(
         if any(k in lower_msg for k in ("context", "n_ctx", "maximum context length", "too many tokens", "exceed", "window", "context length")):
             cat = "CONTEXT_OVERFLOW"
             safe_reason = "LM Studio ha rifiutato la richiesta perché il prompt e il budget di risposta superano la finestra di contesto disponibile."
+        elif any(k in lower_msg for k in ("unexpected empty grammar stack", "empty grammar stack", "grammar stack", "empty grammar", "stream returned an error", "llama_decode", "cuda", "vram", "out of memory", "memory", "metal")):
+            cat = "INFERENCE_BACKEND_ERROR"
+            safe_reason = "Errore del motore di inferenza locale LM Studio durante la generazione guidata da grammatica (stream/grammar stack error)."
         elif any(k in lower_msg for k in ("response_format", "json_schema", "schema", "grammar", "structured output")):
             cat = "UNSUPPORTED_STRUCTURED_OUTPUT"
             safe_reason = "Il backend non accetta il formato JSON strutturato richiesto."
@@ -1113,9 +1116,6 @@ def classify_lmstudio_http_error(
         elif any(k in lower_msg for k in ("invalid parameter", "unknown field", "parameter", "temperature", "max_tokens", "seed", "out of range")):
             cat = "INVALID_PARAMETER"
             safe_reason = "LM Studio ha rifiutato un parametro della richiesta."
-        elif any(k in lower_msg for k in ("cuda", "vram", "out of memory", "llama_decode", "memory", "metal")):
-            cat = "INFERENCE_BACKEND_ERROR"
-            safe_reason = "Errore del backend di inferenza locale o memoria GPU insufficiente."
         else:
             cat = "UNCLASSIFIED_HTTP_ERROR"
             safe_reason = "LM Studio ha restituito HTTP 400. Non è stato possibile determinare la causa specifica."
@@ -1123,8 +1123,12 @@ def classify_lmstudio_http_error(
         cat = "RATE_LIMIT_EXCEEDED"
         safe_reason = "LM Studio ha restituito HTTP 429: troppe richieste simultanee o server occupato."
     elif http_code in (500, 502, 503, 504):
-        cat = "SERVER_ERROR"
-        safe_reason = f"Errore interno del server LM Studio (HTTP {http_code})."
+        if any(k in lower_msg for k in ("unexpected empty grammar stack", "empty grammar stack", "grammar stack", "empty grammar", "llama_decode", "stream returned an error")):
+            cat = "INFERENCE_BACKEND_ERROR"
+            safe_reason = "Errore del motore di inferenza locale LM Studio durante la generazione guidata da grammatica (stream/grammar stack error)."
+        else:
+            cat = "SERVER_ERROR"
+            safe_reason = f"Errore interno del server LM Studio (HTTP {http_code})."
     else:
         cat = "HTTP_ERROR"
         safe_reason = f"Errore HTTP {http_code} restituito da LM Studio: {reason or 'Unknown'}"
@@ -1896,6 +1900,8 @@ class LmStudioClient(BaseLocalLlmClient):
         max_tokens: int | None = None,
         timeout_seconds: float = 30.0,
         request_listener: Any = None,
+        schema_strict: bool = True,
+        **kwargs: Any,
     ) -> LlmCompletionResponse:
         """
         Invia una richiesta OpenAI-compatible a POST /v1/chat/completions.
@@ -1929,7 +1935,7 @@ class LmStudioClient(BaseLocalLlmClient):
                 "type": "json_schema",
                 "json_schema": {
                     "name": "structured_output",
-                    "strict": True,
+                    "strict": bool(schema_strict),
                     "schema": schema,
                 },
             }
@@ -2099,20 +2105,6 @@ class LmStudioClient(BaseLocalLlmClient):
                 f"Campo 'finish_reason' deve essere una stringa o None, ricevuto {type(finish_reason).__name__}."
             )
 
-        # Troncamento JSON se schema richiesto e finish_reason='length'
-        if schema is not None and finish_reason == "length":
-            try:
-                json.loads(content)
-            except Exception as j_trunc_err:
-                if listener is not None and hasattr(listener, "record_protocol_error"):
-                    try:
-                        listener.record_protocol_error("Risposta JSON troncata (finish_reason=length)")
-                    except Exception:
-                        pass
-                raise AiStructuredOutputError(
-                    f"Risposta JSON troncata da LM Studio prima del completamento (finish_reason=length): {j_trunc_err}"
-                ) from j_trunc_err
-
         usage = raw_json.get("usage")
         prompt_tokens = None
         completion_tokens = None
@@ -2142,6 +2134,26 @@ class LmStudioClient(BaseLocalLlmClient):
             prompt_tokens = int(usage["prompt_tokens"]) if usage.get("prompt_tokens") is not None else None
             completion_tokens = int(usage["completion_tokens"]) if usage.get("completion_tokens") is not None else None
             total_tokens = int(usage["total_tokens"]) if usage.get("total_tokens") is not None else None
+
+        # Troncamento JSON se schema richiesto e finish_reason='length'
+        if schema is not None and finish_reason == "length":
+            try:
+                json.loads(content)
+            except Exception as j_trunc_err:
+                if listener is not None and hasattr(listener, "record_protocol_error"):
+                    try:
+                        listener.record_protocol_error("Risposta JSON troncata (finish_reason=length)")
+                    except Exception:
+                        pass
+                trunc_exc = AiStructuredOutputError(
+                    f"Risposta JSON troncata da LM Studio prima del completamento (finish_reason=length): {j_trunc_err}"
+                )
+                setattr(trunc_exc, "finish_reason", "length")
+                setattr(trunc_exc, "raw_content", content)
+                setattr(trunc_exc, "prompt_tokens", prompt_tokens)
+                setattr(trunc_exc, "completion_tokens", completion_tokens)
+                setattr(trunc_exc, "total_tokens", total_tokens)
+                raise trunc_exc from j_trunc_err
 
         # TUTTE le validazioni di protocollo e struttura sono state superate con successo!
         # SOLO ADESSO certifichiamo il binding provvisorio promuovendolo a verificato.

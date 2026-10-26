@@ -54,15 +54,12 @@ from ui.models import (
 
 
 @pytest.fixture(autouse=True)
-def clean_checkpoints():
-    chk_dir = Path(".checkpoints")
-    if chk_dir.exists():
-        import shutil
-        shutil.rmtree(chk_dir, ignore_errors=True)
-    yield
-    if chk_dir.exists():
-        import shutil
-        shutil.rmtree(chk_dir, ignore_errors=True)
+def isolated_checkpoint_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Garantisce l'isolamento dei checkpoint di test su directory temporanea univoca pytest."""
+    chk_dir = tmp_path / "ui_manual_checkpoints"
+    chk_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CHATANALYSIS_CHECKPOINT_DIR", str(chk_dir))
+    yield chk_dir
 
 
 class MockLlmClient(BaseLlmClient):

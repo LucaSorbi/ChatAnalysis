@@ -57,13 +57,12 @@ from analysis.service import LocalTopicAnalysisService
 
 
 @pytest.fixture(autouse=True)
-def clean_test_checkpoints():
-    chk_dir = Path(".checkpoints")
-    if chk_dir.exists():
-        shutil.rmtree(chk_dir, ignore_errors=True)
-    yield
-    if chk_dir.exists():
-        shutil.rmtree(chk_dir, ignore_errors=True)
+def isolated_checkpoint_dir(tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+    """Garantisce l'isolamento dei checkpoint di test su directory temporanea univoca pytest."""
+    chk_dir = tmp_path / "subchunk_checkpoints"
+    chk_dir.mkdir(parents=True, exist_ok=True)
+    monkeypatch.setenv("CHATANALYSIS_CHECKPOINT_DIR", str(chk_dir))
+    yield chk_dir
 
 
 def _build_test_document(doc_id: str, num_messages: int) -> ConversationEvidenceDocument:
@@ -421,7 +420,7 @@ def test_subchunk_persistence_and_recovery_without_duplicate_inference():
     )
     assert res1.metadata["status"] == "PARTIAL"
     assert calls_for_sub0 == 1
-    assert calls_for_sub1 == 1
+    assert calls_for_sub1 == 2
     assert calls_for_chunk1 == 1
 
     # Verifica persistenza in SQLite: Sub0 salvato con parent_chunk_index=0, subchunk_index=0
@@ -455,7 +454,7 @@ def test_subchunk_persistence_and_recovery_without_duplicate_inference():
     # Verifica zero repeat su Sub0 e su Chunk 1!
     assert calls_for_sub0 == 1, "Sub0 non doveva essere richiamato (zero repeat da checkpoint)"
     assert calls_for_chunk1 == 1, "Chunk 1 non doveva essere richiamato (zero repeat da checkpoint)"
-    assert calls_for_sub1 == 2, "Sub1 doveva essere ritentato ed eseguito"
+    assert calls_for_sub1 == 3, "Sub1 doveva essere ritentato ed eseguito (2 tentativi falliti in run 1 + 1 tentativo riuscito in run 2)"
 
     assert res2.metadata["status"] == "COMPLETE"
     assert res2.metadata["total_evidence_count"] == 4

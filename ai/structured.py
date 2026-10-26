@@ -50,10 +50,12 @@ TOPIC_DETECTION_SCHEMA: dict[str, Any] = {
         "evidence_ids": {
             "type": "array",
             "items": {"type": "string"},
+            "maxItems": 15,
             "description": "Elenco degli identificativi esatti delle evidenze che motivano la decisione.",
         },
         "rationale": {
             "type": "string",
+            "minLength": 1,
             "description": "Spiegazione sintetica ed oggettiva del risultato (non chain-of-thought prolisso).",
         },
     },
@@ -80,6 +82,7 @@ TOPIC_DISCOVERY_SCHEMA: dict[str, Any] = {
                     "evidence_ids": {
                         "type": "array",
                         "items": {"type": "string"},
+                        "maxItems": 15,
                         "description": "Evidenze che supportano l'argomento (almeno una richiesta).",
                     },
                 },

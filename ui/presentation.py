@@ -18,6 +18,8 @@ from __future__ import annotations
 
 import inspect
 import json
+import os
+from pathlib import Path
 import streamlit as st
 
 from core.config import MAX_UPLOAD_SIZE_MB
@@ -197,7 +199,9 @@ def render_operational_profile_selector(doc: Any) -> OperationalProfile:
             st.caption("Salvataggio progressivo e ripresa senza ripetizione dei chunk già validati.")
             chk_store = state.get_checkpoint_store()
             if chk_store is None:
-                chk_store = AnalysisCheckpointStore(checkpoint_dir=Path(".checkpoints"))
+                chk_env = os.environ.get("CHATANALYSIS_CHECKPOINT_DIR")
+                effective_dir = Path(chk_env) if chk_env else Path(".checkpoints")
+                chk_store = AnalysisCheckpointStore(checkpoint_dir=effective_dir)
                 state.set_checkpoint_store(chk_store)
 
             if doc is not None and getattr(doc, "document_id", None):

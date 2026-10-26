@@ -615,7 +615,8 @@ def test_34_inference_timeout_raises_ai_backend_timeout_error(monkeypatch: pytes
     assert "Timeout" in str(exc_info.value)
 
 
-def test_35_model_id_inference_matches_loaded_instance(monkeypatch: pytest.MonkeyPatch):
+def test_35_model_id_inference_matches_loaded_instance(monkeypatch: pytest.MonkeyPatch, tmp_path: Path):
+    monkeypatch.setenv("CHATANALYSIS_CHECKPOINT_DIR", str(tmp_path))
     captured_chat_model = []
     doc = _get_test_doc()
     ev_id = doc.all_evidence_sections[0].evidence_id

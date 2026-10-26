@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import shutil
 import tempfile
+import time
 from typing import Any, Sequence
 
 import pytest
@@ -70,7 +71,7 @@ class ControlledMockClient(BaseLlmClient):
     """Client di test controllato con listener di progresso HTTP conforme all'invariante."""
 
     def __init__(self, responses: list[Any] | None = None, model_id: str = "test-model") -> None:
-        self.responses = list(responses or [])
+        self.responses = list(responses) if responses is not None else None
         self.call_count = 0
         self.request_listener: Any = None
         self.model_id = model_id
@@ -96,10 +97,15 @@ class ControlledMockClient(BaseLlmClient):
             except Exception:
                 pass
 
-        if not self.responses:
-            resp_content = json.dumps({"decision": "ABSENT", "evidence_ids": [], "rationale": "Default mock response."})
-        else:
+        if self.responses is not None:
+            if not self.responses:
+                raise RuntimeError(
+                    f"ControlledMockClient: coda risposte esaurita alla chiamata #{self.call_count}. "
+                    "Nessuna risposta o successo non dichiarato consentito silenziosamente."
+                )
             resp_content = self.responses.pop(0)
+        else:
+            resp_content = json.dumps({"decision": "ABSENT", "evidence_ids": [], "rationale": "Default mock response."})
 
         if isinstance(resp_content, Exception):
             if self.request_listener:
@@ -474,27 +480,73 @@ def test_13_zero_repeated_requests_for_recovered_chunks(tmp_path):
 # ==============================================================================
 # TEST 14: Analisi parziale e completa
 # ==============================================================================
-def test_14_partial_and_complete_analysis_reporting():
-    doc = _make_doc("doc_status", count=2)
-    # Uno chunk riesce, uno fallisce in modo non recuperabile
-    client_partial = ControlledMockClient(responses=[
-        {"decision": "ABSENT", "evidence_ids": [], "rationale": "OK"},
-        AiStructuredOutputError("JSON invalido irreversibile"),
-    ])
-    svc = LocalTopicAnalysisService(max_chunk_bundles=1, enable_checkpointing=False)
+def test_14_partial_and_complete_analysis_reporting(monkeypatch):
+    """
+    Verifica isolata dei comportamenti di reporting in Topic Detection operativa:
+    (i)   Errore strutturato transient al 1° tentativo e successo al 2° -> SUCCESS, attempts=2.
+    (ii)  Errore strutturato persistente in entrambi i tentativi su un blocco -> PARTIAL e UNCERTAIN.
+    (iii) Errore permanente non recuperabile (HTTP 400) che fallisce chiuso senza retry -> PARTIAL, attempts=1.
+    (iv)  Esecuzione con tutti i blocchi riusciti al 1° tentativo -> SUCCESS.
+    """
+    monkeypatch.setattr(time, "sleep", lambda _: None)
     query = TopicQuery(topic_id="t1", label="Test", description="Test query")
+    svc = LocalTopicAnalysisService(max_chunk_bundles=1, enable_checkpointing=False)
 
-    res = svc.run_topic_detection(doc, query, client=client_partial, model_name="test-model")
-    assert res.metadata["status"] == "PARTIAL"
-    assert res.decision == TopicDecision.UNCERTAIN
+    # --- Scenario (ii): Errore strutturato persistente in ENTRAMBI i tentativi ---
+    doc_persist = _make_doc("doc_status_persist", count=2)
+    client_persist = ControlledMockClient(responses=[
+        {"decision": "ABSENT", "evidence_ids": [], "rationale": "Chunk 0 OK"},
+        AiStructuredOutputError("JSON invalido irreversibile tentativo 1"),
+        AiStructuredOutputError("JSON invalido irreversibile tentativo 2"),
+    ])
+    res_persist = svc.run_topic_detection(doc_persist, query, client=client_persist, model_name="test-model")
+    assert res_persist.metadata["status"] == "PARTIAL"
+    assert res_persist.decision == TopicDecision.UNCERTAIN
+    assert res_persist.metadata["completed_chunk_count"] == 1
+    assert res_persist.metadata["failed_chunk_count"] == 1
+    assert client_persist.call_count == 3
 
-    # Con tutti i chunk riusciti
+    # --- Scenario (i): Errore strutturato transient al 1° tentativo e risposta valida al 2° ---
+    doc_transient = _make_doc("doc_status_transient", count=2)
+    client_transient = ControlledMockClient(responses=[
+        {"decision": "ABSENT", "evidence_ids": [], "rationale": "Chunk 0 OK"},
+        AiStructuredOutputError("JSON malformato temporaneo"),
+        {"decision": "ABSENT", "evidence_ids": [], "rationale": "Chunk 1 corretto al retry"},
+    ])
+    res_transient = svc.run_topic_detection(doc_transient, query, client=client_transient, model_name="test-model")
+    assert res_transient.metadata["status"] == "SUCCESS"
+    assert res_transient.decision == TopicDecision.ABSENT
+    assert res_transient.metadata["completed_chunk_count"] == 2
+    assert res_transient.metadata["failed_chunk_count"] == 0
+    assert client_transient.call_count == 3
+
+    # --- Scenario (iii): Errore permanente non recuperabile (HTTP 400 parametri/schema) ---
+    doc_unrec = _make_doc("doc_status_unrec", count=2)
+    err_permanent = AiBackendRequestError("Parametri HTTP non validi o rifiutati")
+    err_permanent.status_code = 400
+    err_permanent.error_category = "HTTP_INVALID_PARAMETERS"
+    client_unrec = ControlledMockClient(responses=[
+        {"decision": "ABSENT", "evidence_ids": [], "rationale": "Chunk 0 OK"},
+        err_permanent,  # Deve fallire chiuso immediatamente senza retry!
+    ])
+    res_unrec = svc.run_topic_detection(doc_unrec, query, client=client_unrec, model_name="test-model")
+    assert res_unrec.metadata["status"] == "PARTIAL"
+    assert res_unrec.decision == TopicDecision.UNCERTAIN
+    assert res_unrec.metadata["completed_chunk_count"] == 1
+    assert res_unrec.metadata["failed_chunk_count"] == 1
+    # ESATTAMENTE 1 chiamata per Chunk 0 e 1 chiamata per Chunk 1 (nessun retry)
+    assert client_unrec.call_count == 2
+
+    # --- Scenario (iv): Con tutti i chunk riusciti al primo tentativo ---
+    doc_comp = _make_doc("doc_status_comp", count=2)
     client_complete = ControlledMockClient(responses=[
         {"decision": "ABSENT", "evidence_ids": [], "rationale": "OK 1"},
         {"decision": "ABSENT", "evidence_ids": [], "rationale": "OK 2"},
     ])
-    res_comp = svc.run_topic_detection(doc, query, client=client_complete, model_name="test-model")
+    res_comp = svc.run_topic_detection(doc_comp, query, client=client_complete, model_name="test-model")
     assert res_comp.metadata["status"] == "SUCCESS"
+    assert res_comp.decision == TopicDecision.ABSENT
+    assert client_complete.call_count == 2
 
 
 # ==============================================================================

@@ -80,12 +80,12 @@ OPERATIONAL SEMANTIC & MULTIMODAL INTERPRETATION DIRECTIVE:
 1. OBJECTIVE THEMATIC & CONCEPTUAL EVALUATION:
    - In LABEL-ONLY mode (where no separate description is provided), interpret the genuine thematic and conceptual scope of the topic label across Italian and any other languages present in the evidence.
    - The requested topic may be expressed semantically rather than through literal keyword overlap.
-   - Do NOT require the literal words of the topic title to appear verbatim: recognize valid synonyms, paraphrases, contextual equivalents, and domain-appropriate terminology when directly supported by the evidence.
-   - You may return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
-   - Crucially, do NOT confuse mere thematic proximity, incidental mentions, or background context with sufficient proof of the topic.
+   - If the evidence clearly describes the concept represented by the topic, return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
+   - Do NOT require the literal words of the topic title to appear verbatim if valid synonyms, paraphrases, or domain-appropriate equivalents are directly supported by the evidence.
+   - Do NOT return PRESENT unless there is concrete, direct evidence in the conversation text. Mere casual chat, greetings, or tangential background context are STRICTLY ABSENT.
 2. BALANCED FORENSIC TRI-STATE DISCIPLINE:
    - PRESENT: Return 'PRESENT' if and only if the forensic evidence contains clear, direct, and verifiable proof that the topic was actively discussed. Every 'PRESENT' decision MUST cite at least one specific, genuinely supporting evidence_id. PRESENT still requires at least one valid evidence_id.
-   - ABSENT: Return 'ABSENT' whenever the topic is not discussed, mentioned, or evidenced in the conversation. When decision is 'ABSENT', 'evidence_ids' MUST be an empty array [].
+   - ABSENT: Return 'ABSENT' whenever the topic is not directly discussed, mentioned, or evidenced in the conversation. When decision is 'ABSENT', 'evidence_ids' MUST be an empty array [].
    - UNCERTAIN: Return 'UNCERTAIN' if the evidence is fragmentary, ambiguous, tangential, or merely hints at related elements without providing solid proof. Do NOT force 'PRESENT' on ambiguous data.
    - Do NOT bias your judgment toward any verdict. Treat PRESENT, ABSENT, and UNCERTAIN with equal objectivity.
 3. STRICT EVIDENCE GROUNDING:
@@ -203,13 +203,20 @@ TASK: SPECIFIC TOPIC DETECTION (Version: {prompt_version})
 You must determine if the following topic is discussed or present in the forensic evidence:
 {topic_spec}
 
-OUTPUT RULES:
-1. Return decision 'PRESENT' if and only if the topic is clearly discussed or evidenced in the conversation.
-   You MUST cite at least one exact evidence_id in 'evidence_ids'.
-2. Return decision 'ABSENT' if the topic is NOT present in the conversation evidence. 'evidence_ids' MUST be an empty array [].
-3. Return decision 'UNCERTAIN' if the evidence is ambiguous, partial, fragmentary, or insufficient to decide. You may cite ambiguous evidence_ids.
+DECISION RULES:
+1. DEFAULT: If the target topic is NOT discussed in the conversation, return 'ABSENT' and 'evidence_ids': []. Do NOT make far-fetched connections.
+2. If the target topic is clearly discussed in the conversation, return 'PRESENT' and cite exact evidence aliases in 'evidence_ids'.
+3. If ambiguous or fragmentary, return 'UNCERTAIN'.
 {rule_4_cite}
-5. Provide a short, objective rationale explaining the decision in Italian. DO NOT provide lengthy chain-of-thought.
+- CRITICAL INVARIANT: You can NEVER output 'PRESENT' with an empty 'evidence_ids' list. If there is no specific evidence to cite, the decision MUST be 'ABSENT'.
+- Placeholders like '<Media omessi>' contain no textual content and MUST NEVER be cited or considered as evidence of any topic. Do NOT speculate about what omitted media might contain.
+- Provide a short, objective rationale in Italian explaining the decision (at least one sentence). DO NOT leave rationale empty.
+
+CONCRETE EXAMPLES:
+- If target is 'Mutui e acquisto casa' and text says 'Ci vediamo alle 18 per correre':
+  Output: {{"decision": "ABSENT", "evidence_ids": [], "rationale": "I messaggi parlano di corsa; non viene menzionato alcun mutuo o compravendita immobiliare."}}
+- If target is 'Sport e corsa' and text says 'Ci vediamo alle 18 per correre':
+  Output: {{"decision": "PRESENT", "evidence_ids": ["E001"], "rationale": "I partecipanti si accordano per andare a correre."}}
 """
             system_content += f"{OPERATIONAL_SEMANTIC_DIRECTIVE}\n"
         else:
@@ -222,11 +229,12 @@ DESCRIPTION: {topic.description}
 
 OUTPUT RULES:
 1. Return decision 'PRESENT' if and only if the topic is clearly discussed or evidenced in the conversation.
-   You MUST cite at least one exact evidence_id in 'evidence_ids'.
+    You MUST cite at least one exact evidence_id in 'evidence_ids'.
 2. Return decision 'ABSENT' if the topic is NOT present. 'evidence_ids' MUST be an empty array [].
+    Do NOT make far-fetched, speculative connections.
 3. Return decision 'UNCERTAIN' if the evidence is ambiguous, partial, or insufficient to decide. You may cite ambiguous evidence_ids.
 {rule_4_cite}
-5. Provide a short, objective rationale explaining the decision in Italian. DO NOT provide lengthy chain-of-thought.
+5. Provide a short, objective rationale explaining the decision in Italian (at least one sentence). DO NOT leave rationale empty.
 """
 
         if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
@@ -243,13 +251,22 @@ OUTPUT RULES:
             evidence_id_map=id_to_alias if use_aliases else None,
         )
 
+        user_message_content = (
+            f"{user_content}\n\n"
+            f"Based on the forensic evidence data above, evaluate whether '{topic.label}' is discussed.\n"
+            f"- If the conversation does not explicitly discuss '{topic.label}', return decision 'ABSENT' with 'evidence_ids': [].\n"
+            f"- Return 'PRESENT' ONLY if explicit written text discusses it.\n"
+            "- CRITICAL: Do NOT cite '<Media omessi>' or infer the topic from omitted media.\n"
+            "Provide 'rationale' in Italian. Return ONLY a valid JSON object matching the schema."
+        )
+
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_content},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": user_message_content},
         ]
 
         if is_operational and context_length > 0:
-            eff_out = max_tokens or 512
+            eff_out = min(max_tokens, 512) if max_tokens else 512
             plan = calculate_token_budget_plan(
                 context_length=context_length,
                 messages=messages,
@@ -265,6 +282,8 @@ OUTPUT RULES:
         # Retry loop per Detection operativa: fino a 2 tentativi con direttiva correttiva
         # per AiInvalidEvidenceCitationError (simmetrico a Discovery)
         max_attempts = 2 if is_operational else 1
+        current_schema = TOPIC_DETECTION_SCHEMA
+        current_schema_strict = True
         last_error: Exception | None = None
         response = None
         attempt_used = 0
@@ -276,15 +295,21 @@ OUTPUT RULES:
         for attempt in range(max_attempts):
             attempt_used = attempt
             try:
-                response = self.client.chat_completion(
-                    messages=messages,
-                    model_id=target_model,
-                    schema=TOPIC_DETECTION_SCHEMA,
-                    temperature=temperature,
-                    seed=seed,
-                    timeout_seconds=timeout_seconds,
-                    max_tokens=max_tokens,
-                )
+                call_kwargs = {
+                    "messages": messages,
+                    "model_id": target_model,
+                    "schema": current_schema,
+                    "temperature": temperature,
+                    "seed": seed,
+                    "timeout_seconds": timeout_seconds,
+                    "max_tokens": min(max_tokens, 512) if max_tokens else 512,
+                }
+                if hasattr(self.client, "chat_completion"):
+                    import inspect
+                    sig = inspect.signature(self.client.chat_completion)
+                    if "schema_strict" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                        call_kwargs["schema_strict"] = current_schema_strict
+                response = self.client.chat_completion(**call_kwargs)
                 if response:
                     if getattr(response, "prompt_tokens", None) is not None:
                         cum_prompt_tokens = (cum_prompt_tokens or 0) + response.prompt_tokens
@@ -313,11 +338,34 @@ OUTPUT RULES:
                     valid_evidence_ids=valid_evidence_ids,
                     alias_map=alias_to_id if use_aliases else None,
                 )
+
+                if is_operational and decision == TopicDecision.PRESENT:
+                    cited_secs = [s for s in document.all_evidence_sections if s.evidence_id in evidence_ids]
+                    has_substantive_text = any(
+                        s.text and s.text.strip() not in ("<Media omessi>", "<media omessi>", "<audio omesso>")
+                        for s in cited_secs
+                    )
+                    if not has_substantive_text:
+                        raise AiInvalidEvidenceCitationError(
+                            "Le evidenze citate consistono esclusivamente in placeholder di media omessi privi di testo (<Media omessi>). "
+                            "I placeholder multimediali omessi non possono costituire prova di un topic. "
+                            "Se non vi è discussione testuale esplicita, la decisione deve essere ABSENT con evidence_ids vuota.",
+                            invalid_evidence_ids=tuple(evidence_ids),
+                        )
+
                 last_error = None
                 break
 
             except Exception as exc:
                 last_error = exc
+                if response is not None and getattr(response, "raw_response", None) and isinstance(response.raw_response, Mapping):
+                    if not getattr(exc, "finish_reason", None):
+                        setattr(exc, "finish_reason", response.raw_response.get("finish_reason"))
+                if getattr(response, "prompt_tokens", None) is not None and not getattr(exc, "prompt_tokens", None):
+                    setattr(exc, "prompt_tokens", response.prompt_tokens)
+                if getattr(response, "completion_tokens", None) is not None and not getattr(exc, "completion_tokens", None):
+                    setattr(exc, "completion_tokens", response.completion_tokens)
+
                 if attempt + 1 >= max_attempts or not is_operational:
                     try:
                         setattr(exc, "attempts", attempt_used + 1)
@@ -339,8 +387,25 @@ OUTPUT RULES:
                     # CONTEXT_OVERFLOW non può essere risolto nel singolo chunk senza suddivisione (demandata al service)
                     if cat == "CONTEXT_OVERFLOW":
                         raise
-                    # HTTP 400 permanente (parametri non validi o schema rifiutato) o qualsiasi 4xx non-429 fallisce chiuso
-                    if code and 400 <= code < 500 and code != 429:
+                    if cat == "INFERENCE_BACKEND_ERROR":
+                        # GBNF crash fallback: su retry aggiriamo il parser GBNF C++ di llama.cpp
+                        # usando una direttiva esplicita di formato JSON validata rigorosamente lato Python
+                        current_schema = None
+                        orig_u = messages[1].get("content", "") if len(messages) > 1 else ""
+                        messages = [
+                            messages[0],
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"{orig_u}\n\n"
+                                    "[CRITICAL FORMAT DIRECTIVE - LM STUDIO COMPATIBILITY]\n"
+                                    "Output ONLY a valid JSON object starting with { and ending with } conforming to schema:\n"
+                                    '{"decision": "PRESENT"|"ABSENT"|"UNCERTAIN", "evidence_ids": ["alias"], "rationale": "string"}\n'
+                                    "Do NOT output markdown fences, greetings, or text outside the JSON object."
+                                ),
+                            },
+                        ]
+                    elif code and 400 <= code < 500 and code != 429:
                         raise
                     if cat in ("HTTP_INVALID_PARAMETERS", "INVALID_PARAMETERS", "HTTP_SCHEMA_REJECTED", "UNSUPPORTED_SCHEMA"):
                         raise
@@ -363,70 +428,60 @@ OUTPUT RULES:
                     continue
 
                 if isinstance(exc, AiInvalidEvidenceCitationError):
-                    invalid_list = getattr(exc, "invalid_evidence_ids", ())
-                    invalid_str = ", ".join(f"'{x}'" for x in invalid_list) if invalid_list else "non conformi"
-                    if use_aliases:
-                        valid_keys = sorted(alias_to_id.keys()) if alias_to_id else []
-                        valid_all = ", ".join(f"'{k}'" for k in valid_keys)
+                    if "placeholder" in str(exc).lower() or "<media omessi>" in str(exc).lower():
                         correction_msg = (
-                            f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
-                            f"Strict forensic requirement: You MUST cite ONLY exact alias identifiers assigned to the evidence block of THIS specific chunk. "
-                            f"Available valid aliases in this chunk ({len(valid_keys)} total): [{valid_all}]. "
-                            "All listed aliases are valid. Do NOT invent IDs, do NOT cite numbers not in this block, do NOT use IDs from other conversations. "
+                            f"CORRECTION DIRECTIVE: {str(exc)} "
+                            "Strict forensic requirement: Omitted media placeholders contain NO text and CANNOT be used as proof of any topic. "
+                            "If the conversation does not explicitly discuss the topic in written text, decision MUST be 'ABSENT' with 'evidence_ids': []. "
                             "Re-evaluate and return the corrected JSON matching the schema."
                         )
                     else:
-                        valid_keys = sorted(valid_evidence_ids)
-                        valid_all = ", ".join(f"'{k}'" for k in valid_keys)
-                        correction_msg = (
-                            f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
-                            f"Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in this chunk. "
-                            f"Available valid evidence IDs in this chunk ({len(valid_keys)} total): [{valid_all}]. "
-                            "All listed evidence IDs are valid. Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
-                            "Re-evaluate and return the corrected JSON matching the schema."
-                        )
+                        invalid_list = getattr(exc, "invalid_evidence_ids", ())
+                        invalid_str = ", ".join(f"'{x}'" for x in invalid_list) if invalid_list else "non conformi"
+                        if use_aliases:
+                            valid_keys = sorted(alias_to_id.keys()) if alias_to_id else []
+                            valid_all = ", ".join(f"'{k}'" for k in valid_keys)
+                            correction_msg = (
+                                f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
+                                f"Strict forensic requirement: You MUST cite ONLY exact alias identifiers assigned to the evidence block of THIS specific chunk. "
+                                f"Available valid aliases in this chunk ({len(valid_keys)} total): [{valid_all}]. "
+                                "All listed aliases are valid. Do NOT invent IDs, do NOT cite numbers not in this block, do NOT use IDs from other conversations. "
+                                "Re-evaluate and return the corrected JSON matching the schema."
+                            )
+                        else:
+                            valid_keys = sorted(valid_evidence_ids)
+                            valid_all = ", ".join(f"'{k}'" for k in valid_keys)
+                            correction_msg = (
+                                f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
+                                f"Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in this chunk. "
+                                f"Available valid evidence IDs in this chunk ({len(valid_keys)} total): [{valid_all}]. "
+                                "All listed evidence IDs are valid. Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
+                                "Re-evaluate and return the corrected JSON matching the schema."
+                            )
 
-                    # Candidato A: Retry contestuale con cronologia assistente
-                    candidate_msgs: list[dict[str, str]] = list(messages)
-                    if response and getattr(response, "content", None):
-                        candidate_msgs.append({"role": "assistant", "content": response.content})
-                    candidate_msgs.append({"role": "user", "content": correction_msg})
-
-                    # Ricalcolo preventivo del budget token input
-                    reserved_out = max_tokens or 512
-                    cand_plan = calculate_token_budget_plan(
+                    orig_user_content = messages[1].get("content", "") if len(messages) > 1 else ""
+                    compact_msgs: list[dict[str, str]] = [
+                        messages[0],
+                        {
+                            "role": "user",
+                            "content": f"{orig_user_content}\n\n[DIRETTIVA CORRETTIVA DI PRECISIONE FORENSE]\n{correction_msg}",
+                        },
+                    ]
+                    reserved_out = min(max_tokens or 384, 512)
+                    compact_plan = calculate_token_budget_plan(
                         context_length=context_length,
-                        messages=candidate_msgs,
+                        messages=compact_msgs,
                         reserved_output_tokens=reserved_out,
                         schema=TOPIC_DETECTION_SCHEMA,
                     )
-
-                    if cand_plan.fits_in_context and cand_plan.available_headroom >= 256:
-                        messages = candidate_msgs
+                    if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
+                        messages = compact_msgs
                     else:
-                        # Candidato B: Strategia compatta (single-turn) per prevenire context overflow
-                        orig_user_content = messages[1].get("content", "") if len(messages) > 1 else ""
-                        compact_msgs: list[dict[str, str]] = [
-                            messages[0],
-                            {
-                                "role": "user",
-                                "content": f"{orig_user_content}\n\n[DIRETTIVA CORRETTIVA DI PRECISIONE FORENSE]\n{correction_msg}",
-                            },
-                        ]
-                        compact_plan = calculate_token_budget_plan(
-                            context_length=context_length,
-                            messages=compact_msgs,
-                            reserved_output_tokens=reserved_out,
-                            schema=TOPIC_DETECTION_SCHEMA,
+                        raise AnalysisInputTooLargeError(
+                            f"Impossibile eseguire il retry correttivo per citazioni in Topic Detection: "
+                            f"il prompt richiede {compact_plan.estimated_input_tokens} token "
+                            f"su context_length di {context_length}."
                         )
-                        if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
-                            messages = compact_msgs
-                        else:
-                            raise AnalysisInputTooLargeError(
-                                f"Impossibile eseguire il retry correttivo per citazioni in Topic Detection: "
-                                f"il prompt richiede {compact_plan.estimated_input_tokens} token "
-                                f"su context_length di {context_length}."
-                            )
 
                     if on_retry_callback:
                         try:
@@ -437,47 +492,35 @@ OUTPUT RULES:
 
                 if isinstance(exc, AiStructuredOutputError):
                     struct_msg = (
-                        "CORRECTION DIRECTIVE: Your previous output was not valid JSON conforming to the schema. "
-                        "Please provide ONLY valid JSON with keys 'decision', 'evidence_ids', and 'rationale'."
+                        f"CORRECTION DIRECTIVE: {str(exc)}. "
+                        "Strict forensic requirement: If the topic is not directly discussed or evidenced in the conversation, "
+                        "decision MUST be 'ABSENT' with 'evidence_ids': []. "
+                        "If decision is 'PRESENT', you MUST cite at least one valid evidence alias ID in 'evidence_ids'. "
+                        "Provide a concise rationale in Italian and return ONLY valid JSON matching the schema."
                     )
-                    candidate_msgs = list(messages)
-                    if response and getattr(response, "content", None):
-                        candidate_msgs.append({"role": "assistant", "content": response.content})
-                    candidate_msgs.append({"role": "user", "content": struct_msg})
-
-                    reserved_out = max_tokens or 512
-                    cand_plan = calculate_token_budget_plan(
+                    orig_user_content = messages[1].get("content", "") if len(messages) > 1 else ""
+                    compact_msgs = [
+                        messages[0],
+                        {
+                            "role": "user",
+                            "content": f"{orig_user_content}\n\n[DIRETTIVA FORMATO JSON]\n{struct_msg}",
+                        },
+                    ]
+                    reserved_out = min(max_tokens or 384, 512)
+                    compact_plan = calculate_token_budget_plan(
                         context_length=context_length,
-                        messages=candidate_msgs,
+                        messages=compact_msgs,
                         reserved_output_tokens=reserved_out,
                         schema=TOPIC_DETECTION_SCHEMA,
                     )
-
-                    if cand_plan.fits_in_context and cand_plan.available_headroom >= 256:
-                        messages = candidate_msgs
+                    if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
+                        messages = compact_msgs
                     else:
-                        orig_user_content = messages[1].get("content", "") if len(messages) > 1 else ""
-                        compact_msgs = [
-                            messages[0],
-                            {
-                                "role": "user",
-                                "content": f"{orig_user_content}\n\n[DIRETTIVA FORMATO JSON]\n{struct_msg}",
-                            },
-                        ]
-                        compact_plan = calculate_token_budget_plan(
-                            context_length=context_length,
-                            messages=compact_msgs,
-                            reserved_output_tokens=reserved_out,
-                            schema=TOPIC_DETECTION_SCHEMA,
+                        raise AnalysisInputTooLargeError(
+                            f"Impossibile eseguire il retry per JSON malformato in Topic Detection: "
+                            f"il prompt richiede {compact_plan.estimated_input_tokens} token "
+                            f"su context_length di {context_length}."
                         )
-                        if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
-                            messages = compact_msgs
-                        else:
-                            raise AnalysisInputTooLargeError(
-                                f"Impossibile eseguire il retry per JSON malformato in Topic Detection: "
-                                f"il prompt richiede {compact_plan.estimated_input_tokens} token "
-                                f"su context_length di {context_length}."
-                            )
 
                     if on_retry_callback:
                         try:
@@ -615,7 +658,8 @@ class TopicDiscoveryAnalyzer:
             sp = f"""{SYSTEM_SECURITY_DIRECTIVE}
 TASK: OPEN TOPIC DISCOVERY (Version: {prompt_version})
 Analyze the forensic conversation evidence and discover the main topics or subjects discussed.
-Find up to {num_topics} distinct topics.
+Find up to {num_topics} distinct topics. If fewer topics genuinely exist in the text, return ONLY those topics.
+DO NOT invent, fabricate, or hallucinate extra topics when no more distinct subjects exist in the text.
 
 ETHICAL FORENSIC CONSTRAINTS:
 - DO NOT infer personal identities, real names, or demographic profiles.
@@ -644,9 +688,15 @@ OUTPUT RULES:
             evidence_id_map=id_to_alias if use_aliases else None,
         )
 
+        user_message_content = (
+            f"{user_content}\n\n"
+            f"Based on the forensic evidence data above, discover up to {current_topics} main distinct topics discussed in this conversation.\n"
+            "Return ONLY a valid JSON object matching the schema."
+        )
+
         messages = [
             {"role": "system", "content": _make_sys_prompt(current_topics)},
-            {"role": "user", "content": user_content},
+            {"role": "user", "content": user_message_content},
         ]
 
         # Stima preventiva input tokens e verifica budget rispetto a context_length
@@ -659,7 +709,7 @@ OUTPUT RULES:
                 schema=TOPIC_DISCOVERY_SCHEMA,
             )
             if not plan.fits_in_context:
-                if plan.available_headroom < 256:
+                if plan.available_headroom < 128:
                     raise AnalysisInputTooLargeError(
                         f"Il chunk di Topic Discovery è troppo esteso per la finestra di contesto "
                         f"(stima input: {plan.estimated_input_tokens} token su {context_length} disponibili). "
@@ -669,6 +719,8 @@ OUTPUT RULES:
 
         max_attempts = 2 if is_op else 1
         current_max_tokens = max_tokens
+        current_schema = TOPIC_DISCOVERY_SCHEMA
+        current_schema_strict = True
         last_error: Exception | None = None
         response = None
         attempt_used = 0
@@ -681,15 +733,21 @@ OUTPUT RULES:
         for attempt in range(max_attempts):
             attempt_used = attempt
             try:
-                response = self.client.chat_completion(
-                    messages=messages,
-                    model_id=target_model,
-                    schema=TOPIC_DISCOVERY_SCHEMA,
-                    temperature=temperature,
-                    seed=seed,
-                    timeout_seconds=timeout_seconds,
-                    max_tokens=current_max_tokens,
-                )
+                call_kwargs = {
+                    "messages": messages,
+                    "model_id": target_model,
+                    "schema": current_schema,
+                    "temperature": temperature,
+                    "seed": seed,
+                    "timeout_seconds": timeout_seconds,
+                    "max_tokens": current_max_tokens,
+                }
+                if hasattr(self.client, "chat_completion"):
+                    import inspect
+                    sig = inspect.signature(self.client.chat_completion)
+                    if "schema_strict" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
+                        call_kwargs["schema_strict"] = current_schema_strict
+                response = self.client.chat_completion(**call_kwargs)
                 if response:
                     if getattr(response, "prompt_tokens", None) is not None:
                         cum_prompt_tokens = (cum_prompt_tokens or 0) + response.prompt_tokens
@@ -733,6 +791,14 @@ OUTPUT RULES:
 
             except Exception as exc:
                 last_error = exc
+                if response is not None and getattr(response, "raw_response", None) and isinstance(response.raw_response, Mapping):
+                    if not getattr(exc, "finish_reason", None):
+                        setattr(exc, "finish_reason", response.raw_response.get("finish_reason"))
+                if getattr(response, "prompt_tokens", None) is not None and not getattr(exc, "prompt_tokens", None):
+                    setattr(exc, "prompt_tokens", response.prompt_tokens)
+                if getattr(response, "completion_tokens", None) is not None and not getattr(exc, "completion_tokens", None):
+                    setattr(exc, "completion_tokens", response.completion_tokens)
+
                 if attempt + 1 >= max_attempts or not is_op:
                     try:
                         setattr(exc, "attempts", attempt_used + 1)
@@ -753,7 +819,25 @@ OUTPUT RULES:
                     code = getattr(exc, "status_code", None)
                     if cat == "CONTEXT_OVERFLOW":
                         raise
-                    if code and 400 <= code < 500 and code != 429:
+                    if cat == "INFERENCE_BACKEND_ERROR":
+                        # GBNF crash fallback: su retry aggiriamo il parser GBNF C++ di llama.cpp
+                        # usando una direttiva esplicita di formato JSON validata rigorosamente lato Python
+                        current_schema = None
+                        orig_u = messages[1].get("content", "") if len(messages) > 1 else ""
+                        messages = [
+                            messages[0],
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"{orig_u}\n\n"
+                                    "[CRITICAL FORMAT DIRECTIVE - LM STUDIO COMPATIBILITY]\n"
+                                    "Output ONLY a valid JSON object starting with { and ending with } conforming to schema:\n"
+                                    '{"topics": [{"label": "string", "short_description": "string", "evidence_ids": ["alias"]}]}\n'
+                                    "Do NOT output markdown fences, greetings, or text outside the JSON object."
+                                ),
+                            },
+                        ]
+                    elif code and 400 <= code < 500 and code != 429:
                         raise
                     if cat in ("HTTP_INVALID_PARAMETERS", "INVALID_PARAMETERS", "HTTP_SCHEMA_REJECTED", "UNSUPPORTED_SCHEMA"):
                         raise
@@ -853,7 +937,8 @@ OUTPUT RULES:
 
                 if isinstance(exc, AiStructuredOutputError):
                     err_msg = str(exc)
-                    if finish_reason == "length" or "Unterminated string" in err_msg or "JSONDecodeError" in err_msg:
+                    obs_f = getattr(exc, "finish_reason", None) or finish_reason
+                    if obs_f == "length" or "Unterminated string" in err_msg or "JSONDecodeError" in err_msg or "finish_reason=length" in err_msg:
                         headroom = max(0, context_length - input_est - DEFAULT_SAFETY_MARGIN_TOKENS)
                         if headroom > (current_max_tokens or 1024):
                             current_max_tokens = min(int((current_max_tokens or 1024) * 1.5), headroom)
