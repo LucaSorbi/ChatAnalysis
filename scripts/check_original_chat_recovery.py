@@ -8,11 +8,12 @@ from analysis.service import LocalTopicAnalysisService
 from ai.lmstudio import LmStudioClient
 from analysis.checkpoint import compute_document_fingerprint, compute_run_config_hash
 
-zip_path = r'C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip'
+from scripts.export_discovery_26of26 import resolve_input_archive_path
+zip_path = resolve_input_archive_path()
 with open(zip_path, 'rb') as f:
     data = f.read()
 
-req = IngestionRequest(source_format=SourceFormat.WHATSAPP_EXPORT, filename='Chat WhatsApp con Gre.zip', file_bytes=data)
+req = IngestionRequest(source_format=SourceFormat.WHATSAPP_EXPORT, filename=zip_path.name, file_bytes=data)
 res = ingest_file_payload(req)
 doc = res.documents[res.summary.selected_document_id]
 

@@ -4,10 +4,11 @@ from ui.models import IngestionRequest, SourceFormat
 from ui.ingestion import ingest_file_payload
 from analysis.checkpoint import compute_document_fingerprint
 
-p = Path(r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip")
+from scripts.export_discovery_26of26 import resolve_input_archive_path
+p = resolve_input_archive_path()
 if p.exists():
     data = p.read_bytes()
-    print(f"File: {p}")
+    print(f"File: {p.name}")
     print(f"Size: {len(data)} bytes")
     req = IngestionRequest(
         file_bytes=data,

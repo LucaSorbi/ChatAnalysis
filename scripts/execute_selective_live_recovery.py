@@ -41,18 +41,15 @@ def main():
     model_id = "qwen2.5-7b-instruct"
     print(f"[PREFLIGHT] Backend LM Studio online. Modello target: {model_id}")
 
-    # 2. Ingestion riservata del file originale
-    zip_path = r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip"
-    if not os.path.exists(zip_path):
-        print(f"[ERRORE FATALE] File sorgente non trovato: {zip_path}")
-        sys.exit(1)
+    from scripts.export_discovery_26of26 import resolve_input_archive_path
+    zip_path = resolve_input_archive_path()
 
     with open(zip_path, "rb") as f:
         raw_data = f.read()
 
     req = IngestionRequest(
         source_format=SourceFormat.WHATSAPP_EXPORT,
-        filename="Chat WhatsApp con Gre.zip",
+        filename=zip_path.name,
         file_bytes=raw_data,
     )
     ingest_res = ingest_file_payload(req)

@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<DumpFile type='UFDR' version='2.0'>
+  <InstantMessages>
+    <Message id='42'>
+      <Timestamp>2024-04-23T20:30:15+00:00</Timestamp>
+      <Sender>+390001</Sender>
+      <Body>Hello</Body>
+      <Deleted>false</Deleted>
+    </Message>
+  </InstantMessages>
+</DumpFile>

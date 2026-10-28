@@ -284,6 +284,8 @@ ALLOWED_ORIGINS = {
     "SYNTHETIC_REFERENCE",
     "NOT_RECORDED",
     "OFFLINE_PLAYBACK",
+    "RECONSTRUCTED_UNVERIFIED",
+    "HISTORICAL_RECONSTRUCTED",
 }
 
 ALLOWED_LOADING_MODES = {
@@ -321,6 +323,7 @@ ALLOWED_VALIDATION_STATUSES = {
     "NOT_VERIFIED",
     "UNVERIFIED",
     "NOT_APPLIED",
+    "PROVENANCE_NOT_VERIFIED",
 }
 
 ALLOWED_CHUNK_STATUSES = {
@@ -331,6 +334,7 @@ ALLOWED_CHUNK_STATUSES = {
     "UNATTEMPTED",
     "TIMEOUT",
     "CANCELLED",
+    "RECONSTRUCTED_UNVERIFIED",
 }
 
 ALLOWED_AGGREGATION_STATUSES = {
@@ -948,8 +952,129 @@ def _normalize_chunks_diagnostics(
 
 
 # ---------------------------------------------------------------------------
+# Validazione Forense Provenienza Live (Fail-Closed)
+# ---------------------------------------------------------------------------
+
+def _validate_live_inference_provenance(
+    *,
+    raw_run_id: str | None,
+    authoritative_live_run_ids: Sequence[str] | set[str] | None,
+    origin_val: str | None,
+    meta: dict[str, Any],
+    document: ConversationEvidenceDocument | None,
+    provenance_doc_id: str | None,
+    eff_model: str | None,
+    raw_diag: list[dict[str, Any]] | None,
+    completed_chunks: int | None,
+    is_mock: bool,
+    is_reconstructed_or_unverified: bool,
+    has_substantive_result: bool = True,
+) -> tuple[bool, str | None]:
+    """
+    Verifica forense fail-closed per l'attestazione LIVE_AUTHORITATIVE.
+    Non è possibile ottenere LIVE_AUTHORITATIVE quando provenance_verified manca, è None oppure è False.
+    L'elenco authoritative_live_run_ids non è sufficiente da solo: richiede riscontri verificabili
+    collegati a run ID, documento, modello, configurazione e risposte realmente registrate.
+    """
+    # 1. provenance_verified DEVE essere esplicitamente booleano True (non mancante, non None, non False)
+    if "provenance_verified" not in meta:
+        return False, "provenance_verified_missing"
+    if meta.get("provenance_verified") is not True:
+        return False, "provenance_verified_not_true"
+
+    # 2. Esclusioni categoriche su mock o provenienza ricostruita/non verificata
+    if is_mock or origin_val != AnalysisOrigin.LIVE_LM_STUDIO.value or is_reconstructed_or_unverified:
+        return False, "origin_not_live_lm_studio_or_reconstructed"
+
+    # 3. Riscontro verificabile Run ID
+    if not raw_run_id or not str(raw_run_id).strip():
+        return False, "empty_run_id"
+    clean_run_id = str(raw_run_id).strip()
+    if clean_run_id.upper() in ("NOT_RECORDED", "UNKNOWN", "MOCK", "NONE"):
+        return False, "placeholder_run_id"
+    if authoritative_live_run_ids is None or clean_run_id not in authoritative_live_run_ids:
+        return False, "run_id_not_in_authoritative_set"
+
+    # 4. Riscontro verificabile Documento
+    if document is None:
+        return False, "missing_document_reference"
+    doc_id = getattr(document, "document_id", None)
+    if not doc_id:
+        return False, "document_missing_id"
+    if provenance_doc_id and provenance_doc_id != doc_id:
+        return False, f"provenance_doc_id_mismatch ({provenance_doc_id} != {doc_id})"
+    meta_doc_id = meta.get("document_id")
+    if meta_doc_id and meta_doc_id != doc_id:
+        return False, f"meta_document_id_mismatch ({meta_doc_id} != {doc_id})"
+    meta_doc_fp = meta.get("document_fingerprint")
+    doc_fp = getattr(document, "fingerprint", None)
+    if meta_doc_fp and doc_fp and meta_doc_fp != doc_fp:
+        return False, "document_fingerprint_mismatch"
+
+    # 5. Riscontro verificabile Modello
+    raw_m = str(meta.get("model") or meta.get("requested_model") or eff_model or "").strip()
+    if not raw_m or raw_m.upper() in ("UNKNOWN", "NOT_RECORDED", "NONE", "FAKE-MODEL", "MOCK-MODEL"):
+        return False, "invalid_or_unknown_model"
+    raw_m_lower = raw_m.lower()
+    if "mock" in raw_m_lower or "fake" in raw_m_lower:
+        return False, "mock_or_fake_model_name"
+    if raw_m_lower not in SUPPORTED_OPERATIONAL_MODELS and not any(raw_m_lower.startswith(p) for p in ("qwen", "llama", "mistral", "deepseek")):
+        return False, "unsupported_live_operational_model"
+    if eff_model and str(eff_model).startswith("mod_"):
+        # Se eff_model è stato pseudonomizzato perché non in allowlist, rifiutare
+        if raw_m_lower not in SUPPORTED_OPERATIONAL_MODELS:
+            return False, "redacted_unsupported_model"
+
+    # 6. Riscontro verificabile Configurazione
+    has_cfg_fp = bool(meta.get("config_fingerprint"))
+    has_cfg_params = any(
+        meta.get(k) is not None for k in ("prompt_version", "temperature", "max_tokens", "seed", "profile")
+    )
+    if not (has_cfg_fp or has_cfg_params):
+        return False, "missing_verifiable_configuration"
+
+    # 7. Riscontro verificabile Risposte realmente registrate
+    has_diag_records = False
+    if raw_diag and len(raw_diag) > 0:
+        for d in raw_diag:
+            if isinstance(d, dict):
+                if d.get("status") in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
+                    has_diag_records = True
+                    break
+                if d.get("http_status") is not None or d.get("finish_reason") is not None:
+                    has_diag_records = True
+                    break
+                if (d.get("prompt_tokens") or 0) > 0 or (d.get("completion_tokens") or 0) > 0:
+                    has_diag_records = True
+                    break
+
+    has_completed_chunk_counters = (
+        completed_chunks is not None and completed_chunks > 0 and (
+            meta.get("latency_seconds") is not None
+            or meta.get("total_evidence_count") is not None
+            or has_substantive_result
+        )
+    )
+
+    has_single_chunk_telemetry = (
+        meta.get("latency_seconds") is not None
+        or meta.get("completion_tokens") is not None
+        or meta.get("prompt_tokens") is not None
+        or meta.get("http_status") is not None
+        or meta.get("finish_reason") is not None
+        or (has_substantive_result and (meta.get("decision") is not None or meta.get("topics") is not None or meta.get("status") == "SUCCESS"))
+    )
+
+    if not (has_diag_records or has_completed_chunk_counters or has_single_chunk_telemetry):
+        return False, "no_verifiable_recorded_responses"
+
+    return True, None
+
+
+# ---------------------------------------------------------------------------
 # Costruttore Rapporto: Topic Detection
 # ---------------------------------------------------------------------------
+
 
 def build_topic_detection_export_report(
     detection_result: TopicDetectionResult,
@@ -1121,7 +1246,7 @@ def build_topic_detection_export_report(
 
     if raw_att:
         att_str = str(raw_att).strip().upper()
-        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED", "REPORTED_LIVE") else "UNATTESTED"
+        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED", "REPORTED_LIVE", "PROVENANCE_NOT_VERIFIED") else "UNATTESTED"
     elif (
         meta.get("authoritative_execution_certified") is True
         or meta.get("server_provenance_verified") is True
@@ -1130,21 +1255,44 @@ def build_topic_detection_export_report(
         reported_attestation = "REPORTED_LIVE"
     elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
         reported_attestation = "REPORTED_LIVE"
+    elif origin_val in (AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value, AnalysisOrigin.HISTORICAL_RECONSTRUCTED.value):
+        reported_attestation = "PROVENANCE_NOT_VERIFIED"
     else:
         reported_attestation = None
 
     # Autenticazione autoritativa verificata: FAIL-CLOSED
-    # Solo una fonte autoritativa esterna (authoritative_live_run_ids) che conferma il raw_run_id originale può promuovere a LIVE_AUTHORITATIVE.
-    # I soli flag auto-dichiarati nei metadati (authoritative_execution_certified, ecc.) NON possono promuovere a LIVE_AUTHORITATIVE.
-    is_authoritative_live = False
-    if authoritative_live_run_ids is not None and raw_run_id and not is_mock:
-        if raw_run_id in authoritative_live_run_ids:
-            is_authoritative_live = True
+    # Non è possibile ottenere LIVE_AUTHORITATIVE quando provenance_verified manca, è None oppure è False.
+    # L'elenco authoritative_live_run_ids non è sufficiente da solo per dichiarare un'inferenza autentica:
+    # richiede riscontri verificabili collegati a run ID, documento, modello, configurazione e risposte realmente registrate.
+    is_reconstructed_or_unverified = (
+        origin_val in (AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value, AnalysisOrigin.HISTORICAL_RECONSTRUCTED.value)
+        or raw_att == AttestationLevel.PROVENANCE_NOT_VERIFIED.value
+        or meta.get("provenance_verified") is False
+    )
+
+    is_authoritative_live, _prov_reason = _validate_live_inference_provenance(
+        raw_run_id=raw_run_id,
+        authoritative_live_run_ids=authoritative_live_run_ids,
+        origin_val=origin_val,
+        meta=meta,
+        document=document,
+        provenance_doc_id=detection_result.provenance_document_id,
+        eff_model=eff_model,
+        raw_diag=raw_diag,
+        completed_chunks=completed_chunks,
+        is_mock=is_mock,
+        is_reconstructed_or_unverified=is_reconstructed_or_unverified,
+        has_substantive_result=bool(detection_result.decision is not None or detection_result.evidence_ids),
+    )
 
     if is_mock:
         verified_attestation = AttestationLevel.MOCK_VERIFIED.value
+    elif is_reconstructed_or_unverified:
+        verified_attestation = AttestationLevel.PROVENANCE_NOT_VERIFIED.value
     elif is_authoritative_live and origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
         verified_attestation = AttestationLevel.LIVE_AUTHORITATIVE.value
+    elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
+        verified_attestation = AttestationLevel.UNATTESTED.value
     else:
         verified_attestation = AttestationLevel.UNATTESTED.value
 
@@ -1534,7 +1682,7 @@ def build_topic_discovery_export_report(
 
     if raw_att:
         att_str = str(raw_att).strip().upper()
-        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED", "REPORTED_LIVE") else "UNATTESTED"
+        reported_attestation = att_str if att_str in ("LIVE_AUTHORITATIVE", "MOCK_VERIFIED", "UNATTESTED", "REPORTED_LIVE", "PROVENANCE_NOT_VERIFIED") else "UNATTESTED"
     elif (
         meta.get("authoritative_execution_certified") is True
         or meta.get("server_provenance_verified") is True
@@ -1543,21 +1691,44 @@ def build_topic_discovery_export_report(
         reported_attestation = "REPORTED_LIVE"
     elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
         reported_attestation = "REPORTED_LIVE"
+    elif origin_val in (AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value, AnalysisOrigin.HISTORICAL_RECONSTRUCTED.value):
+        reported_attestation = "PROVENANCE_NOT_VERIFIED"
     else:
         reported_attestation = None
 
     # Autenticazione autoritativa verificata: FAIL-CLOSED
-    # Solo una fonte autoritativa esterna (authoritative_live_run_ids) che conferma il raw_run_id originale può promuovere a LIVE_AUTHORITATIVE.
-    # I soli flag auto-dichiarati nei metadati (authoritative_execution_certified, ecc.) NON possono promuovere a LIVE_AUTHORITATIVE.
-    is_authoritative_live = False
-    if authoritative_live_run_ids is not None and raw_run_id and not is_mock:
-        if raw_run_id in authoritative_live_run_ids:
-            is_authoritative_live = True
+    # Non è possibile ottenere LIVE_AUTHORITATIVE quando provenance_verified manca, è None oppure è False.
+    # L'elenco authoritative_live_run_ids non è sufficiente da solo per dichiarare un'inferenza autentica:
+    # richiede riscontri verificabili collegati a run ID, documento, modello, configurazione e risposte realmente registrate.
+    is_reconstructed_or_unverified = (
+        origin_val in (AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value, AnalysisOrigin.HISTORICAL_RECONSTRUCTED.value)
+        or raw_att == AttestationLevel.PROVENANCE_NOT_VERIFIED.value
+        or meta.get("provenance_verified") is False
+    )
+
+    is_authoritative_live, _prov_reason = _validate_live_inference_provenance(
+        raw_run_id=raw_run_id,
+        authoritative_live_run_ids=authoritative_live_run_ids,
+        origin_val=origin_val,
+        meta=meta,
+        document=document,
+        provenance_doc_id=discovery_result.provenance_document_id,
+        eff_model=eff_model,
+        raw_diag=raw_diag,
+        completed_chunks=completed_chunks,
+        is_mock=is_mock,
+        is_reconstructed_or_unverified=is_reconstructed_or_unverified,
+        has_substantive_result=bool(discovery_result.topics),
+    )
 
     if is_mock:
         verified_attestation = AttestationLevel.MOCK_VERIFIED.value
+    elif is_reconstructed_or_unverified:
+        verified_attestation = AttestationLevel.PROVENANCE_NOT_VERIFIED.value
     elif is_authoritative_live and origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
         verified_attestation = AttestationLevel.LIVE_AUTHORITATIVE.value
+    elif origin_val == AnalysisOrigin.LIVE_LM_STUDIO.value:
+        verified_attestation = AttestationLevel.UNATTESTED.value
     else:
         verified_attestation = AttestationLevel.UNATTESTED.value
 

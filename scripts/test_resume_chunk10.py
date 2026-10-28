@@ -26,8 +26,8 @@ def progress_callback(event: AnalysisProgressEvent):
     sys.stdout.flush()
 
 def main():
-    print("=== TESTING RESUME FROM SQLITE CHECKPOINTS ===")
-    zip_path = Path(r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip")
+    from scripts.export_discovery_26of26 import resolve_input_archive_path
+    zip_path = resolve_input_archive_path()
     req = IngestionRequest(
         file_bytes=zip_path.read_bytes(),
         filename=zip_path.name,

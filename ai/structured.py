@@ -50,12 +50,10 @@ TOPIC_DETECTION_SCHEMA: dict[str, Any] = {
         "evidence_ids": {
             "type": "array",
             "items": {"type": "string"},
-            "maxItems": 15,
-            "description": "Elenco degli identificativi esatti delle evidenze che motivano la decisione.",
+            "description": "Elenco degli identificativi esatti delle evidenze solo se PRESENT (lista vuota [] se ABSENT).",
         },
         "rationale": {
             "type": "string",
-            "minLength": 1,
             "description": "Spiegazione sintetica ed oggettiva del risultato (non chain-of-thought prolisso).",
         },
     },
@@ -82,7 +80,6 @@ TOPIC_DISCOVERY_SCHEMA: dict[str, Any] = {
                     "evidence_ids": {
                         "type": "array",
                         "items": {"type": "string"},
-                        "maxItems": 15,
                         "description": "Evidenze che supportano l'argomento (almeno una richiesta).",
                     },
                 },
@@ -123,11 +120,46 @@ TRANSLATION_SCHEMA: dict[str, Any] = {
 }
 
 
+def detect_degenerate_repetition(text: str, threshold: int = 15) -> str | None:
+    """
+    Rileva anomalie di degenerazione ciclica o loop di attrattore nei modelli LLM:
+    - Ripetizione consecutiva dello stesso carattere >= threshold (es. 'GGGGGGGGGGGGGGGG').
+    - Ripetizione ciclica di caratteri tabulari >= 12 volte.
+    - Sequenze ripetitive cicliche di 2-25 caratteri ripetute >= 6 volte (esclusi array di alias JSON validi).
+    Restituisce una stringa descrittiva se degenerato, altrimenti None.
+    """
+    if not text:
+        return None
+    # 1. Carattere non-spazio singolo ripetuto
+    m_char = re.search(r'([^\s])\1{' + str(threshold - 1) + r',}', text)
+    if m_char:
+        char_repr = repr(m_char.group(1))
+        return f"Ripetizione ciclica anomala del carattere {char_repr} ({len(m_char.group(0))} volte consecutive)"
+    # Tabulazioni ripetute anomale
+    m_tab = re.search(r'(\t)\1{11,}', text)
+    if m_tab:
+        return f"Ripetizione ciclica di caratteri tabulari ({len(m_tab.group(0))} volte consecutive)"
+    # Rimuove temporaneamente sequenze di alias JSON ("E001", "E002", ...) che vengono deduplicate semanticamente
+    text_no_aliases = re.sub(r'(?:["\']E\d{3,4}["\']\s*,\s*){2,}', "", text)
+    # 2. Pattern di 2-25 caratteri (con almeno un carattere non di spaziatura) ripetuto >= 6 volte consecutive
+    for m in re.finditer(r"(.{2,25})\1{5,}", text_no_aliases):
+        pat = m.group(1)
+        if pat.strip():
+            pat_repr = repr(pat)
+            return f"Loop di attrattore su sequenza {pat_repr} ({len(m.group(0)) // len(pat)} ripetizioni)"
+    return None
+
+
 def parse_and_validate_json(raw_text: str) -> dict[str, Any]:
     """
     Esegue il parsing JSON del testo grezzo. Cattura esclusivamente json.JSONDecodeError.
     Errori di tipo o bug programmatici propagano senza mascheramento.
+    Rileva e rigetta preventivamente output ciclici degenerati.
     """
+    repetition = detect_degenerate_repetition(raw_text)
+    if repetition:
+        raise AiStructuredOutputError(f"Risposta del modello scartata per degenerazione ciclica: {repetition}")
+
     clean_text = raw_text.strip()
     # Supporto trasparente per eventuali markdown code blocks ```json ... ``` generati dal modello
     if clean_text.startswith("```"):
@@ -141,7 +173,16 @@ def parse_and_validate_json(raw_text: str) -> dict[str, Any]:
     try:
         data = json.loads(clean_text)
     except json.JSONDecodeError as e:
-        raise AiStructuredOutputError(f"Risposta del modello non conforme a JSON valido: {e}") from e
+        # Fallback di tolleranza sintattica per LLM locali (es. virgole finali, apici ridondanti o spazi nelle chiavi)
+        try:
+            repaired = re.sub(r'\"+([a-zA-Z0-9_]+)\"+(\s*:)', r'"\1"\2', clean_text)
+            repaired = re.sub(r'\"[\t\s]+([a-zA-Z0-9_]+)[\t\s]*\"(\s*:)', r'"\1"\2', repaired)
+            repaired = re.sub(r'\"+(\s*,)', r'"\1', repaired)
+            repaired = re.sub(r'\"+(\s*\n)', r'"\1', repaired)
+            repaired = re.sub(r',\s*([\]}])', r'\1', repaired)
+            data = json.loads(repaired)
+        except json.JSONDecodeError:
+            raise AiStructuredOutputError(f"Risposta del modello non conforme a JSON valido: {e}") from e
 
     if not isinstance(data, dict):
         raise AiStructuredOutputError(f"L'output deve essere un oggetto JSON, ricevuto {type(data).__name__}")
@@ -196,8 +237,8 @@ def validate_topic_detection_payload(
                 f"Elemento evidence_ids[{idx}] non è una stringa (ricevuto {type(item).__name__}). Nessuna coercizione permessa."
             )
 
-    # Rifiuto duplicati
-    if len(raw_eids) != len(set(raw_eids)):
+    # Rifiuto duplicati (in modalita scientifica alias_map is None; in modalita operativa deduplica in modo deterministico)
+    if alias_map is None and len(raw_eids) != len(set(raw_eids)):
         raise AiStructuredOutputError(f"evidence_ids contiene elementi duplicati: {raw_eids}")
 
     # Validazione tipo 'rationale'
@@ -229,7 +270,7 @@ def validate_topic_detection_payload(
                 f"Il modello ha citato evidence_id o alias inesistenti o non appartenenti al blocco: {sorted(hallucinated)}",
                 invalid_evidence_ids=tuple(sorted(hallucinated)),
             )
-        final_eids = tuple(remapped_eids_list)
+        final_eids = tuple(dict.fromkeys(remapped_eids_list))
     else:
         hallucinated = set(raw_eids) - valid_evidence_ids
         if hallucinated:
@@ -293,40 +334,96 @@ def validate_topic_discovery_payload(
 
         item_keys = set(item.keys())
         if item_keys != expected_topic_keys:
+            # In modalita operativa ignora record dummy completamente privi di valore a fine array
+            if alias_map is not None and not any(item.values()):
+                continue
             raise AiStructuredOutputError(f"topic[{idx}] presenta chiavi non conformi: {item_keys} != {expected_topic_keys}")
 
-        if not isinstance(item["label"], str) or not item["label"].strip():
+        raw_label = item.get("label")
+        raw_desc = item.get("short_description")
+        eids_raw = item.get("evidence_ids")
+
+        # In modalita operativa ignora record dummy vuoti prodotti a volte dai modelli locali
+        if alias_map is not None:
+            if (not isinstance(raw_label, str) or not raw_label.strip()) and (not eids_raw or eids_raw == [""]):
+                continue
+
+        if not isinstance(raw_label, str) or not raw_label.strip():
             raise AiStructuredOutputError(f"topic[{idx}].label deve essere una stringa non vuota")
-        if not isinstance(item["short_description"], str) or not item["short_description"].strip():
+        if not isinstance(raw_desc, str) or not raw_desc.strip():
             raise AiStructuredOutputError(f"topic[{idx}].short_description deve essere una stringa non vuota")
 
-        eids_raw = item["evidence_ids"]
-        if not isinstance(eids_raw, list) or len(eids_raw) == 0:
-            raise AiStructuredOutputError(f"topic[{idx}] ('{item['label']}') deve contenere almeno un evidence_id")
+        if not isinstance(eids_raw, list):
+            raise AiStructuredOutputError(f"topic[{idx}] ('{raw_label}') deve contenere una lista per evidence_ids")
 
-        for e_idx, eid_val in enumerate(eids_raw):
-            if not isinstance(eid_val, str) or not eid_val.strip():
-                raise AiStructuredOutputError(f"topic[{idx}].evidence_ids[{e_idx}] non è una stringa valida")
+        had_duplicate_loop = False
+        if alias_map is not None:
+            # Pulizia e deduplicazione deterministica alias in modalita operativa
+            raw_non_empty = [e.strip() for e in eids_raw if isinstance(e, str) and e.strip()]
+            clean_eids = list(dict.fromkeys(raw_non_empty))
+            had_duplicate_loop = len(raw_non_empty) > len(clean_eids)
+            if had_duplicate_loop and any("::" in e for e in raw_non_empty):
+                raise AiStructuredOutputError(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}")
+            if len(clean_eids) == 0:
+                if len(raw_topics) == 1:
+                    raise AiStructuredOutputError(f"topic[{idx}] ('{item['label']}') deve contenere almeno un evidence_id")
+                # Argomento candidato terminale privo di evidenze: viene scartato se vi sono altri topic validi
+                continue
+            eids_raw = clean_eids
+        else:
+            if len(eids_raw) == 0:
+                raise AiStructuredOutputError(f"topic[{idx}] ('{item['label']}') deve contenere almeno un evidence_id")
+            for e_idx, eid_val in enumerate(eids_raw):
+                if not isinstance(eid_val, str) or not eid_val.strip():
+                    raise AiStructuredOutputError(f"topic[{idx}].evidence_ids[{e_idx}] non è una stringa valida")
+            if len(eids_raw) != len(set(eids_raw)):
+                raise AiStructuredOutputError(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}")
 
-        if len(eids_raw) != len(set(eids_raw)):
-            raise AiStructuredOutputError(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}")
 
         if alias_map is not None:
             # Rigoroso: l'identificativo citato deve essere un alias valido del blocco
             # oppure un evidence_id forense valido appartenente al blocco corrente.
             remapped_eids_list: list[str] = []
             hallucinated: list[str] = []
-            for eid_val in eids_raw:
+            for e_pos, eid_val in enumerate(eids_raw):
                 eid_clean = eid_val.strip() if isinstance(eid_val, str) else str(eid_val)
-                if eid_clean in alias_map:
-                    real_id = alias_map[eid_clean]
+                candidate_alias = eid_clean
+                if candidate_alias not in alias_map and candidate_alias not in valid_evidence_ids:
+                    # Rimuove prefissi spuri frequenti dei modelli locali (es. 'value: E001', 'id: E001')
+                    norm_cand = re.sub(r"^(?:value|id|evidence_id|alias|val)\s*[:=]\s*", "", candidate_alias, flags=re.IGNORECASE).strip()
+                    if norm_cand in alias_map or norm_cand in valid_evidence_ids:
+                        candidate_alias = norm_cand
+                    else:
+                        m_alias = re.search(r"\b([A-Za-z]\d{3,4})\b", candidate_alias)
+                        if m_alias and m_alias.group(1) in alias_map:
+                            candidate_alias = m_alias.group(1)
+                        else:
+                            m_prefix = re.match(r"^([A-Za-z]\d{3,4})(?!\d)", candidate_alias)
+                            if m_prefix and m_prefix.group(1) in alias_map:
+                                candidate_alias = m_prefix.group(1)
+
+                if candidate_alias in alias_map:
+                    real_id = alias_map[candidate_alias]
                     if real_id in valid_evidence_ids:
                         remapped_eids_list.append(real_id)
                     else:
                         hallucinated.append(eid_val)
-                elif eid_clean in valid_evidence_ids:
-                    remapped_eids_list.append(eid_clean)
+                elif candidate_alias in valid_evidence_ids:
+                    remapped_eids_list.append(candidate_alias)
                 else:
+                    is_trailing_breakout = (
+                        had_duplicate_loop
+                        and len(remapped_eids_list) > 0
+                        and e_pos >= len(eids_raw) - 2
+                        and not re.search(r"\b[A-Za-z]\d{3,4}\b", candidate_alias)
+                        and (
+                            not re.search(r"\d", candidate_alias)
+                            or not re.match(r"^[A-Za-z0-9_:-]+$", candidate_alias)
+                            or (len(candidate_alias) > 20 and " " in candidate_alias and not candidate_alias.startswith("unified:"))
+                        )
+                    )
+                    if is_trailing_breakout:
+                        continue
                     hallucinated.append(eid_val)
 
             if hallucinated:
@@ -334,7 +431,7 @@ def validate_topic_discovery_payload(
                     f"topic[{idx}] ('{item['label']}') cita evidence_id o alias inesistenti o non appartenenti al blocco: {sorted(hallucinated)}",
                     invalid_evidence_ids=tuple(sorted(hallucinated)),
                 )
-            final_eids = tuple(remapped_eids_list)
+            final_eids = tuple(dict.fromkeys(remapped_eids_list))
         else:
             hallucinated = set(eids_raw) - valid_evidence_ids
             if hallucinated:
@@ -344,10 +441,18 @@ def validate_topic_discovery_payload(
                 )
             final_eids = tuple(eids_raw)
 
+        clean_lbl = item["label"].strip()
+        clean_dsc = item["short_description"].strip()
+        if alias_map is not None:
+            clean_lbl = re.sub(r"^(?:label|topic|titolo|argomento|in)\s*[:=]\s*", "", clean_lbl, flags=re.IGNORECASE).strip().strip("'\"")
+            clean_dsc = re.sub(r"^(?:short_description|description|descrizione|in)\s*[:=]\s*", "", clean_dsc, flags=re.IGNORECASE).strip()
+            if not clean_lbl or not clean_dsc:
+                continue
+
         discovered.append(
             DiscoveredTopic(
-                label=item["label"].strip(),
-                short_description=item["short_description"].strip(),
+                label=clean_lbl,
+                short_description=clean_dsc,
                 evidence_ids=final_eids,
             )
         )

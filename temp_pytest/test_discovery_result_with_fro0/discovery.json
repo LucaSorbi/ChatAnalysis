@@ -1,0 +1,164 @@
+{
+  "benchmark_mode": "FAKE_HARNESS_VALIDATION",
+  "task": "OPEN_TOPIC_DISCOVERY",
+  "model_spec": {
+    "family": "QWEN",
+    "model_id": "qwen2.5-7b-instruct",
+    "quantization": "Q4_K_M",
+    "parameter_size": null,
+    "context_length": null,
+    "runtime_context_length": null,
+    "max_context_length": null,
+    "declared_model_metadata": {
+      "quantization": "Q4_K_M"
+    },
+    "observed_model_metadata": {
+      "quantization": {
+        "name": "Q4_K_M",
+        "bits_per_weight": 4
+      }
+    },
+    "metadata_discrepancies": []
+  },
+  "timestamp": "2026-10-26T22:55:38.884734+00:00",
+  "notice": "Campione sperimentale pilota non generalizzabile statisticamente. I risultati ottenuti con Fake client non costituiscono inferenza reale sui pesi.",
+  "manual_review_status": "NOT_REVIEWED",
+  "metrics": {
+    "attempted_runs": 4,
+    "completed_runs": 4,
+    "failed_runs": 0,
+    "completion_rate": 1.0,
+    "structured_validity_rate": 1.0,
+    "structured_output_failure_count": 0,
+    "model_mismatch_count": 0,
+    "invalid_evidence_reference_failure_count": 0,
+    "invalid_evidence_reference_count": 0,
+    "evidence_reference_valid_run_rate": 1.0,
+    "evidence_reference_validity_rate": 1.0,
+    "error_counts": {},
+    "average_topics_per_conversation": 1.0,
+    "average_latency_seconds": 0.0
+  },
+  "runs": [
+    {
+      "benchmark_mode": "FAKE_HARNESS_VALIDATION",
+      "backend": "fake_local",
+      "scenario_id": "scenario_it_travel",
+      "language": "it",
+      "prompt_version": "topic_discovery_v1",
+      "status": "SUCCESS",
+      "topics_count": 1,
+      "evidence_reference_valid": true,
+      "latency_seconds": 0.0,
+      "max_tokens": null,
+      "prompt_tokens": 10,
+      "completion_tokens": 20,
+      "total_tokens": 30,
+      "token_usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "total_tokens": 30
+      },
+      "topics": [
+        {
+          "label": "Viaggi",
+          "short_description": "Viaggi",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "synth:synthetic_benchmark:scenario_it_travel_0::ORIGINAL_TEXT"
+          ]
+        }
+      ]
+    },
+    {
+      "benchmark_mode": "FAKE_HARNESS_VALIDATION",
+      "backend": "fake_local",
+      "scenario_id": "scenario_en_work",
+      "language": "en",
+      "prompt_version": "topic_discovery_v1",
+      "status": "SUCCESS",
+      "topics_count": 1,
+      "evidence_reference_valid": true,
+      "latency_seconds": 0.0,
+      "max_tokens": null,
+      "prompt_tokens": 10,
+      "completion_tokens": 20,
+      "total_tokens": 30,
+      "token_usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "total_tokens": 30
+      },
+      "topics": [
+        {
+          "label": "Lavoro",
+          "short_description": "Lavoro",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "synth:synthetic_benchmark:scenario_en_work_0::ORIGINAL_TEXT"
+          ]
+        }
+      ]
+    },
+    {
+      "benchmark_mode": "FAKE_HARNESS_VALIDATION",
+      "backend": "fake_local",
+      "scenario_id": "scenario_es_food",
+      "language": "es",
+      "prompt_version": "topic_discovery_v1",
+      "status": "SUCCESS",
+      "topics_count": 1,
+      "evidence_reference_valid": true,
+      "latency_seconds": 0.0,
+      "max_tokens": null,
+      "prompt_tokens": 10,
+      "completion_tokens": 20,
+      "total_tokens": 30,
+      "token_usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "total_tokens": 30
+      },
+      "topics": [
+        {
+          "label": "Cibo",
+          "short_description": "Cibo",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "synth:synthetic_benchmark:scenario_es_food_0::ORIGINAL_TEXT"
+          ]
+        }
+      ]
+    },
+    {
+      "benchmark_mode": "FAKE_HARNESS_VALIDATION",
+      "backend": "fake_local",
+      "scenario_id": "scenario_mixed_sport",
+      "language": "mixed",
+      "prompt_version": "topic_discovery_v1",
+      "status": "SUCCESS",
+      "topics_count": 1,
+      "evidence_reference_valid": true,
+      "latency_seconds": 0.0,
+      "max_tokens": null,
+      "prompt_tokens": 10,
+      "completion_tokens": 20,
+      "total_tokens": 30,
+      "token_usage": {
+        "prompt_tokens": 10,
+        "completion_tokens": 20,
+        "total_tokens": 30
+      },
+      "topics": [
+        {
+          "label": "Sport",
+          "short_description": "Sport",
+          "evidence_count": 1,
+          "evidence_ids": [
+            "synth:synthetic_benchmark:scenario_mixed_sport_0::ORIGINAL_TEXT"
+          ]
+        }
+      ]
+    }
+  ]
+}

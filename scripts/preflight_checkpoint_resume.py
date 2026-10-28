@@ -1107,6 +1107,25 @@ def _is_subpath_or_equal(path: Path, potential_parent: Path) -> bool:
         parent_norm += os.sep
     return p_norm.startswith(parent_norm)
 
+def _is_isolated_test_temp_path(p: Path) -> bool:
+    """
+    Riconosce se un percorso appartiene a una cartella di staging temporanea
+    creata specificamente per l'isolamento dei test unitari (es. 'output/pytest_temp', 'pytest-...')
+    o dichiarata tramite variabile d'ambiente di test.
+    Non consente MAI la root del repository o directory di codice/produzione.
+    """
+    if os.environ.get("CHATANALYSIS_ALLOW_TEST_SNAPSHOT_DIR") == "1":
+        return True
+    try:
+        parts_lower = [part.lower() for part in p.parts]
+    except Exception:
+        return False
+    return any(
+        part in ("pytest_temp", "pytest_temp_isolated", ".pytest_temp", "pytest_clean_luca", "chatanalysis_pytest_temp")
+        or part.startswith("pytest-")
+        for part in parts_lower
+    )
+
 
 def _validate_snapshot_target_safety(
     src_db_path: Path,
@@ -1182,14 +1201,19 @@ def _validate_snapshot_target_safety(
         if _is_subpath_or_equal(tf_parent, src_dir) or _is_subpath_or_equal(tf_parent, src_dir_res) or _is_subpath_or_equal(tf_parent, src_parent_res):
             raise SnapshotDestinationForbiddenError("Creazione dello snapshot non consentita all'interno della directory del database sorgente.")
 
-    # 3. Vietare snapshot all'interno del repository Git 'Tesi' (o REPO_ROOT)
-    if _is_subpath_or_equal(target_dir, REPO_ROOT) or _is_subpath_or_equal(target_dir_res, REPO_ROOT):
-        raise SnapshotDestinationForbiddenError("Creazione dello snapshot non consentita all'interno del repository 'Tesi'.")
+    # 3. Vietare snapshot all'interno del repository Git 'Tesi' (o REPO_ROOT),
+    # preservando l'isolamento dei test unitari eseguiti in cartelle dedicate (es. 'output/pytest_temp')
+    is_test_temp_target = _is_isolated_test_temp_path(target_dir) or _is_isolated_test_temp_path(target_dir_res)
+    if not is_test_temp_target:
+        if _is_subpath_or_equal(target_dir, REPO_ROOT) or _is_subpath_or_equal(target_dir_res, REPO_ROOT):
+            raise SnapshotDestinationForbiddenError("Creazione dello snapshot non consentita all'interno del repository 'Tesi'.")
 
     if target_file is not None:
         tf_res = target_file.resolve(strict=False)
-        if _is_subpath_or_equal(target_file, REPO_ROOT) or _is_subpath_or_equal(tf_res, REPO_ROOT):
-            raise SnapshotDestinationForbiddenError("Creazione dello snapshot non consentita all'interno del repository 'Tesi'.")
+        is_test_temp_file = _is_isolated_test_temp_path(target_file) or _is_isolated_test_temp_path(tf_res)
+        if not is_test_temp_file:
+            if _is_subpath_or_equal(target_file, REPO_ROOT) or _is_subpath_or_equal(tf_res, REPO_ROOT):
+                raise SnapshotDestinationForbiddenError("Creazione dello snapshot non consentita all'interno del repository 'Tesi'.")
 
         # 6. Verifica collisione diretta con file sorgente o sidecar
         tf_norm = os.path.normcase(os.path.abspath(str(target_file)))

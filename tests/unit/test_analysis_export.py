@@ -1390,8 +1390,12 @@ class TestIndependentAuditRegression20261021:
             "origin": AnalysisOrigin.LIVE_LM_STUDIO.value,
             "is_authenticated_live": True,
             "server_provenance_verified": True,
+            "provenance_verified": True,
             "model": "qwen2.5-7b-instruct",
             "run_id": "run_unverified_meta_live",
+            "prompt_version": "topic_detection_v1",
+            "completed_chunk_count": 1,
+            "latency_seconds": 1.2,
         }
         det_auth = TopicDetectionResult(
             topic=det.topic,
@@ -1753,8 +1757,12 @@ class TestIndependentAuditAuditClosure20261021:
             "origin": AnalysisOrigin.LIVE_LM_STUDIO.value,
             "is_authenticated_live": True,
             "server_provenance_verified": True,
+            "provenance_verified": True,
             "model": "qwen2.5-7b-instruct",
             "run_id": "run_spoofed_live_test_01",
+            "prompt_version": "topic_detection_v1",
+            "completed_chunk_count": 1,
+            "latency_seconds": 1.2,
         }
 
         # Detection non verificata dal servizio locale
@@ -1816,12 +1824,15 @@ class TestFinalPreTestUbuntuClosure20261021:
             "authoritative_execution_certified": True,
             "server_provenance_verified": True,
             "runtime_binding_verified": True,
+            "provenance_verified": True,
             "model": "qwen2.5-7b-instruct",
             "run_id": "run_adversarial_spoof_attempt_2026",
             "status": "PARTIAL",
             "chunk_count": 26,
             "completed_chunk_count": 17,
             "failed_chunk_count": 9,
+            "prompt_version": "topic_detection_v1",
+            "latency_seconds": 1.2,
         }
 
         det_obj = TopicDetectionResult(

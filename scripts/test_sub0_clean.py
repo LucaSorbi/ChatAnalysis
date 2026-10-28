@@ -8,9 +8,10 @@ from analysis.service import LocalTopicAnalysisService
 from ai.topics import generate_evidence_alias_maps, serialize_document_for_llm, validate_topic_discovery_payload, TOPIC_DISCOVERY_SCHEMA
 from ai.models import ConversationEvidenceDocument
 
-zip_path = Path(r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip")
-req = IngestionRequest(source_format=SourceFormat.WHATSAPP_EXPORT, filename="Chat WhatsApp con Gre.zip", file_bytes=zip_path.read_bytes())
-doc = ingest_file_payload(req).documents["doc::whatsapp_export::04691438289a::cb5ef8378d12"]
+from scripts.export_discovery_26of26 import resolve_input_archive_path
+zip_path = resolve_input_archive_path()
+req = IngestionRequest(source_format=SourceFormat.WHATSAPP_EXPORT, filename=zip_path.name, file_bytes=zip_path.read_bytes())
+doc = list(ingest_file_payload(req).documents.values())[0]
 service = LocalTopicAnalysisService(base_url="http://127.0.0.1:1234")
 plan = service.create_analysis_plan(document=doc, analysis_type="discovery")
 c2 = list(plan.chunks)[2]

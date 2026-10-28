@@ -1,0 +1,4 @@
+Lista della spesa:
+- Mele
+- Pere
+- Pane

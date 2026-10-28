@@ -1,0 +1,2 @@
+﻿﻿12/03/2024, 10:15 - Alice: Primo messaggio con BOM
+12/03/2024, 10:16 - Bob: Risposta

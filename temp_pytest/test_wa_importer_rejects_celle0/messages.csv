@@ -1,0 +1,4 @@
+Source,MessageType,TimeStamp,Direction,From,To,Body,Attachments,Status,Deleted,Forwarded,ApplicationId,ChatId
+WhatsApp,Text,2024-11-12 03:09:27,Outgoing,+39 000 0000003,+39 000 0000001,Messaggio di test 01,,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2025-05-30 21:54:17,Incoming,group_participant_A,group_participant_A,Messaggio di test 02,,Received,False,False,com.whatsapp,chat_2
+WhatsApp,Image,2025-01-06 13:22:43,Incoming,+39 000 0000002,+39 000 0000003,,Files\IMG_0012.jpg,Sent,False,False,com.whatsapp,chat_1

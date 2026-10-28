@@ -1,0 +1,19 @@
+{
+  "task": "OPEN_TOPIC_DISCOVERY",
+  "model_spec": {
+    "model_id": "qwen2.5-7b-instruct",
+    "declared_model_metadata": {
+      "quantization": "Q4_K_M",
+      "parameter_size": "7B",
+      "runtime_context_length": 8192
+    },
+    "observed_model_metadata": {
+      "quantization": {
+        "name": "Q4_K_M",
+        "bits_per_weight": 4
+      },
+      "parameter_size": "7B",
+      "max_context_length": 8192
+    }
+  }
+}

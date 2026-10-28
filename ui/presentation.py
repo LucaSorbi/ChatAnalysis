@@ -1545,10 +1545,34 @@ def render_topics() -> None:
             st.error(f"Errore durante l'interrogazione degli argomenti scoperti: {type(exc).__name__}")
             return
 
-        st.write(f"Visualizzati **{len(disc_results.hits)}** argomenti emersi.")
+        total_extracted = disc_results.metadata.get("total_discovered_topics")
+        if total_extracted is None:
+            if latest_disc is not None:
+                total_extracted = len(latest_disc.topics)
+            elif doc_analysis.last_discovery is not None:
+                total_extracted = len(doc_analysis.last_discovery.topics)
+            else:
+                total_extracted = 0
 
-        if not disc_results.hits:
-            st.info("Nessun argomento emerso corrisponde alla ricerca. Avviare la Topic Discovery per analizzare la chat.")
+        matching_count = len(disc_results.hits)
+        st.write(
+            f"Argomenti realmente estratti: **{total_extracted}** | "
+            f"Argomenti corrispondenti al filtro di ricerca: **{matching_count}**"
+        )
+
+        if total_extracted == 0:
+            if latest_disc is not None:
+                st.warning(
+                    "⚠️ La Topic Discovery è stata completata sui blocchi della conversazione, "
+                    "ma nessun argomento tematico è stato identificato dal modello nei messaggi."
+                )
+            else:
+                st.info("Nessuna Topic Discovery registrata o salvata per questa conversazione. Avviare la Topic Discovery per analizzare la chat.")
+        elif matching_count == 0:
+            st.info(
+                f"Nessun argomento corrisponde al filtro di ricerca '{query_disc}'. "
+                f"Sono disponibili {total_extracted} argomenti estratti in totale (cancella il testo di ricerca per visualizzarli tutti)."
+            )
 
         for idx, hit in enumerate(disc_results.hits, start=1):
             with st.container(border=True):

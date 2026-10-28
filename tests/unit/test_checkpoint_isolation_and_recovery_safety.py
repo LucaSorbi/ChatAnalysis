@@ -156,7 +156,7 @@ def test_evidence_validation_rejects_hallucinations():
         "evidence_ids": ["unified:whatsapp_txt:1::ORIGINAL_TEXT", "NON_EXISTING_EVID_999"],
         "rationale": "Evidenza inventata",
     }
-    mock_client = ControllableMockLlmClient(responses=[invalid_resp, invalid_resp])
+    mock_client = ControllableMockLlmClient(responses=[invalid_resp] * 5)
     analyzer = TopicDetectionAnalyzer(client=mock_client, operational_mode=True)
     with pytest.raises(AiInvalidEvidenceCitationError) as exc_info:
         analyzer.detect_topic(document=doc, topic=query)

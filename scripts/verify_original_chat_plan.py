@@ -6,7 +6,8 @@ from analysis.service import LocalTopicAnalysisService
 from analysis.checkpoint import compute_document_fingerprint, compute_run_config_hash
 
 sys.stdout.reconfigure(encoding="utf-8")
-p = Path(r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip")
+from scripts.export_discovery_26of26 import resolve_input_archive_path
+p = resolve_input_archive_path()
 req = IngestionRequest(
     file_bytes=p.read_bytes(),
     filename=p.name,

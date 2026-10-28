@@ -38,10 +38,8 @@ def main():
     print("   CHATANALYSIS — NUOVA TOPIC DISCOVERY REALE (CLEAN 0/26)       ")
     print("=================================================================")
     
-    zip_path = Path(r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip")
-    if not zip_path.exists():
-        print(f"[FATAL] Original chat archive not found at: {zip_path}")
-        sys.exit(1)
+    from scripts.export_discovery_26of26 import resolve_input_archive_path
+    zip_path = resolve_input_archive_path()
 
     print(f"Loading document from: {zip_path.name} ({zip_path.stat().st_size} bytes)...")
     req = IngestionRequest(

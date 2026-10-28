@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import functools
 import math
+import re
 import string
 import unicodedata
 from dataclasses import dataclass, field
@@ -325,6 +326,124 @@ def verify_translated_document_size(
             )
 
 
+def is_substantive_message_bundle(bundle: MessageEvidenceBundle) -> bool:
+    """Verifica se un bundle di evidenza contiene testo comunicativo effettivo."""
+    for sec in bundle.text_evidence_sections:
+        t = (sec.text or "").strip()
+        if not t:
+            continue
+        if t == "<Media omessi>":
+            continue
+        if "crittografati end-to-end" in t:
+            continue
+        return True
+    return False
+
+
+def split_chunk_into_microchunks(
+    chunk: ConversationEvidenceDocument,
+    max_substantive_messages: int = 8,
+    max_microchunk_tokens: int | None = 1500,
+) -> tuple[ConversationEvidenceDocument, ...]:
+    """
+    Suddivide preventivamente un chunk di conversazione in microchunk operativi (B3).
+    
+    Principi:
+    1. PUNTO DI PARTENZA PRUDENTE: massimo max_substantive_messages (default 8) messaggi
+       sostantivi per microchunk, subordinatamente al budget token stimato.
+    2. PRESERVAZIONE INTEGRALE DELLE EVIDENZE:
+       - Nessun messaggio viene saltato o perso.
+       - Nessun messaggio viene duplicato.
+       - Viene preservata l'esatta sequenza cronologica dei bundle.
+    3. TRACCIABILITÀ FORENSE VERSO IL CHUNK PADRE:
+       - Ogni microchunk mantiene document_id deterministico: f"{chunk.document_id}::micro::{idx}".
+       - I metadati registrano: parent_document_id, parent_chunk_index, microchunk_index, total_microchunks.
+    4. INVARIANTE DI COPERTURA:
+       L'unione degli evidence_id di tutti i microchunk generati coincide esattamente
+       con l'insieme delle sezioni di evidenza del chunk originale.
+    """
+    if not chunk.bundles:
+        return (chunk,)
+
+    microchunks_bundles: list[list[MessageEvidenceBundle]] = []
+    current_b_list: list[MessageEvidenceBundle] = []
+    current_substantive = 0
+    current_tokens = 0
+
+    for bundle in chunk.bundles:
+        is_sub = is_substantive_message_bundle(bundle)
+        sec_list = bundle.text_evidence_sections
+        b_chars = sum(len(s.text) for s in sec_list)
+        b_tokens = math.ceil(b_chars / 2.8) + len(sec_list) * 20  # stima compatta
+
+        # Se aggiungendo questo bundle superiamo il limite di messaggi sostanziali (e il blocco ne ha già almeno 1)
+        # oppure superiamo il budget token del microchunk, chiudiamo il microchunk corrente.
+        exceeds_substantive = (is_sub and current_substantive >= max_substantive_messages and len(current_b_list) > 0)
+        exceeds_tokens = (max_microchunk_tokens is not None and current_tokens + b_tokens > max_microchunk_tokens and len(current_b_list) > 0)
+
+        if exceeds_substantive or exceeds_tokens:
+            microchunks_bundles.append(current_b_list)
+            current_b_list = []
+            current_substantive = 0
+            current_tokens = 0
+
+        current_b_list.append(bundle)
+        if is_sub:
+            current_substantive += 1
+        current_tokens += b_tokens
+
+    if current_b_list:
+        microchunks_bundles.append(current_b_list)
+
+    parent_chunk_idx = chunk.metadata.get("chunk_index", 0) if isinstance(chunk.metadata, Mapping) else 0
+
+    if len(microchunks_bundles) <= 1:
+        res = (
+            ConversationEvidenceDocument(
+                document_id=f"{chunk.document_id}::micro::0",
+                bundles=chunk.bundles,
+                chat_id=chunk.chat_id,
+                source_name=chunk.source_name,
+                metadata={
+                    **dict(chunk.metadata if isinstance(chunk.metadata, Mapping) else {}),
+                    "parent_document_id": chunk.document_id,
+                    "parent_chunk_index": parent_chunk_idx,
+                    "microchunk_index": 0,
+                    "total_microchunks": 1,
+                    "substantive_messages_count": sum(1 for b in chunk.bundles if is_substantive_message_bundle(b)),
+                },
+            ),
+        )
+    else:
+        out_list: list[ConversationEvidenceDocument] = []
+        tot = len(microchunks_bundles)
+        for m_idx, b_seq in enumerate(microchunks_bundles):
+            sub_count = sum(1 for b in b_seq if is_substantive_message_bundle(b))
+            m_doc = ConversationEvidenceDocument(
+                document_id=f"{chunk.document_id}::micro::{m_idx}",
+                bundles=tuple(b_seq),
+                chat_id=chunk.chat_id,
+                source_name=chunk.source_name,
+                metadata={
+                    **dict(chunk.metadata if isinstance(chunk.metadata, Mapping) else {}),
+                    "parent_document_id": chunk.document_id,
+                    "parent_chunk_index": parent_chunk_idx,
+                    "microchunk_index": m_idx,
+                    "total_microchunks": tot,
+                    "substantive_messages_count": sub_count,
+                },
+            )
+            out_list.append(m_doc)
+        res = tuple(out_list)
+
+    # Verifica formale degli invarianti
+    all_micro_eids = {s.evidence_id for m in res for s in m.all_evidence_sections}
+    orig_eids = {s.evidence_id for s in chunk.all_evidence_sections}
+    assert all_micro_eids == orig_eids, f"Invariante di copertura violato: {len(all_micro_eids)} vs {len(orig_eids)}"
+
+    return res
+
+
 def aggregate_topic_detection(
     outcomes: Sequence[ChunkAnalysisOutcome | TopicDetectionResult],
     topic: TopicQuery,
@@ -554,7 +673,9 @@ def aggregate_topic_discovery(
         chunk_id = getattr(cr, "metadata", {}).get("chunk_id") or f"{getattr(cr, 'provenance_document_id', 'doc')}::chunk_{chunk_idx}"
         for t in cr.topics:
             raw_topics_count += 1
-            canonical_key = canonicalize_topic_label(t.label) or normalize_topic_label(t.label) or t.label.strip().casefold()
+            lbl_clean = re.sub(r"^(?:label|topic|titolo|argomento|in)\s*[:=]\s*", "", t.label.strip(), flags=re.IGNORECASE).strip().strip("'\"") or t.label.strip()
+            dsc_clean = re.sub(r"^(?:short_description|description|descrizione|in)\s*[:=]\s*", "", t.short_description.strip(), flags=re.IGNORECASE).strip() or t.short_description.strip()
+            canonical_key = canonicalize_topic_label(lbl_clean) or normalize_topic_label(lbl_clean) or lbl_clean.casefold()
             if canonical_key in consolidated:
                 item = consolidated[canonical_key]
                 item["supporting_chunks"].add(chunk_id)
@@ -564,16 +685,16 @@ def aggregate_topic_discovery(
                     if eid not in eids_set:
                         eids_set.add(eid)
                         eids_list.append(eid)
-                if len(t.short_description.strip()) > len(item["short_description"]):
-                    item["short_description"] = t.short_description.strip()
-                if len(t.label.strip()) > len(item["label"]):
-                    item["label"] = t.label.strip()
+                if len(dsc_clean) > len(item["short_description"]) and len(dsc_clean) <= 300:
+                    item["short_description"] = dsc_clean
+                if len(lbl_clean) > len(item["label"]) and len(lbl_clean) <= 45:
+                    item["label"] = lbl_clean
             else:
                 eids_list = list(t.evidence_ids)
                 consolidated[canonical_key] = {
-                    "label": t.label.strip(),
+                    "label": lbl_clean,
                     "norm_key": canonical_key,
-                    "short_description": t.short_description.strip(),
+                    "short_description": dsc_clean,
                     "evidence_ids": eids_list,
                     "evidence_ids_set": set(eids_list),
                     "supporting_chunks": {chunk_id},

@@ -1,0 +1,10 @@
+<?xml version='1.0' encoding='utf-8'?>
+<DumpFile type='UFDR' version='2.0'>
+  <InstantMessages>
+    <Message id='0'>
+      <Field xmlns='urn:ns:alpha'>Value Alpha</Field>
+      <Field xmlns='urn:ns:beta'>Value Beta</Field>
+      <StandardField>Standard Value</StandardField>
+    </Message>
+  </InstantMessages>
+</DumpFile>

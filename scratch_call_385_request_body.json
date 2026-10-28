@@ -1,0 +1,62 @@
+"model": "qwen2.5-7b-instruct",
+  "messages": [
+    {
+      "role": "system",
+      "content": "CRITICAL FORENSIC DATA INTEGRITY AND SECURITY DIRE... <Truncated in logs> ...guages and output labels/descriptions in Italian.\n"
+    },
+    {
+      "role": "user",
+      "content": "=== BEGIN FORENSIC EVIDENCE DATA (UNTRUSTED RAW JS... <Truncated in logs> ...turn ONLY a valid JSON object matching the schema."
+    }
+  ],
+  "temperature": 0,
+  "seed": 42,
+  "max_tokens": 1216,
+  "response_format": {
+    "type": "json_schema",
+    "json_schema": {
+      "name": "structured_output",
+      "strict": true,
+      "schema": {
+        "type": "object",
+        "properties": {
+          "topics": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "label": {
+                  "type": "string",
+                  "description": "Etichetta sintetica dell'argomento emerso."
+                },
+                "short_description": {
+                  "type": "string",
+                  "description": "Breve descrizione oggettiva dell'argomento (nessuna inferenza su identità o dati sensibili)."
+                },
+                "evidence_ids": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  },
+                  "maxItems": 15,
+                  "description": "Evidenze che supportano l'argomento (almeno una richiesta)."
+                }
+              },
+              "required": [
+                "label",
+                "short_description",
+                "evidence_ids"
+              ],
+              "additionalProperties": false
+            },
+            "description": "Elenco dei temi discussi nella conversazione."
+          }
+        },
+        "required": [
+          "topics"
+        ],
+        "additionalProperties": false
+      }
+    }
+  }
+}

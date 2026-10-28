@@ -22,13 +22,13 @@ from ui.models import IngestionRequest, SourceFormat
 
 
 def main():
-    print("=== TEST LIVE SUBCHUNK SPLITTING SU CHUNK 2 ===", flush=True)
-    zip_path = r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip"
+    from scripts.export_discovery_26of26 import resolve_input_archive_path
+    zip_path = resolve_input_archive_path()
     with open(zip_path, "rb") as f:
         data = f.read()
 
-    req = IngestionRequest(source_format=SourceFormat.WHATSAPP_EXPORT, filename="Chat WhatsApp con Gre.zip", file_bytes=data)
-    doc = ingest_file_payload(req).documents["doc::whatsapp_export::04691438289a::cb5ef8378d12"]
+    req = IngestionRequest(source_format=SourceFormat.WHATSAPP_EXPORT, filename=zip_path.name, file_bytes=data)
+    doc = list(ingest_file_payload(req).documents.values())[0]
 
     service = LocalTopicAnalysisService(
         base_url="http://127.0.0.1:1234",

@@ -226,7 +226,9 @@ class FakeSmokeClient(BaseLlmClient):
         first_content = str(messages[0].get("content", "")).lower() if messages else ""
 
         # Estrazione generica di evidence_id presenti nel prompt JSON o testo serializzato
-        found_eids = re.findall(r'"evidence_id":\s*"([^"]+)"', content_str)
+        found_eids = re.findall(r'"(?:evidence_)?id":\s*"([^"]+)"', content_str)
+        if not found_eids:
+            found_eids = re.findall(r"\b(E\d{3,4})\b", content_str)
         if not found_eids:
             found_eids = re.findall(r"msg::[a-zA-Z0-9_:]+", content_str)
 

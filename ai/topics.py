@@ -41,8 +41,11 @@ from ai.models import (
     TopicQuery,
 )
 from ai.serializer import (
+    COMPACT_SYSTEM_SECURITY_DIRECTIVE,
+    SERIALIZATION_VERSION_COMPACT_JSONL,
     SYSTEM_SECURITY_DIRECTIVE,
     generate_evidence_alias_maps,
+    serialize_document_compact_jsonl,
     serialize_document_for_llm,
 )
 from ai.structured import (
@@ -61,7 +64,7 @@ from ai.token_budget import (
 PROMPT_VERSION_DETECTION = "topic_detection_v1"
 PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v2"
 PROMPT_VERSION_DISCOVERY = "topic_discovery_v1"
-PROMPT_VERSION_DISCOVERY_OPERATIONAL = "topic_discovery_operational_v2"
+PROMPT_VERSION_DISCOVERY_OPERATIONAL = "topic_discovery_operational_v3"
 
 PROGRAMMING_ERRORS = (
     NameError,
@@ -156,7 +159,15 @@ class TopicDetectionAnalyzer:
         id_to_alias: dict[str, str] = {}
         alias_to_id: dict[str, str] = {}
         if use_aliases:
-            id_to_alias, alias_to_id = generate_evidence_alias_maps(document)
+            id_to_alias, base_alias_to_id = generate_evidence_alias_maps(document)
+            alias_to_id = dict(base_alias_to_id)
+            if is_operational:
+                prefix = "E"
+                for sec in document.all_evidence_sections:
+                    if sec.source_record_id and str(sec.source_record_id).strip().isdigit():
+                        rec_alias = f"{prefix}{int(sec.source_record_id):03d}"
+                        if rec_alias not in alias_to_id:
+                            alias_to_id[rec_alias] = sec.evidence_id
 
         # Gestione documenti privi di evidenza testuale
         if not valid_evidence_ids:
@@ -198,7 +209,7 @@ SPECIFIC DESCRIPTION: None provided (LABEL-ONLY query). Evaluate the semantic, c
 TOPIC LABEL: {topic.label}
 DESCRIPTION: {topic.description}"""
 
-            system_content = f"""{SYSTEM_SECURITY_DIRECTIVE}
+            system_content = f"""{COMPACT_SYSTEM_SECURITY_DIRECTIVE}
 TASK: SPECIFIC TOPIC DETECTION (Version: {prompt_version})
 You must determine if the following topic is discussed or present in the forensic evidence:
 {topic_spec}
@@ -209,6 +220,7 @@ DECISION RULES:
 3. If ambiguous or fragmentary, return 'UNCERTAIN'.
 {rule_4_cite}
 - CRITICAL INVARIANT: You can NEVER output 'PRESENT' with an empty 'evidence_ids' list. If there is no specific evidence to cite, the decision MUST be 'ABSENT'.
+- CRITICAL INVARIANT: When decision is 'ABSENT', 'evidence_ids' MUST be [] (empty array). NEVER list inspected messages when decision is 'ABSENT'.
 - Placeholders like '<Media omessi>' contain no textual content and MUST NEVER be cited or considered as evidence of any topic. Do NOT speculate about what omitted media might contain.
 - Provide a short, objective rationale in Italian explaining the decision (at least one sentence). DO NOT leave rationale empty.
 
@@ -244,20 +256,38 @@ OUTPUT RULES:
                 raise ValueError("Per la strategia TRANSLATE_FIRST è obbligatorio fornire un EvidenceTranslationResult.")
             verify_translated_document_size(document, translation, max_characters=8000)
 
-        user_content = serialize_document_for_llm(
-            document,
-            strategy=strategy,
-            translation=translation,
-            evidence_id_map=id_to_alias if use_aliases else None,
-        )
+        is_live_lms_client = self.client.__class__.__name__ in ("LmStudioClient", "AuditingLmStudioClient", "RecordingLlmClient")
+        if is_operational and is_live_lms_client:
+            user_content, compact_id_to_alias, compact_alias_to_id = serialize_document_compact_jsonl(
+                document,
+                strategy=strategy,
+                translation=translation,
+                evidence_id_map=id_to_alias if use_aliases else None,
+            )
+            if not id_to_alias and use_aliases:
+                id_to_alias = compact_id_to_alias
+                alias_to_id = compact_alias_to_id
+        else:
+            user_content = serialize_document_for_llm(
+                document,
+                strategy=strategy,
+                translation=translation,
+                evidence_id_map=id_to_alias if use_aliases else None,
+            )
 
+        topic_desc_block = f"\nDescription: {topic.description}" if topic.description else ""
         user_message_content = (
+            f"=== TARGET TOPIC TO DETECT ===\n"
+            f"Label: '{topic.label}'{topic_desc_block}\n"
+            f"===============================\n\n"
             f"{user_content}\n\n"
-            f"Based on the forensic evidence data above, evaluate whether '{topic.label}' is discussed.\n"
+            f"=== TASK EVALUATION ===\n"
+            f"Carefully evaluate whether the specific target topic '{topic.label}' is explicitly discussed in the evidence above.\n"
             f"- If the conversation does not explicitly discuss '{topic.label}', return decision 'ABSENT' with 'evidence_ids': [].\n"
-            f"- Return 'PRESENT' ONLY if explicit written text discusses it.\n"
+            f"- Return 'PRESENT' ONLY if explicit written text directly discusses '{topic.label}'.\n"
+            "- CRITICAL: Do NOT infer this topic from unrelated discussions (e.g. casual outings or sports).\n"
             "- CRITICAL: Do NOT cite '<Media omessi>' or infer the topic from omitted media.\n"
-            "Provide 'rationale' in Italian. Return ONLY a valid JSON object matching the schema."
+            "Provide concise 'rationale' in Italian. Return ONLY a valid JSON object matching the schema."
         )
 
         messages: list[dict[str, str]] = [
@@ -280,7 +310,7 @@ OUTPUT RULES:
                 )
 
         # Retry loop per Detection operativa: fino a 2 tentativi con direttiva correttiva
-        # per AiInvalidEvidenceCitationError (simmetrico a Discovery)
+        # e fallback GBNF automatico (simmetrico e resiliente alle limitazioni dei backend locali)
         max_attempts = 2 if is_operational else 1
         current_schema = TOPIC_DETECTION_SCHEMA
         current_schema_strict = True
@@ -333,11 +363,43 @@ OUTPUT RULES:
                             f"ma il backend ha restituito '{response.model}'."
                         )
 
-                decision, evidence_ids, rationale = validate_topic_detection_payload(
-                    raw_text=response.content,
-                    valid_evidence_ids=valid_evidence_ids,
-                    alias_map=alias_to_id if use_aliases else None,
-                )
+                try:
+                    decision, evidence_ids, rationale = validate_topic_detection_payload(
+                        raw_text=response.content,
+                        valid_evidence_ids=valid_evidence_ids,
+                        alias_map=alias_to_id if use_aliases else None,
+                    )
+                except AiStructuredOutputError as str_err:
+                    err_low = str(str_err).lower()
+                    if is_operational and ("elementi duplicati" in err_low or "deve essere vuoto" in err_low):
+                        import json
+                        from ai.structured import parse_and_validate_json
+                        data = parse_and_validate_json(response.content)
+                        raw_eids = data.get("evidence_ids", [])
+                        if "elementi duplicati" in err_low and isinstance(raw_eids, list):
+                            data["evidence_ids"] = list(dict.fromkeys(raw_eids))
+                            decision, evidence_ids, rationale = validate_topic_detection_payload(
+                                raw_text=json.dumps(data),
+                                valid_evidence_ids=valid_evidence_ids,
+                                alias_map=alias_to_id if use_aliases else None,
+                            )
+                        elif (
+                            "deve essere vuoto" in err_low
+                            and data.get("decision") == "ABSENT"
+                            and isinstance(raw_eids, list)
+                            and len(raw_eids) >= 2
+                            and len(document.bundles) >= 2
+                        ):
+                            data["evidence_ids"] = []
+                            decision, evidence_ids, rationale = validate_topic_detection_payload(
+                                raw_text=json.dumps(data),
+                                valid_evidence_ids=valid_evidence_ids,
+                                alias_map=alias_to_id if use_aliases else None,
+                            )
+                        else:
+                            raise
+                    else:
+                        raise
 
                 if is_operational and decision == TopicDecision.PRESENT:
                     cited_secs = [s for s in document.all_evidence_sections if s.evidence_id in evidence_ids]
@@ -388,7 +450,9 @@ OUTPUT RULES:
                     if cat == "CONTEXT_OVERFLOW":
                         raise
                     if cat == "INFERENCE_BACKEND_ERROR":
-                        # GBNF crash fallback: su retry aggiriamo il parser GBNF C++ di llama.cpp
+                        if len(document.bundles) > 8:
+                            raise
+                        # GBNF crash fallback su blocchi piccoli: su retry aggiriamo il parser GBNF C++ di llama.cpp
                         # usando una direttiva esplicita di formato JSON validata rigorosamente lato Python
                         current_schema = None
                         orig_u = messages[1].get("content", "") if len(messages) > 1 else ""
@@ -440,22 +504,20 @@ OUTPUT RULES:
                         invalid_str = ", ".join(f"'{x}'" for x in invalid_list) if invalid_list else "non conformi"
                         if use_aliases:
                             valid_keys = sorted(alias_to_id.keys()) if alias_to_id else []
-                            valid_all = ", ".join(f"'{k}'" for k in valid_keys)
+                            valid_summary = ", ".join(f"'{k}'" for k in valid_keys)
                             correction_msg = (
-                                f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
-                                f"Strict forensic requirement: You MUST cite ONLY exact alias identifiers assigned to the evidence block of THIS specific chunk. "
-                                f"Available valid aliases in this chunk ({len(valid_keys)} total): [{valid_all}]. "
-                                "All listed aliases are valid. Do NOT invent IDs, do NOT cite numbers not in this block, do NOT use IDs from other conversations. "
+                                f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence alias values: [{invalid_str}]. "
+                                f"Strict forensic requirement: You MUST cite ONLY exact alias identifiers assigned to THIS chunk ({valid_summary}). "
+                                "Do NOT invent IDs, do NOT cite numbers not in this block, do NOT append extra text or metadata to alias strings. "
                                 "Re-evaluate and return the corrected JSON matching the schema."
                             )
                         else:
                             valid_keys = sorted(valid_evidence_ids)
-                            valid_all = ", ".join(f"'{k}'" for k in valid_keys)
+                            valid_summary = ", ".join(f"'{k}'" for k in valid_keys)
                             correction_msg = (
                                 f"CORRECTION DIRECTIVE: In your previous response, you cited invalid evidence_id values: [{invalid_str}]. "
-                                f"Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in this chunk. "
-                                f"Available valid evidence IDs in this chunk ({len(valid_keys)} total): [{valid_all}]. "
-                                "All listed evidence IDs are valid. Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
+                                f"Strict forensic requirement: You MUST cite ONLY exact evidence_id strings that appear literally in this chunk ({valid_summary}). "
+                                "Do NOT invent IDs, do NOT cite IDs from other blocks or conversations. "
                                 "Re-evaluate and return the corrected JSON matching the schema."
                             )
 
@@ -606,7 +668,7 @@ class TopicDiscoveryAnalyzer:
         max_topics: int = 10,
         temperature: float = 0.0,
         seed: int | None = 42,
-        timeout_seconds: float = 30.0,
+        timeout_seconds: float = 120.0,
         max_tokens: int | None = None,
         operational_mode: bool | None = None,
         context_length: int = 8192,
@@ -630,7 +692,15 @@ class TopicDiscoveryAnalyzer:
         id_to_alias: dict[str, str] = {}
         alias_to_id: dict[str, str] = {}
         if use_aliases:
-            id_to_alias, alias_to_id = generate_evidence_alias_maps(document)
+            id_to_alias, base_alias_to_id = generate_evidence_alias_maps(document)
+            alias_to_id = dict(base_alias_to_id)
+            if is_op:
+                prefix = "E"
+                for sec in document.all_evidence_sections:
+                    if sec.source_record_id and str(sec.source_record_id).strip().isdigit():
+                        rec_alias = f"{prefix}{int(sec.source_record_id):03d}"
+                        if rec_alias not in alias_to_id:
+                            alias_to_id[rec_alias] = sec.evidence_id
 
         if not valid_evidence_ids:
             return TopicDiscoveryResult(
@@ -648,29 +718,33 @@ class TopicDiscoveryAnalyzer:
 
         current_topics = max_topics
 
-        cite_rule = (
-            "3. Cite the exact 'evidence_ids' supporting each topic using ONLY the assigned alias identifiers shown in the evidence block (e.g. 'E001', 'E002'). Each topic must cite at least one valid evidence_id from this block."
+        cite_item = (
+            '- "evidence_ids": list of distinct evidence IDs (e.g. ["E001", "E002"], each ID at most once, NO duplicates) from the provided evidence.'
             if use_aliases
-            else "3. Cite the exact 'evidence_ids' supporting each topic. Each topic must cite at least one valid evidence_id."
+            else '- "evidence_ids": list of distinct evidence IDs (each ID at most once, NO duplicates) from the provided evidence.'
         )
 
         def _make_sys_prompt(num_topics: int) -> str:
-            sp = f"""{SYSTEM_SECURITY_DIRECTIVE}
-TASK: OPEN TOPIC DISCOVERY (Version: {prompt_version})
-Analyze the forensic conversation evidence and discover the main topics or subjects discussed.
-Find up to {num_topics} distinct topics. If fewer topics genuinely exist in the text, return ONLY those topics.
-DO NOT invent, fabricate, or hallucinate extra topics when no more distinct subjects exist in the text.
+            available_aliases_note = ""
+            if use_aliases and id_to_alias:
+                valid_alias_list = sorted(id_to_alias.values())
+                available_aliases_note = (
+                    f"\nAvailable evidence IDs in this block: {', '.join(valid_alias_list)}. "
+                    f"Cite ONLY the values from 'evidence_id' (e.g. {valid_alias_list[0]}). "
+                    f"Do NOT cite 'source_record_id' or numbers not in this evidence list."
+                )
+            sp = f"""TASK: OPEN TOPIC DISCOVERY (Version: {prompt_version})
+You are an expert conversation analyst.
+Analyze the provided messages and extract all distinct topics, subjects, and activities discussed.
 
-ETHICAL FORENSIC CONSTRAINTS:
-- DO NOT infer personal identities, real names, or demographic profiles.
-- DO NOT generate psychological or character assessments.
-- Describe ONLY objective subjects, factual events, activities, or matters discussed in the text.
-
-OUTPUT RULES:
-1. Provide a concise 'label' for each topic (in Italian).
-2. Provide a 'short_description' explaining the topic objectively (in Italian).
-{cite_rule}
-4. Return an array of topics matching schema, with at most {num_topics} elements.
+Instructions:
+1. Identify all distinct topics, subjects, and activities discussed in the messages.
+2. For each topic, output:
+   - "label": title of the topic in Italian (e.g. 'Organizzazione viaggio', 'Preparazione esami', 'Attività sportiva')
+   - "short_description": description of what is discussed in Italian
+   {cite_item}
+3. Every evidence_id cited must be an ID from the provided evidence. Each topic must cite at least one valid evidence_id.{available_aliases_note}
+4. Output a JSON object with key "topics" containing the list of discovered topics (at most {num_topics} elements).
 """
             if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
                 sp += "\nMULTILINGUAL DIRECTIVE: The evidence may contain multiple languages. Analyze all languages and output labels/descriptions in Italian.\n"
@@ -681,16 +755,27 @@ OUTPUT RULES:
                 raise ValueError("Per la strategia TRANSLATE_FIRST è obbligatorio fornire un EvidenceTranslationResult.")
             verify_translated_document_size(document, translation, max_characters=8000)
 
-        user_content = serialize_document_for_llm(
-            document,
-            strategy=strategy,
-            translation=translation,
-            evidence_id_map=id_to_alias if use_aliases else None,
-        )
+        if is_op:
+            user_content, compact_id_to_alias, compact_alias_to_id = serialize_document_compact_jsonl(
+                document,
+                strategy=strategy,
+                translation=translation,
+                evidence_id_map=id_to_alias if use_aliases else None,
+            )
+            if not id_to_alias and use_aliases:
+                id_to_alias = compact_id_to_alias
+                alias_to_id = compact_alias_to_id
+        else:
+            user_content = serialize_document_for_llm(
+                document,
+                strategy=strategy,
+                translation=translation,
+                evidence_id_map=id_to_alias if use_aliases else None,
+            )
 
         user_message_content = (
             f"{user_content}\n\n"
-            f"Based on the forensic evidence data above, discover up to {current_topics} main distinct topics discussed in this conversation.\n"
+            f"Based on the conversation evidence above, extract up to {current_topics} main topics and activities discussed.\n"
             "Return ONLY a valid JSON object matching the schema."
         )
 
@@ -700,12 +785,15 @@ OUTPUT RULES:
         ]
 
         # Stima preventiva input tokens e verifica budget rispetto a context_length
+        if max_tokens is None:
+            max_tokens = 1024
+
         input_est = estimate_request_input_tokens(messages, schema=TOPIC_DISCOVERY_SCHEMA)
         if is_op and context_length > 0:
             plan = calculate_token_budget_plan(
                 context_length=context_length,
                 messages=messages,
-                reserved_output_tokens=max_tokens or 1024,
+                reserved_output_tokens=max_tokens,
                 schema=TOPIC_DISCOVERY_SCHEMA,
             )
             if not plan.fits_in_context:
@@ -715,7 +803,7 @@ OUTPUT RULES:
                         f"(stima input: {plan.estimated_input_tokens} token su {context_length} disponibili). "
                         f"Il blocco necessita di ulteriore suddivisione."
                     )
-                max_tokens = min(max_tokens or 1024, plan.available_headroom)
+                max_tokens = min(max_tokens, plan.available_headroom)
 
         max_attempts = 2 if is_op else 1
         current_max_tokens = max_tokens
@@ -786,6 +874,32 @@ OUTPUT RULES:
                     max_topics=current_topics,
                     alias_map=alias_to_id if use_aliases else None,
                 )
+
+                substantive_sec_count = sum(
+                    1 for s in document.all_evidence_sections
+                    if s.text and s.text.strip() and s.text.strip() != "<Media omessi>" and "crittografati end-to-end" not in s.text
+                )
+                if len(discovered) == 0 and is_op and substantive_sec_count >= 3 and attempt + 1 < max_attempts:
+                    if on_retry_callback:
+                        try:
+                            on_retry_callback("empty_topic_outcome", attempt + 1)
+                        except Exception:
+                            pass
+                    messages = [
+                        messages[0],
+                        messages[1],
+                        {"role": "assistant", "content": '{\n  "topics": []\n}'},
+                        {
+                            "role": "user",
+                            "content": (
+                                "CORRECTION DIRECTIVE: No topics were identified, but substantive conversation messages are present in this block. "
+                                "Identify what the participants are discussing (e.g. plans, activities, meetings, sports, studies, or subjects) "
+                                "and return the distinct topics in the JSON array matching the schema."
+                            ),
+                        },
+                    ]
+                    continue
+
                 last_error = None
                 break
 
@@ -820,23 +934,32 @@ OUTPUT RULES:
                     if cat == "CONTEXT_OVERFLOW":
                         raise
                     if cat == "INFERENCE_BACKEND_ERROR":
-                        # GBNF crash fallback: su retry aggiriamo il parser GBNF C++ di llama.cpp
-                        # usando una direttiva esplicita di formato JSON validata rigorosamente lato Python
-                        current_schema = None
+                        if len(document.bundles) > 3:
+                            # Su blocchi più grandi rilanciamo affinché lo scheduler di microchunking possa bisezionare
+                            raise
+                        # Su sotto-blocchi minimi (<= 3 messaggi) tentiamo un retry vincolato con budget compatto e seed incrementato
+                        current_topics = max(2, min(current_topics, 2))
+                        current_max_tokens = min(current_max_tokens or 384, 384)
+                        seed = (seed + 1) if seed is not None else 43
                         orig_u = messages[1].get("content", "") if len(messages) > 1 else ""
                         messages = [
-                            messages[0],
+                            {"role": "system", "content": _make_sys_prompt(current_topics)},
                             {
                                 "role": "user",
                                 "content": (
                                     f"{orig_u}\n\n"
-                                    "[CRITICAL FORMAT DIRECTIVE - LM STUDIO COMPATIBILITY]\n"
-                                    "Output ONLY a valid JSON object starting with { and ending with } conforming to schema:\n"
-                                    '{"topics": [{"label": "string", "short_description": "string", "evidence_ids": ["alias"]}]}\n'
-                                    "Do NOT output markdown fences, greetings, or text outside the JSON object."
+                                    "IMPORTANT: Extract at most 2 concise topics. Keep each short_description under 15 words "
+                                    "and list each evidence_id AT MOST ONCE (no duplicates)."
                                 ),
                             },
                         ]
+                        if on_retry_callback:
+                            try:
+                                on_retry_callback(attempt + 1, "gbnf_compact_retry")
+                            except Exception:
+                                pass
+                        time.sleep(0.3)
+                        continue
                     elif code and 400 <= code < 500 and code != 429:
                         raise
                     if cat in ("HTTP_INVALID_PARAMETERS", "INVALID_PARAMETERS", "HTTP_SCHEMA_REJECTED", "UNSUPPORTED_SCHEMA"):
@@ -937,11 +1060,37 @@ OUTPUT RULES:
 
                 if isinstance(exc, AiStructuredOutputError):
                     err_msg = str(exc)
+                    if "degenerazione ciclica" in err_msg or "loop di attrattore" in err_msg or "carattere ripetuto" in err_msg:
+                        if len(document.bundles) > 3:
+                            # Rilancia immediatamente per consentire la bisezione adattiva del microchunk
+                            raise
+                        current_topics = max(2, min(current_topics, 2))
+                        current_max_tokens = min(current_max_tokens or 384, 384)
+                        seed = (seed + 1) if seed is not None else 43
+                        orig_u = messages[1].get("content", "") if len(messages) > 1 else ""
+                        messages = [
+                            {"role": "system", "content": _make_sys_prompt(current_topics)},
+                            {
+                                "role": "user",
+                                "content": (
+                                    f"{orig_u}\n\n"
+                                    "IMPORTANT: Extract at most 2 concise topics. Keep each short_description under 15 words "
+                                    "and list each evidence_id AT MOST ONCE (no duplicates)."
+                                ),
+                            },
+                        ]
+                        if on_retry_callback:
+                            try:
+                                on_retry_callback(attempt + 1, "degenerate_compact_retry")
+                            except Exception:
+                                pass
+                        continue
+
                     obs_f = getattr(exc, "finish_reason", None) or finish_reason
                     if obs_f == "length" or "Unterminated string" in err_msg or "JSONDecodeError" in err_msg or "finish_reason=length" in err_msg:
                         headroom = max(0, context_length - input_est - DEFAULT_SAFETY_MARGIN_TOKENS)
-                        if headroom > (current_max_tokens or 1024):
-                            current_max_tokens = min(int((current_max_tokens or 1024) * 1.5), headroom)
+                        if headroom >= int((current_max_tokens or 1024) * 1.5):
+                            current_max_tokens = int((current_max_tokens or 1024) * 1.5)
                         else:
                             current_topics = max(2, current_topics // 2)
                             messages[0]["content"] = _make_sys_prompt(current_topics)
@@ -961,9 +1110,9 @@ OUTPUT RULES:
                         continue
                     else:
                         struct_msg = (
-                            f"CORRECTION DIRECTIVE: Your previous output was not valid JSON conforming to the schema. "
+                            f"CORRECTION DIRECTIVE: Your previous output had an issue: {err_msg}. "
                             f"Please provide ONLY valid JSON with a 'topics' array (max {current_topics} items), "
-                            f"each containing 'label', 'short_description', and 'evidence_ids'."
+                            f"each containing 'label', 'short_description', and 'evidence_ids' (distinct IDs, with NO duplicates within each topic)."
                         )
                         candidate_msgs = list(messages)
                         if response and getattr(response, "content", None):
@@ -1045,6 +1194,7 @@ OUTPUT RULES:
             "finish_reason": finish_reason,
             "http_status": 200,
             "operational_mode": is_op,
+            "serialization_format": SERIALIZATION_VERSION_COMPACT_JSONL if is_op else "json_verbose_v1",
             "evidence_citation_protocol": "deterministic_alias_v1" if use_aliases else "direct_evidence_id",
             "evidence_aliases_used": bool(use_aliases),
         }

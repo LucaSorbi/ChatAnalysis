@@ -87,6 +87,9 @@ addopts = [
     "--tb=short",
     "-m",
     "not smoke",
+    "-p",
+    "no:cacheprovider",
+    "--basetemp=output/pytest_temp",
 ]
 # Marker registrati
 markers = [

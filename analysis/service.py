@@ -47,7 +47,9 @@ from ai.chunking import (
     ChunkAnalysisOutcome,
     aggregate_topic_detection,
     aggregate_topic_discovery,
+    is_substantive_message_bundle,
     profile_document_for_analysis,
+    split_chunk_into_microchunks,
     split_document_into_chunks,
 )
 from ai.structured import (
@@ -98,6 +100,7 @@ from ai.models import (
     TopicQuery,
 )
 from ai.topics import (
+    PROMPT_VERSION_DISCOVERY_OPERATIONAL,
     TopicDetectionAnalyzer,
     TopicDiscoveryAnalyzer,
 )
@@ -722,25 +725,49 @@ class LocalTopicAnalysisService:
         operational_mode: bool,
         tracker: AnalysisProgressTracker,
         chunk_idx_1based: int,
+        depth: int = 0,
+        use_microchunks: bool = False,
     ) -> list[ChunkAnalysisOutcome]:
         """Esegue suddivisione controllata di un blocco che supera la finestra di contesto."""
-        mid = len(chunk.bundles) // 2
-        sub1 = ConversationEvidenceDocument(
-            document_id=f"{chunk.document_id}::sub::0",
-            bundles=chunk.bundles[:mid],
-            chat_id=chunk.chat_id,
-            source_name=chunk.source_name,
-        )
-        sub2 = ConversationEvidenceDocument(
-            document_id=f"{chunk.document_id}::sub::1",
-            bundles=chunk.bundles[mid:],
-            chat_id=chunk.chat_id,
-            source_name=chunk.source_name,
-        )
+        if depth == 0 and operational_mode and use_microchunks:
+            subs = list(split_chunk_into_microchunks(chunk, max_substantive_messages=8))
+            if len(subs) <= 1 and len(chunk.bundles) > 1:
+                mid = len(chunk.bundles) // 2
+                subs = [
+                    ConversationEvidenceDocument(
+                        document_id=f"{chunk.document_id}::sub::0",
+                        bundles=chunk.bundles[:mid],
+                        chat_id=chunk.chat_id,
+                        source_name=chunk.source_name,
+                    ),
+                    ConversationEvidenceDocument(
+                        document_id=f"{chunk.document_id}::sub::1",
+                        bundles=chunk.bundles[mid:],
+                        chat_id=chunk.chat_id,
+                        source_name=chunk.source_name,
+                    ),
+                ]
+        else:
+            mid = len(chunk.bundles) // 2
+            subs = [
+                ConversationEvidenceDocument(
+                    document_id=f"{chunk.document_id}::sub::0",
+                    bundles=chunk.bundles[:mid],
+                    chat_id=chunk.chat_id,
+                    source_name=chunk.source_name,
+                ),
+                ConversationEvidenceDocument(
+                    document_id=f"{chunk.document_id}::sub::1",
+                    bundles=chunk.bundles[mid:],
+                    chat_id=chunk.chat_id,
+                    source_name=chunk.source_name,
+                ),
+            ]
         outcomes: list[ChunkAnalysisOutcome] = []
-        for s_idx, sub in enumerate((sub1, sub2), start=1):
+        total_subs = len(subs)
+        for s_idx, sub in enumerate(subs, start=1):
             sub_display_idx = chunk_idx_1based + (s_idx - 1)
-            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/2", record_request=False)
+            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/{total_subs}", record_request=False)
             try:
                 res = analyzer.detect_topic(
                     document=sub,
@@ -763,6 +790,23 @@ class LocalTopicAnalysisService:
                 )
                 tracker.chunk_success(sub_display_idx, record_request=False)
             except Exception as s_exc:
+                if depth < 3 and len(sub.bundles) > 1 and isinstance(s_exc, (AiBackendRequestError, AnalysisInputTooLargeError, AiStructuredOutputError)):
+                    nested = self._process_subchunks_detection(
+                        chunk=sub,
+                        analyzer=analyzer,
+                        topic=topic,
+                        strategy=strategy,
+                        resolved_model=resolved_model,
+                        eff_temp=eff_temp,
+                        eff_seed=eff_seed,
+                        eff_max_tokens=eff_max_tokens,
+                        operational_mode=operational_mode,
+                        tracker=tracker,
+                        chunk_idx_1based=sub_display_idx,
+                        depth=depth + 1,
+                    )
+                    outcomes.extend(nested)
+                    continue
                 tracker.chunk_failed(sub_display_idx, str(s_exc))
                 outcomes.append(
                     ChunkAnalysisOutcome(
@@ -774,6 +818,245 @@ class LocalTopicAnalysisService:
                     )
                 )
         return outcomes
+
+    def _execute_microchunk_with_adaptive_fallback(
+        self,
+        sub: ConversationEvidenceDocument,
+        analyzer: TopicDiscoveryAnalyzer,
+        resolved_model: str,
+        eff_temp: float,
+        eff_seed: int | None,
+        chunk_target_topics: int,
+        tracker: AnalysisProgressTracker,
+        sub_display_idx: int,
+        eff_max_tokens: int | None,
+        depth: int = 0,
+        max_depth: int = 3,
+        parent_document_id: str = "",
+    ) -> tuple[DiscoveryChunkOutcome, TopicDiscoveryResult | None]:
+        """
+        Esegue un singolo microchunk con fallback adattivo per bisezione (divide-and-conquer)
+        fino a profondità massima di 3 livelli in caso di errori recuperabili (GBNF, troncamento, decode).
+        """
+        t_sub_start = time.perf_counter()
+        sub_attempts = 1
+        sub_eids = tuple(s.evidence_id for s in sub.all_evidence_sections)
+
+        def _on_sub_retry(att: int, r: str) -> None:
+            nonlocal sub_attempts
+            sub_attempts = max(sub_attempts, att + 1)
+            tracker.chunk_retry(sub_display_idx, f"sub_d{depth}:{r}")
+
+        micro_target_topics = min(chunk_target_topics, max(2, min(5, len(sub.bundles))))
+        micro_max_tokens = min(eff_max_tokens or self.default_max_tokens or 640, 640 if depth == 0 else 448)
+        try:
+            res = analyzer.discover_topics(
+                document=sub,
+                model_id=resolved_model,
+                temperature=eff_temp,
+                seed=eff_seed,
+                timeout_seconds=self.timeout_seconds,
+                max_topics=micro_target_topics,
+                max_tokens=micro_max_tokens,
+                operational_mode=True,
+                context_length=self.context_length,
+                on_retry_callback=_on_sub_retry,
+            )
+            dur = round(time.perf_counter() - t_sub_start, 3)
+            obs_finish = res.metadata.get("finish_reason")
+            num_extracted = len(res.topics)
+            thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
+            sub_diag = ChunkDiagnosticRecord(
+                chunk_index=sub_display_idx - 1,
+                chunk_id=sub.document_id,
+                status=ChunkLifecycleStatus.SUCCESS.value,
+                thematic_status=thematic_st,
+                attempts=int(res.metadata.get("retries", 0)) + 1,
+                duration_seconds=dur,
+                model_id=str(res.metadata.get("model") or resolved_model),
+                http_status=200,
+                finish_reason=obs_finish,
+                prompt_tokens=res.metadata.get("prompt_tokens"),
+                completion_tokens=res.metadata.get("completion_tokens"),
+                error_type=None,
+                diagnostic_category="NONE",
+                failure_phase="completed",
+                error_detail=None if num_extracted > 0 else "Elaborato con successo ma senza argomenti estratti",
+                json_valid=True,
+                schema_valid=True,
+                evidence_valid=True,
+                checkpoint_saved=False,
+                topics_count=num_extracted,
+            )
+            outcome = DiscoveryChunkOutcome(
+                chunk_id=sub.document_id,
+                status="SUCCESS",
+                thematic_status=thematic_st,
+                result=res,
+                evidence_ids=sub_eids,
+                diagnostic=sub_diag,
+                chunk_index=sub_display_idx - 1,
+                attempts=sub_diag.attempts,
+                duration_seconds=dur,
+            )
+            return outcome, res
+        except Exception as s_exc:
+            if isinstance(s_exc, PROGRAMMING_ERRORS):
+                tracker.chunk_failed(sub_display_idx, str(s_exc))
+                tracker.fail(str(s_exc))
+                raise
+
+            cat, phase, safe_desc = classify_discovery_exception(s_exc)
+
+            # Valuta se l'errore è recuperabile mediante suddivisione adattiva
+            recoverable_cats = {
+                ChunkDiagnosticCategory.HTTP_CONTEXT_OVERFLOW.value,
+                ChunkDiagnosticCategory.GBNF_GRAMMAR_ERROR.value,
+                ChunkDiagnosticCategory.DEGENERATE_OUTPUT.value,
+                ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value,
+                ChunkDiagnosticCategory.JSON_DECODE_ERROR.value,
+                ChunkDiagnosticCategory.SCHEMA_VALIDATION_ERROR.value,
+                ChunkDiagnosticCategory.DUPLICATE_EVIDENCE_ID.value,
+                ChunkDiagnosticCategory.INVALID_EVIDENCE_ID.value,
+                ChunkDiagnosticCategory.RETRY_EXHAUSTED.value,
+                ChunkDiagnosticCategory.UNKNOWN_ERROR.value,
+            }
+            can_bisect = (
+                (cat in recoverable_cats or isinstance(s_exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, AiBackendRequestError)))
+                and len(sub.bundles) > 1
+                and depth < max_depth
+            )
+
+            if can_bisect:
+                mid = len(sub.bundles) // 2
+                half_a = ConversationEvidenceDocument(
+                    document_id=f"{sub.document_id}::d{depth + 1}a",
+                    bundles=sub.bundles[:mid],
+                    chat_id=sub.chat_id,
+                    source_name=sub.source_name,
+                )
+                half_b = ConversationEvidenceDocument(
+                    document_id=f"{sub.document_id}::d{depth + 1}b",
+                    bundles=sub.bundles[mid:],
+                    chat_id=sub.chat_id,
+                    source_name=sub.source_name,
+                )
+                logger.info(
+                    "Bisezione adattiva microchunk %s (profondità %d/%d) a causa di %s",
+                    sub.document_id, depth + 1, max_depth, cat,
+                )
+                half_topics = max(2, min(4, chunk_target_topics // 2))
+                out_a, res_a = self._execute_microchunk_with_adaptive_fallback(
+                    sub=half_a,
+                    analyzer=analyzer,
+                    resolved_model=resolved_model,
+                    eff_temp=eff_temp,
+                    eff_seed=eff_seed,
+                    chunk_target_topics=half_topics,
+                    tracker=tracker,
+                    sub_display_idx=sub_display_idx,
+                    eff_max_tokens=eff_max_tokens,
+                    depth=depth + 1,
+                    max_depth=max_depth,
+                    parent_document_id=parent_document_id,
+                )
+                if res_a is not None:
+                    out_b, res_b = self._execute_microchunk_with_adaptive_fallback(
+                        sub=half_b,
+                        analyzer=analyzer,
+                        resolved_model=resolved_model,
+                        eff_temp=eff_temp,
+                        eff_seed=eff_seed,
+                        chunk_target_topics=half_topics,
+                        tracker=tracker,
+                        sub_display_idx=sub_display_idx,
+                        eff_max_tokens=eff_max_tokens,
+                        depth=depth + 1,
+                        max_depth=max_depth,
+                        parent_document_id=parent_document_id,
+                    )
+                    if res_b is not None:
+                        # Entrambe le metà riuscite: consolidamento delle due parti
+                        agg_sub = aggregate_topic_discovery(
+                            chunk_results=[res_a, res_b],
+                            parent_document_id=parent_document_id or sub.document_id,
+                            max_topics=chunk_target_topics,
+                        )
+                        dur = round(time.perf_counter() - t_sub_start, 3)
+                        tot_att = (out_a.attempts or 1) + (out_b.attempts or 1)
+                        sub_diag = ChunkDiagnosticRecord(
+                            chunk_index=sub_display_idx - 1,
+                            chunk_id=sub.document_id,
+                            status=ChunkLifecycleStatus.SUCCESS.value,
+                            thematic_status="TOPICS_EXTRACTED" if agg_sub.topics else "EMPTY_TOPICS",
+                            attempts=tot_att,
+                            duration_seconds=dur,
+                            model_id=resolved_model,
+                            http_status=200,
+                            finish_reason="stop",
+                            prompt_tokens=(res_a.metadata.get("prompt_tokens") or 0) + (res_b.metadata.get("prompt_tokens") or 0),
+                            completion_tokens=(res_a.metadata.get("completion_tokens") or 0) + (res_b.metadata.get("completion_tokens") or 0),
+                            error_type=None,
+                            diagnostic_category="NONE",
+                            failure_phase="completed_via_adaptive_bisection",
+                            error_detail=None,
+                            json_valid=True,
+                            schema_valid=True,
+                            evidence_valid=True,
+                            checkpoint_saved=False,
+                            topics_count=len(agg_sub.topics),
+                        )
+                        outcome = DiscoveryChunkOutcome(
+                            chunk_id=sub.document_id,
+                            status="SUCCESS",
+                            thematic_status=sub_diag.thematic_status,
+                            result=agg_sub,
+                            evidence_ids=sub_eids,
+                            diagnostic=sub_diag,
+                            chunk_index=sub_display_idx - 1,
+                            attempts=tot_att,
+                            duration_seconds=dur,
+                        )
+                        return outcome, agg_sub
+
+            dur = round(time.perf_counter() - t_sub_start, 3)
+            is_val_err = isinstance(s_exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
+            eff_sub_att = int(getattr(s_exc, "attempts", sub_attempts))
+            sub_diag = ChunkDiagnosticRecord(
+                chunk_index=sub_display_idx - 1,
+                chunk_id=sub.document_id,
+                status=ChunkLifecycleStatus.FAILED.value,
+                thematic_status="NONE",
+                attempts=eff_sub_att,
+                duration_seconds=dur,
+                model_id=resolved_model,
+                http_status=getattr(s_exc, "status_code", None),
+                finish_reason=None,
+                prompt_tokens=None,
+                completion_tokens=None,
+                error_type=type(s_exc).__name__,
+                diagnostic_category=cat,
+                failure_phase=phase,
+                error_detail=safe_desc,
+                json_valid=(cat not in (ChunkDiagnosticCategory.JSON_DECODE_ERROR.value, ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value)),
+                schema_valid=False,
+                evidence_valid=False,
+                checkpoint_saved=False,
+                topics_count=0,
+            )
+            outcome = DiscoveryChunkOutcome(
+                chunk_id=sub.document_id,
+                status="FAILED",
+                result=None,
+                evidence_ids=sub_eids,
+                error_type=type(s_exc).__name__,
+                safe_error_code=cat,
+                diagnostic=sub_diag,
+                chunk_index=sub_display_idx - 1,
+                attempts=eff_sub_att,
+                duration_seconds=dur,
+            )
+            return outcome, None
 
     def _process_subchunks_discovery(
         self,
@@ -792,24 +1075,28 @@ class LocalTopicAnalysisService:
         parent_document_id: str = "",
         total_planned_chunks: int = 1,
         eff_max_tokens: int | None = None,
+        origin: str = "",
+        run_id: str = "",
     ) -> tuple[list[DiscoveryChunkOutcome], list[TopicDiscoveryResult]]:
-        """Esegue suddivisione controllata di un blocco di discovery oversize con persistenza incrementale e recupero dei sotto-blocchi."""
-        mid = len(chunk.bundles) // 2
-        sub1 = ConversationEvidenceDocument(
-            document_id=f"{chunk.document_id}::sub::0",
-            bundles=chunk.bundles[:mid],
-            chat_id=chunk.chat_id,
-            source_name=chunk.source_name,
-        )
-        sub2 = ConversationEvidenceDocument(
-            document_id=f"{chunk.document_id}::sub::1",
-            bundles=chunk.bundles[mid:],
-            chat_id=chunk.chat_id,
-            source_name=chunk.source_name,
-        )
+        """Esegue suddivisione preventiva e adattiva di un blocco di discovery con persistenza incrementale e recupero dei sotto-blocchi."""
+        subs = split_chunk_into_microchunks(chunk, max_substantive_messages=8)
+        if len(subs) <= 1 and len(chunk.bundles) > 1:
+            mid = len(chunk.bundles) // 2
+            sub1 = ConversationEvidenceDocument(
+                document_id=f"{chunk.document_id}::sub::0",
+                bundles=chunk.bundles[:mid],
+                chat_id=chunk.chat_id,
+                source_name=chunk.source_name,
+            )
+            sub2 = ConversationEvidenceDocument(
+                document_id=f"{chunk.document_id}::sub::1",
+                bundles=chunk.bundles[mid:],
+                chat_id=chunk.chat_id,
+                source_name=chunk.source_name,
+            )
+            subs = [sub1, sub2]
         outcomes: list[DiscoveryChunkOutcome] = []
         results: list[TopicDiscoveryResult] = []
-        subs = (sub1, sub2)
         total_subs = len(subs)
 
         for s_idx, sub in enumerate(subs, start=1):
@@ -852,10 +1139,13 @@ class LocalTopicAnalysisService:
 
             if valid_cached_res is not None:
                 obs_finish = valid_cached_res.metadata.get("finish_reason")
+                num_extracted = len(valid_cached_res.topics)
+                thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
                 sub_diag = ChunkDiagnosticRecord(
                     chunk_index=sub_display_idx - 1,
                     chunk_id=sub.document_id,
                     status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
+                    thematic_status=thematic_st,
                     attempts=0,
                     duration_seconds=0.0,
                     model_id=resolved_model,
@@ -871,11 +1161,13 @@ class LocalTopicAnalysisService:
                     schema_valid=True,
                     evidence_valid=True,
                     checkpoint_saved=True,
+                    topics_count=num_extracted,
                 )
                 outcomes.append(
                     DiscoveryChunkOutcome(
                         chunk_id=sub.document_id,
                         status="RECOVERED_FROM_CHECKPOINT",
+                        thematic_status=thematic_st,
                         result=valid_cached_res,
                         evidence_ids=sub_eids,
                         diagnostic=sub_diag,
@@ -888,30 +1180,35 @@ class LocalTopicAnalysisService:
                 tracker.chunk_success(sub_display_idx, record_request=False)
                 continue
 
-            # Esecuzione inferenza sul sotto-blocco mancante
-            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/{total_subs}", record_request=False)
-            t_sub_start = time.perf_counter()
-            sub_attempts = 1
+            # Esecuzione inferenza sul microchunk mancante
+            tracker.start_chunk(sub_display_idx, phase=f"Analisi micro-chunk {s_idx}/{total_subs}", record_request=False)
+            sub_outcome, sub_res = self._execute_microchunk_with_adaptive_fallback(
+                sub=sub,
+                analyzer=analyzer,
+                resolved_model=resolved_model,
+                eff_temp=eff_temp,
+                eff_seed=eff_seed,
+                chunk_target_topics=chunk_target_topics,
+                tracker=tracker,
+                sub_display_idx=sub_display_idx,
+                eff_max_tokens=eff_max_tokens,
+                depth=0,
+                max_depth=3,
+                parent_document_id=parent_document_id or chunk.document_id,
+            )
 
-            def _on_sub_retry(att: int, r: str) -> None:
-                nonlocal sub_attempts
-                sub_attempts = max(sub_attempts, att + 1)
-                tracker.chunk_retry(sub_display_idx, f"sub{s_idx}:{r}")
-
-            try:
-                res = analyzer.discover_topics(
-                    document=sub,
-                    model_id=resolved_model,
-                    temperature=eff_temp,
-                    seed=eff_seed,
-                    timeout_seconds=self.timeout_seconds,
-                    max_topics=chunk_target_topics,
-                    max_tokens=eff_max_tokens or self.default_max_tokens or 1280,
-                    operational_mode=True,
-                    context_length=self.context_length,
-                    on_retry_callback=_on_sub_retry,
-                )
-                dur = round(time.perf_counter() - t_sub_start, 3)
+            if sub_res is not None:
+                if origin or run_id:
+                    s_m = dict(sub_res.metadata)
+                    if origin:
+                        s_m["origin"] = origin
+                    if run_id:
+                        s_m["run_id"] = run_id
+                    sub_res = TopicDiscoveryResult(
+                        topics=sub_res.topics,
+                        provenance_document_id=sub_res.provenance_document_id,
+                        metadata=s_m,
+                    )
                 chk_saved = False
                 if chk_store is not None and doc_fp and cfg_fp:
                     try:
@@ -922,7 +1219,7 @@ class LocalTopicAnalysisService:
                             parent_chunk_index=parent_chunk_index,
                             subchunk_index=sub_idx_0based,
                             total_subchunks=total_subs,
-                            result=res,
+                            result=sub_res,
                             subchunk_id=sub.document_id,
                             evidence_ids=sub_eids,
                             total_planned_chunks=total_planned_chunks,
@@ -934,83 +1231,17 @@ class LocalTopicAnalysisService:
                     except Exception as s_save_err:
                         logger.warning("Salvataggio sotto-blocco %s su SQLite non riuscito: %s", sub.document_id, s_save_err)
 
-                obs_finish = res.metadata.get("finish_reason")
-                sub_diag = ChunkDiagnosticRecord(
-                    chunk_index=sub_display_idx - 1,
-                    chunk_id=sub.document_id,
-                    status=ChunkLifecycleStatus.SUCCESS.value,
-                    attempts=int(res.metadata.get("retries", 0)) + 1,
-                    duration_seconds=dur,
-                    model_id=str(res.metadata.get("model") or resolved_model),
-                    http_status=200,
-                    finish_reason=obs_finish,
-                    prompt_tokens=res.metadata.get("prompt_tokens"),
-                    completion_tokens=res.metadata.get("completion_tokens"),
-                    error_type=None,
-                    diagnostic_category="NONE",
-                    failure_phase="completed",
-                    error_detail=None,
-                    json_valid=True,
-                    schema_valid=True,
-                    evidence_valid=True,
-                    checkpoint_saved=chk_saved,
-                )
-                outcomes.append(
-                    DiscoveryChunkOutcome(
-                        chunk_id=sub.document_id,
-                        status="SUCCESS",
-                        result=res,
-                        evidence_ids=sub_eids,
-                        diagnostic=sub_diag,
-                        chunk_index=sub_display_idx - 1,
-                        attempts=int(res.metadata.get("retries", 0)) + 1,
-                        duration_seconds=dur,
-                    )
-                )
-                results.append(res)
+                if sub_outcome.diagnostic:
+                    sub_outcome.diagnostic.checkpoint_saved = chk_saved
+                outcomes.append(sub_outcome)
+                results.append(sub_res)
                 tracker.chunk_success(sub_display_idx, record_request=False)
-            except Exception as s_exc:
-                if isinstance(s_exc, PROGRAMMING_ERRORS):
-                    tracker.chunk_failed(sub_display_idx, str(s_exc))
-                    tracker.fail(str(s_exc))
-                    raise
-                cat, phase, safe_desc = classify_discovery_exception(s_exc)
-                is_val_err = isinstance(s_exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
-                tracker.chunk_failed(sub_display_idx, str(s_exc), is_protocol_or_validation=is_val_err)
-                eff_sub_att = int(getattr(s_exc, "attempts", sub_attempts))
-                sub_diag = ChunkDiagnosticRecord(
-                    chunk_index=sub_display_idx - 1,
-                    chunk_id=sub.document_id,
-                    status=ChunkLifecycleStatus.FAILED.value,
-                    attempts=eff_sub_att,
-                    duration_seconds=0.0,
-                    model_id=resolved_model,
-                    http_status=getattr(s_exc, "status_code", None),
-                    finish_reason=None,
-                    prompt_tokens=None,
-                    completion_tokens=None,
-                    error_type=type(s_exc).__name__,
-                    diagnostic_category=cat,
-                    failure_phase=phase,
-                    error_detail=safe_desc,
-                    json_valid=(cat not in (ChunkDiagnosticCategory.JSON_DECODE_ERROR.value, ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value)),
-                    schema_valid=False,
-                    evidence_valid=False,
-                    checkpoint_saved=False,
-                )
-                outcomes.append(
-                    DiscoveryChunkOutcome(
-                        chunk_id=sub.document_id,
-                        status="FAILED",
-                        result=None,
-                        evidence_ids=sub_eids,
-                        error_type=type(s_exc).__name__,
-                        safe_error_code=cat,
-                        diagnostic=sub_diag,
-                        chunk_index=sub_display_idx - 1,
-                        attempts=eff_sub_att,
-                        duration_seconds=0.0,
-                    )
+            else:
+                outcomes.append(sub_outcome)
+                tracker.chunk_failed(
+                    sub_display_idx,
+                    sub_outcome.diagnostic.error_detail if sub_outcome.diagnostic else "Fallimento microchunk",
+                    is_protocol_or_validation=False,
                 )
 
         if len(results) == total_subs and chk_store is not None and doc_fp and cfg_fp:
@@ -1020,6 +1251,29 @@ class LocalTopicAnalysisService:
                     parent_document_id=parent_document_id or chunk.document_id,
                     max_topics=chunk_target_topics,
                 )
+                # Guardia fail-closed sulla provenienza (Audit 27/10/2026):
+                # un blocco padre consolidato non può essere marcato LIVE_LM_STUDIO se uno dei
+                # sotto-blocchi recuperati da checkpoint aveva origine mancante o non coincidente.
+                recovered_sub_origins = [
+                    (o.result.metadata.get("origin") if o.result and isinstance(o.result.metadata, Mapping) else None)
+                    for o in outcomes
+                    if o.status == "RECOVERED_FROM_CHECKPOINT"
+                ]
+                all_recovered_subs_match_origin = all(
+                    bool(ro) and ro == origin for ro in recovered_sub_origins
+                )
+                eff_parent_origin = origin if (origin and all_recovered_subs_match_origin) else ""
+                if eff_parent_origin or run_id:
+                    agg_m = dict(aggregated_parent.metadata)
+                    if eff_parent_origin:
+                        agg_m["origin"] = eff_parent_origin
+                    if run_id:
+                        agg_m["run_id"] = run_id
+                    aggregated_parent = TopicDiscoveryResult(
+                        topics=aggregated_parent.topics,
+                        provenance_document_id=aggregated_parent.provenance_document_id,
+                        metadata=agg_m,
+                    )
                 chk_store.save_chunk(
                     document_id=parent_document_id or chunk.document_id,
                     document_fingerprint=doc_fp,
@@ -1030,6 +1284,8 @@ class LocalTopicAnalysisService:
                     analysis_type="discovery",
                     model_id=resolved_model,
                     prompt_version="discovery_operational",
+                    origin=eff_parent_origin,
+                    run_id=run_id,
                 )
             except Exception as agg_save_err:
                 logger.warning("Salvataggio aggregato blocco padre %d non riuscito: %s", parent_chunk_index, agg_save_err)
@@ -1204,19 +1460,43 @@ class LocalTopicAnalysisService:
                         chunk_attempts = max(chunk_attempts, att + 1)
 
                     try:
-                        result = analyzer.detect_topic(
-                            document=chunks[0],
-                            topic=topic,
-                            strategy=strategy,
-                            model_id=resolved_model,
-                            temperature=eff_temp,
-                            seed=eff_seed,
-                            timeout_seconds=self.timeout_seconds,
-                            max_tokens=eff_max_tokens,
-                            operational_mode=operational_mode,
-                            context_length=self.context_length,
-                            on_retry_callback=_on_single_detect_retry,
-                        )
+                        is_live_lms_det = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
+                        subst_cnt0 = sum(1 for b in chunks[0].bundles if is_substantive_message_bundle(b))
+                        if operational_mode and is_live_lms_det and subst_cnt0 > 8 and len(chunks[0].bundles) > 1:
+                            sub_outcomes = self._process_subchunks_detection(
+                                chunk=chunks[0],
+                                analyzer=analyzer,
+                                topic=topic,
+                                strategy=strategy,
+                                resolved_model=resolved_model,
+                                eff_temp=eff_temp,
+                                eff_seed=eff_seed,
+                                eff_max_tokens=eff_max_tokens,
+                                operational_mode=operational_mode,
+                                tracker=tracker,
+                                chunk_idx_1based=1,
+                                use_microchunks=True,
+                            )
+                            result = aggregate_topic_detection(
+                                outcomes=sub_outcomes,
+                                topic=topic,
+                                parent_document_id=document.document_id,
+                                expected_chunk_count=len(sub_outcomes),
+                            )
+                        else:
+                            result = analyzer.detect_topic(
+                                document=chunks[0],
+                                topic=topic,
+                                strategy=strategy,
+                                model_id=resolved_model,
+                                temperature=eff_temp,
+                                seed=eff_seed,
+                                timeout_seconds=self.timeout_seconds,
+                                max_tokens=eff_max_tokens,
+                                operational_mode=operational_mode,
+                                context_length=self.context_length,
+                                on_retry_callback=_on_single_detect_retry,
+                            )
                         dur = round(time.perf_counter() - t_chunk_start, 3)
                         tracker.chunk_success(1, record_request=False)
                         tracker.complete("Topic Detection completata.")
@@ -1620,11 +1900,12 @@ class LocalTopicAnalysisService:
                             or "Unterminated string" in str(fatal_err)
                             or "JSONDecodeError" in str(fatal_err)
                             or "prima del completamento" in str(fatal_err)
+                            or "degenerazione ciclica" in str(fatal_err)
                         )
                     )
                     is_context_overflow = (
                         isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
-                        and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
+                        and getattr(fatal_err, "error_category", None) in ("CONTEXT_OVERFLOW", "INFERENCE_BACKEND_ERROR")
                     )
                     if (is_context_overflow or is_truncation) and len(chunk.bundles) > 1:
                         tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
@@ -1643,8 +1924,9 @@ class LocalTopicAnalysisService:
                         )
                         outcomes.extend(sub_outcomes)
                         for so in sub_outcomes:
-                            if so.diagnostic:
-                                all_chunk_diagnostics.append(so.diagnostic)
+                            diag_obj = getattr(so, "diagnostic", None)
+                            if diag_obj:
+                                all_chunk_diagnostics.append(diag_obj)
                     else:
                         diag = ChunkDiagnosticRecord(
                             chunk_index=idx,
@@ -1764,7 +2046,7 @@ class LocalTopicAnalysisService:
         if failed_count == 0:
             tracker.complete(f"Topic Detection completata: {completed_count}/{total_units} blocchi analizzati.")
             det_status = "SUCCESS"
-            if chk_store is not None and doc_fp and cfg_fp:
+            if self.enable_checkpointing and chk_store is not None and doc_fp and cfg_fp:
                 chk_store.clear_checkpoint(doc_fp, cfg_fp)
         else:
             tracker.partial(f"Topic Detection completata parzialmente: {completed_count}/{total_units} blocchi analizzati.")
@@ -1772,9 +2054,10 @@ class LocalTopicAnalysisService:
 
         latency = round(time.perf_counter() - start_time, 3)
         now_ts = datetime.now(timezone.utc).isoformat()
+        is_live_lms_final = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
         run_meta = TopicAnalysisRunMetadata(
             run_id=run_id,
-            origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
+            origin=AnalysisOrigin.LIVE_LM_STUDIO if is_live_lms_final else AnalysisOrigin.MOCK_INSPECTION,
             model=resolved_model,
             requested_model=(model_name or "").strip() or self.default_model,
             latency_seconds=latency,
@@ -2052,8 +2335,13 @@ class LocalTopicAnalysisService:
                     tracker.complete("Topic Discovery completata da checkpoint: 1/1 blocchi recuperati.")
                 else:
                     existing_sub0 = chk_store.get_subchunks(doc_fp, cfg_fp, parent_chunk_index=0) if chk_store else []
-                    if existing_sub0 and len(chunks[0].bundles) > 1:
-                        tracker.split_chunk(1, subchunks_count=2, failed_prior_request=False)
+                    substantive_count0 = sum(1 for b in chunks[0].bundles if is_substantive_message_bundle(b))
+                    if (substantive_count0 > 8 or existing_sub0) and len(chunks[0].bundles) > 1:
+                        planned_subs = split_chunk_into_microchunks(chunks[0], max_substantive_messages=8)
+                        total_planned_subs = len(planned_subs) if len(planned_subs) > 1 else 2
+                        tracker.split_chunk(1, subchunks_count=total_planned_subs, failed_prior_request=False)
+                        is_live_lms = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
+                        eff_origin_s = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms else AnalysisOrigin.MOCK_INSPECTION.value
                         sub_outs, sub_res = self._process_subchunks_discovery(
                             chunk=chunks[0],
                             analyzer=analyzer,
@@ -2070,6 +2358,8 @@ class LocalTopicAnalysisService:
                             parent_document_id=document.document_id,
                             total_planned_chunks=1,
                             eff_max_tokens=eff_max_tokens,
+                            origin=eff_origin_s,
+                            run_id=run_id,
                         )
                         chunk_outcomes.extend(sub_outs)
                         for so in sub_outs:
@@ -2119,7 +2409,18 @@ class LocalTopicAnalysisService:
                             dur = round(time.perf_counter() - t_single_start, 3)
                             analyzed_evidence_ids.update(total_evidence_ids)
                             tracker.chunk_success(1, record_request=False)
-                            tracker.complete("Topic Discovery completata.")
+                            num_extracted = len(disc_res.topics)
+                            if num_extracted > 0:
+                                tracker.complete(f"Topic Discovery completata: emersi {num_extracted} argomenti.")
+                                disc_status = "COMPLETE"
+                            else:
+                                is_substantial = total_evidence_count >= 10
+                                if is_substantial:
+                                    tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi.")
+                                    disc_status = "COMPLETE_EMPTY_UNVERIFIED"
+                                else:
+                                    tracker.complete("Topic Discovery completata: nessun argomento emerso.")
+                                    disc_status = "COMPLETE_NO_TOPICS"
                             chk_saved = False
                             eff_origin_val = (
                                 AnalysisOrigin.LIVE_LM_STUDIO.value
@@ -2153,10 +2454,12 @@ class LocalTopicAnalysisService:
                                 except Exception as chk_err:
                                     tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
 
+                            thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
                             diag = ChunkDiagnosticRecord(
                                 chunk_index=0,
                                 chunk_id=chunks[0].document_id,
                                 status=ChunkLifecycleStatus.SUCCESS.value,
+                                thematic_status=thematic_st,
                                 attempts=int(disc_res.metadata.get("retries", 0)) + 1,
                                 duration_seconds=dur,
                                 model_id=str(disc_res.metadata.get("model") or resolved_model),
@@ -2166,18 +2469,20 @@ class LocalTopicAnalysisService:
                                 completion_tokens=disc_res.metadata.get("completion_tokens"),
                                 error_type=None,
                                 diagnostic_category="NONE",
-                                failure_phase="completed",
-                                error_detail=None,
+                                failure_phase="completed" if num_extracted > 0 else "empty_output",
+                                error_detail=None if num_extracted > 0 else "Elaborato con successo ma senza argomenti estratti",
                                 json_valid=True,
                                 schema_valid=True,
                                 evidence_valid=True,
                                 checkpoint_saved=chk_saved,
+                                topics_count=num_extracted,
                             )
                             all_chunk_diagnostics.append(diag)
                             chunk_outcomes.append(
                                 DiscoveryChunkOutcome(
                                     chunk_id=chunks[0].document_id,
                                     status="SUCCESS",
+                                    thematic_status=thematic_st,
                                     result=disc_res,
                                     evidence_ids=tuple(total_evidence_ids),
                                     diagnostic=diag,
@@ -2217,6 +2522,8 @@ class LocalTopicAnalysisService:
                             )
                             if (is_context_overflow or is_truncation) and len(chunks[0].bundles) > 1:
                                 tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                                is_live_lms_s = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
+                                eff_origin_s = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms_s else AnalysisOrigin.MOCK_INSPECTION.value
                                 sub_outs, sub_res = self._process_subchunks_discovery(
                                     chunk=chunks[0],
                                     analyzer=analyzer,
@@ -2232,6 +2539,9 @@ class LocalTopicAnalysisService:
                                     parent_chunk_index=0,
                                     parent_document_id=document.document_id,
                                     total_planned_chunks=1,
+                                    eff_max_tokens=eff_max_tokens,
+                                    origin=eff_origin_s,
+                                    run_id=run_id,
                                 )
                                 chunk_outcomes.extend(sub_outs)
                                 for so in sub_outs:
@@ -2278,9 +2588,24 @@ class LocalTopicAnalysisService:
 
                 latency = round(time.perf_counter() - start_time, 3)
                 now_ts = datetime.now(timezone.utc).isoformat()
+                is_live_lms_single = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
+                has_unverified_recovered_single = False
+                recovered_origins_single: set[str] = set()
+                if recovered_chunk_count > 0 and 0 in cached_discovery_results:
+                    c0_orig = (cached_discovery_results[0].metadata.get("origin") if isinstance(cached_discovery_results[0].metadata, Mapping) else None) or ""
+                    recovered_origins_single.add(c0_orig)
+                    if c0_orig != AnalysisOrigin.LIVE_LM_STUDIO.value:
+                        has_unverified_recovered_single = True
+                for co in chunk_outcomes:
+                    if co.status == "RECOVERED_FROM_CHECKPOINT":
+                        co_orig = (co.result.metadata.get("origin") if co.result and isinstance(co.result.metadata, Mapping) else None) or ""
+                        recovered_origins_single.add(co_orig)
+                        if co_orig != AnalysisOrigin.LIVE_LM_STUDIO.value:
+                            has_unverified_recovered_single = True
+                is_verified_live_single = is_live_lms_single and not has_unverified_recovered_single
                 run_meta = TopicAnalysisRunMetadata(
                     run_id=run_id,
-                    origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
+                    origin=AnalysisOrigin.LIVE_LM_STUDIO if is_verified_live_single else AnalysisOrigin.MOCK_INSPECTION,
                     model=resolved_model,
                     requested_model=(model_name or "").strip() or self.default_model,
                     latency_seconds=latency,
@@ -2316,11 +2641,15 @@ class LocalTopicAnalysisService:
                     end_timestamp=now_ts,
                     status=disc_status,
                     error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
+                    original_chunk_count=1,
+                    microchunk_count=int(len(all_chunk_diagnostics)),
                 )
 
                 meta = dict(disc_res.metadata)
                 meta.update(run_meta.to_dict())
                 meta["git_commit"] = current_git_commit
+                meta["original_chunk_count"] = 1
+                meta["microchunk_count"] = int(len(all_chunk_diagnostics))
                 meta["error_count"] = int(failed_count)
                 meta["chunk_count"] = int(total_units)
                 meta["expected_chunk_count"] = int(total_units)
@@ -2334,6 +2663,24 @@ class LocalTopicAnalysisService:
                 meta["analyzed_evidence_count"] = int(len(analyzed_evidence_ids))
                 meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
                 meta["evidence_citation_protocol"] = "deterministic_alias_v1"
+                if is_verified_live_single:
+                    meta["provenance_verified"] = True
+                    meta["authoritative_execution_certified"] = True
+                    meta["chain_of_custody_intact"] = True
+                elif is_live_lms_single and has_unverified_recovered_single:
+                    meta["origin"] = (
+                        AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value
+                        if AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value in recovered_origins_single
+                        else None
+                    )
+                    meta["provenance_verified"] = False
+                    meta["authoritative_execution_certified"] = False
+                    meta["chain_of_custody_intact"] = False
+                    meta["attestation_level"] = (
+                        AttestationLevel.PROVENANCE_NOT_VERIFIED.value
+                        if AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value in recovered_origins_single
+                        else AttestationLevel.UNATTESTED.value
+                    )
                 if not should_preserve_raw and "raw_response" in meta:
                     del meta["raw_response"]
 
@@ -2342,7 +2689,7 @@ class LocalTopicAnalysisService:
                     provenance_document_id=document.document_id,
                     metadata=meta,
                 )
-                if isinstance(target_client, LmStudioClient):
+                if is_verified_live_single:
                     self._authoritative_live_run_ids.add(run_id)
                 self._record_authoritative_discovery_run(document.document_id, final_res)
                 return final_res
@@ -2360,10 +2707,13 @@ class LocalTopicAnalysisService:
                 chunk_eids = {s.evidence_id for s in chunk.all_evidence_sections}
                 if idx in cached_discovery_results:
                     res = cached_discovery_results[idx]
+                    num_extracted = len(res.topics)
+                    thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
                     diag = ChunkDiagnosticRecord(
                         chunk_index=idx,
                         chunk_id=chunk.document_id,
                         status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
+                        thematic_status=thematic_st,
                         attempts=0,
                         duration_seconds=0.0,
                         model_id=resolved_model,
@@ -2374,17 +2724,19 @@ class LocalTopicAnalysisService:
                         error_type=None,
                         diagnostic_category="NONE",
                         failure_phase="recovered",
-                        error_detail="Recuperato con successo da checkpoint SQLite",
+                        error_detail="Recuperato con successo da checkpoint SQLite" if num_extracted > 0 else "Recuperato da checkpoint SQLite (output tematico vuoto)",
                         json_valid=True,
                         schema_valid=True,
                         evidence_valid=True,
                         checkpoint_saved=True,
+                        topics_count=num_extracted,
                     )
                     all_chunk_diagnostics.append(diag)
                     chunk_outcomes.append(
                         DiscoveryChunkOutcome(
                             chunk_id=chunk.document_id,
-                            status="SUCCESS",
+                            status="RECOVERED_FROM_CHECKPOINT",
+                            thematic_status=thematic_st,
                             result=res,
                             evidence_ids=tuple(chunk_eids),
                             diagnostic=diag,
@@ -2399,8 +2751,13 @@ class LocalTopicAnalysisService:
                     continue
 
                 existing_subs = chk_store.get_subchunks(doc_fp, cfg_fp, parent_chunk_index=idx) if chk_store else []
-                if existing_subs and len(chunk.bundles) > 1:
-                    tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=False)
+                substantive_count = sum(1 for b in chunk.bundles if is_substantive_message_bundle(b))
+                if (substantive_count > 8 or existing_subs) and len(chunk.bundles) > 1:
+                    planned_subs = split_chunk_into_microchunks(chunk, max_substantive_messages=8)
+                    total_planned_subs = len(planned_subs) if len(planned_subs) > 1 else 2
+                    tracker.split_chunk(current_tracker_idx, subchunks_count=total_planned_subs, failed_prior_request=False)
+                    is_live_lms = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
+                    eff_origin_s = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms else AnalysisOrigin.MOCK_INSPECTION.value
                     sub_outs, sub_res = self._process_subchunks_discovery(
                         chunk=chunk,
                         analyzer=analyzer,
@@ -2416,11 +2773,21 @@ class LocalTopicAnalysisService:
                         parent_chunk_index=idx,
                         parent_document_id=document.document_id,
                         total_planned_chunks=len(chunks),
+                        eff_max_tokens=eff_max_tokens,
+                        origin=eff_origin_s,
+                        run_id=run_id,
                     )
                     chunk_outcomes.extend(sub_outs)
-                    successful_results.extend(sub_res)
+                    if len(sub_res) == len(sub_outs):
+                        # Tutti i microchunk del chunk padre sono completati: consolida il chunk padre
+                        parent_agg = aggregate_topic_discovery(
+                            chunk_results=sub_res,
+                            parent_document_id=chunk.document_id,
+                            max_topics=chunk_target_topics,
+                        )
+                        successful_results.append(parent_agg)
                     for so in sub_outs:
-                        if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
+                        if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT", "SUCCESS_WITH_TOPICS", "EMPTY_TOPICS", "RECOVERED_EMPTY"):
                             analyzed_evidence_ids.update(so.evidence_ids)
                         if so.diagnostic:
                             all_chunk_diagnostics.append(so.diagnostic)
@@ -2488,10 +2855,13 @@ class LocalTopicAnalysisService:
                             tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
 
                     obs_finish = res.metadata.get("finish_reason")
+                    num_extracted = len(res.topics)
+                    thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
                     diag = ChunkDiagnosticRecord(
                         chunk_index=idx,
                         chunk_id=chunk.document_id,
                         status=ChunkLifecycleStatus.SUCCESS.value,
+                        thematic_status=thematic_st,
                         attempts=int(res.metadata.get("retries", 0)) + 1,
                         duration_seconds=dur,
                         model_id=str(res.metadata.get("model") or resolved_model),
@@ -2501,18 +2871,20 @@ class LocalTopicAnalysisService:
                         completion_tokens=res.metadata.get("completion_tokens"),
                         error_type=None,
                         diagnostic_category="NONE",
-                        failure_phase="completed",
-                        error_detail=None,
+                        failure_phase="completed" if num_extracted > 0 else "empty_output",
+                        error_detail=None if num_extracted > 0 else "Elaborato con successo ma senza argomenti estratti",
                         json_valid=True,
                         schema_valid=True,
                         evidence_valid=True,
                         checkpoint_saved=chk_saved,
+                        topics_count=num_extracted,
                     )
                     all_chunk_diagnostics.append(diag)
                     chunk_outcomes.append(
                         DiscoveryChunkOutcome(
                             chunk_id=chunk.document_id,
                             status="SUCCESS",
+                            thematic_status=thematic_st,
                             result=res,
                             evidence_ids=tuple(chunk_eids),
                             diagnostic=diag,
@@ -2554,10 +2926,12 @@ class LocalTopicAnalysisService:
                     )
                     is_context_overflow = (
                         isinstance(fatal_err, (AiBackendRequestError, AnalysisInputTooLargeError))
-                        and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
+                        and getattr(fatal_err, "error_category", None) in ("CONTEXT_OVERFLOW", "INFERENCE_BACKEND_ERROR")
                     )
                     if (is_context_overflow or is_truncation) and len(chunk.bundles) > 1:
                         tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                        is_live_lms_fb = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
+                        eff_origin_fb = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms_fb else AnalysisOrigin.MOCK_INSPECTION.value
                         sub_outs, sub_res = self._process_subchunks_discovery(
                             chunk=chunk,
                             analyzer=analyzer,
@@ -2574,9 +2948,17 @@ class LocalTopicAnalysisService:
                             parent_document_id=document.document_id,
                             total_planned_chunks=len(chunks),
                             eff_max_tokens=eff_max_tokens,
+                            origin=eff_origin_fb,
+                            run_id=run_id,
                         )
                         chunk_outcomes.extend(sub_outs)
-                        successful_results.extend(sub_res)
+                        if len(sub_res) == len(sub_outs):
+                            parent_agg = aggregate_topic_discovery(
+                                chunk_results=sub_res,
+                                parent_document_id=chunk.document_id,
+                                max_topics=chunk_target_topics,
+                            )
+                            successful_results.append(parent_agg)
                         for so in sub_outs:
                             if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
                                 analyzed_evidence_ids.update(so.evidence_ids)
@@ -2720,9 +3102,9 @@ class LocalTopicAnalysisService:
                             logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
                             tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
 
-            total_units = len(chunk_outcomes)
+            total_units = len(chunks)
             completed_count = len(successful_results)
-            failed_count = total_units - completed_count
+            failed_count = max(0, total_units - completed_count)
 
             if not successful_results:
                 tracker.fail(f"Tutti i {total_units} blocchi di Topic Discovery sono falliti.")
@@ -2736,13 +3118,27 @@ class LocalTopicAnalysisService:
                 parent_document_id=document.document_id,
                 max_topics=eff_max_topics,
             )
+            total_topics_discovered = len(aggregated.topics)
             if failed_count == 0:
-                tracker.complete(f"Topic Discovery completata: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
-                disc_status = "COMPLETE"
-                if chk_store is not None and doc_fp and cfg_fp:
-                    chk_store.clear_checkpoint(doc_fp, cfg_fp)
+                if total_topics_discovered > 0:
+                    tracker.complete(f"Topic Discovery completata: emersi {total_topics_discovered} argomenti ({completed_count}/{total_units} blocchi completati).")
+                    disc_status = "COMPLETE"
+                else:
+                    is_substantial = total_evidence_count >= 10
+                    if is_substantial:
+                        tracker.complete(f"Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi ({completed_count}/{total_units} blocchi completati).")
+                        disc_status = "COMPLETE_EMPTY_UNVERIFIED"
+                    else:
+                        tracker.complete(f"Topic Discovery completata: nessun argomento emerso su conversazione breve ({completed_count}/{total_units} blocchi completati).")
+                        disc_status = "COMPLETE_NO_TOPICS"
+                # INVARIANTE FORENSE E PERSISTENZA: NON invocare MAI clear_checkpoint(doc_fp, cfg_fp)!
+                # I checkpoint SQLite rappresentano l'archivio autorevole e permanente per:
+                # 1) Ricaricamento pagina e sessione
+                # 2) Riavvio di Streamlit e del sistema operativo
+                # 3) Selezione di un'altra conversazione e successivo ritorno alla prima
+                # 4) Prova del Nove indipendente tra Discovery e Detection.
             else:
-                tracker.partial(f"Topic Discovery completata parzialmente: emersi {len(aggregated.topics)} argomenti ({completed_count}/{total_units} blocchi completati).")
+                tracker.partial(f"Topic Discovery completata parzialmente: emersi {total_topics_discovered} argomenti ({completed_count}/{total_units} blocchi completati).")
                 disc_status = "PARTIAL"
         finally:
             try:
@@ -2753,13 +3149,29 @@ class LocalTopicAnalysisService:
         latency = round(time.perf_counter() - start_time, 3)
         now_ts = datetime.now(timezone.utc).isoformat()
 
+        is_live_lms_client = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
+        has_unverified_recovered_origin = False
+        recovered_origins_set: set[str] = set()
+        if recovered_chunk_count > 0:
+            for c_idx, c_res in cached_discovery_results.items():
+                c_orig = (c_res.metadata.get("origin") if isinstance(c_res.metadata, Mapping) else None) or ""
+                recovered_origins_set.add(c_orig)
+                if c_orig != AnalysisOrigin.LIVE_LM_STUDIO.value:
+                    has_unverified_recovered_origin = True
+        for co in chunk_outcomes:
+            if co.status == "RECOVERED_FROM_CHECKPOINT":
+                co_orig = (co.result.metadata.get("origin") if co.result and isinstance(co.result.metadata, Mapping) else None) or ""
+                recovered_origins_set.add(co_orig)
+                if co_orig != AnalysisOrigin.LIVE_LM_STUDIO.value:
+                    has_unverified_recovered_origin = True
+        is_live_lms_final = is_live_lms_client and not has_unverified_recovered_origin
         run_meta = TopicAnalysisRunMetadata(
             run_id=run_id,
-            origin=AnalysisOrigin.LIVE_LM_STUDIO if isinstance(target_client, LmStudioClient) else AnalysisOrigin.MOCK_INSPECTION,
+            origin=AnalysisOrigin.LIVE_LM_STUDIO if is_live_lms_final else AnalysisOrigin.MOCK_INSPECTION,
             model=resolved_model,
             requested_model=(model_name or "").strip() or self.default_model,
             latency_seconds=latency,
-            prompt_version="topic_discovery_operational_v2",
+            prompt_version=PROMPT_VERSION_DISCOVERY_OPERATIONAL,
             strategy="DIRECT_MULTILINGUAL",
             temperature=eff_temp,
             seed=eff_seed,
@@ -2791,11 +3203,15 @@ class LocalTopicAnalysisService:
             end_timestamp=now_ts,
             status=disc_status,
             error_classification="PARTIAL_CHUNK_FAILURE" if failed_count > 0 else None,
+            original_chunk_count=int(len(chunks)),
+            microchunk_count=int(len(all_chunk_diagnostics)),
         )
 
         meta = dict(aggregated.metadata)
         meta.update(run_meta.to_dict())
         meta["git_commit"] = current_git_commit
+        meta["original_chunk_count"] = int(len(chunks))
+        meta["microchunk_count"] = int(len(all_chunk_diagnostics))
         meta["error_count"] = int(failed_count)
         meta["chunk_count"] = int(total_units)
         meta["expected_chunk_count"] = int(total_units)
@@ -2810,6 +3226,29 @@ class LocalTopicAnalysisService:
         meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
         meta["evidence_citation_protocol"] = "deterministic_alias_v1"
         meta["status"] = disc_status
+        if doc_fp:
+            meta["document_fingerprint"] = doc_fp
+        if cfg_fp:
+            meta["config_fingerprint"] = cfg_fp
+        meta["max_topics"] = eff_max_topics
+        if is_live_lms_final:
+            meta["provenance_verified"] = True
+            meta["authoritative_execution_certified"] = True
+            meta["chain_of_custody_intact"] = True
+        elif is_live_lms_client and has_unverified_recovered_origin:
+            meta["origin"] = (
+                AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value
+                if AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value in recovered_origins_set
+                else None
+            )
+            meta["provenance_verified"] = False
+            meta["authoritative_execution_certified"] = False
+            meta["chain_of_custody_intact"] = False
+            meta["attestation_level"] = (
+                AttestationLevel.PROVENANCE_NOT_VERIFIED.value
+                if AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value in recovered_origins_set
+                else AttestationLevel.UNATTESTED.value
+            )
 
         if not should_preserve_raw and "raw_response" in meta:
             del meta["raw_response"]
@@ -2819,7 +3258,7 @@ class LocalTopicAnalysisService:
             provenance_document_id=document.document_id,
             metadata=meta,
         )
-        if isinstance(target_client, LmStudioClient):
+        if is_live_lms_final:
             self._authoritative_live_run_ids.add(run_id)
         self._record_authoritative_discovery_run(document.document_id, final_res)
         return final_res
@@ -2935,7 +3374,6 @@ class LocalTopicAnalysisService:
 
         completed_count = len(cached_discovery_results)
         failed_count = max(0, total_planned - completed_count)
-        status = "COMPLETE" if completed_count >= total_planned and total_planned > 0 else "PARTIAL"
 
         all_topic_results = []
         if cached_discovery_results:
@@ -2958,39 +3396,54 @@ class LocalTopicAnalysisService:
         else:
             topics = ()
 
+        if completed_count >= total_planned and total_planned > 0:
+            if len(topics) > 0:
+                status = "COMPLETE"
+            elif total_evidence_count >= 10:
+                status = "COMPLETE_EMPTY_UNVERIFIED"
+            else:
+                status = "COMPLETE_NO_TOPICS"
+        else:
+            status = "PARTIAL"
+
         persisted_origin = None
-        # Ricostruzione rigorosa dell'origine dell'inferenza dal checkpoint
-        if chk_meta.get("origin") and chk_meta["origin"] in {o.value for o in AnalysisOrigin}:
-            persisted_origin = chk_meta["origin"]
-        if not persisted_origin and checkpoint is not None:
-            if getattr(checkpoint, "origin", None) and checkpoint.origin in {o.value for o in AnalysisOrigin}:
-                persisted_origin = checkpoint.origin
-            if not persisted_origin and cached_discovery_results:
-                for cr in cached_discovery_results.values():
-                    o = cr.metadata.get("origin")
-                    if o and o in {e.value for e in AnalysisOrigin}:
-                        persisted_origin = o
-                        break
-            if not persisted_origin and checkpoint.serialized_results:
-                for s_data in checkpoint.serialized_results.values():
-                    if isinstance(s_data, dict):
-                        m = s_data.get("metadata", {})
-                        if isinstance(m, dict):
-                            o = m.get("origin")
-                            if o and o in {e.value for e in AnalysisOrigin}:
-                                persisted_origin = o
-                                break
-        if not persisted_origin and saved_subchunks:
+        valid_origins = {o.value for o in AnalysisOrigin}
+        # Ricostruzione rigorosa e fail-closed dell'origine dal checkpoint (Audit 27/10/2026):
+        # l'origine è attestata solo se TUTTI i blocchi recuperati hanno un'origine valida e concorde.
+        if cached_discovery_results:
+            chunk_origins = [
+                (cr.metadata.get("origin") if isinstance(cr.metadata, Mapping) else None) or ""
+                for cr in cached_discovery_results.values()
+            ]
+            if all(o in valid_origins for o in chunk_origins) and len(set(chunk_origins)) == 1:
+                cand_o = chunk_origins[0]
+                header_o = chk_meta.get("origin") or (getattr(checkpoint, "origin", None) if checkpoint else None) or ""
+                if header_o in ("", cand_o):
+                    persisted_origin = cand_o
+        elif saved_subchunks:
+            sub_origins = []
             for sub in saved_subchunks:
                 s_res = sub.get("serialized_result", {})
-                if isinstance(s_res, dict):
-                    o = s_res.get("metadata", {}).get("origin")
-                    if o and o in {e.value for e in AnalysisOrigin}:
-                        persisted_origin = o
-                        break
+                if isinstance(s_res, str):
+                    try:
+                        s_res = json.loads(s_res)
+                    except Exception:
+                        s_res = {}
+                o = (s_res.get("metadata", {}).get("origin") if isinstance(s_res, Mapping) else None) or ""
+                sub_origins.append(o)
+            if all(o in valid_origins for o in sub_origins) and len(set(sub_origins)) == 1:
+                cand_o = sub_origins[0]
+                header_o = chk_meta.get("origin") or ""
+                if header_o in ("", cand_o):
+                    persisted_origin = cand_o
 
         orig_run_id = chk_meta.get("run_id") or getattr(checkpoint, "run_id", "") or f"persisted_{cfg_fp[:8]}"
-        attestation = AttestationLevel.CHECKPOINT_AUTHENTICATED.value if persisted_origin else AttestationLevel.UNATTESTED.value
+        if persisted_origin == AnalysisOrigin.RECONSTRUCTED_UNVERIFIED.value:
+            attestation = AttestationLevel.PROVENANCE_NOT_VERIFIED.value
+        elif persisted_origin:
+            attestation = AttestationLevel.CHECKPOINT_AUTHENTICATED.value
+        else:
+            attestation = AttestationLevel.UNATTESTED.value
 
         meta = {
             "run_id": f"persisted_{cfg_fp[:8]}",

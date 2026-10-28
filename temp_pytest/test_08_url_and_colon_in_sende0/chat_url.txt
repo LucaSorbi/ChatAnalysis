@@ -1,0 +1,2 @@
+12/09/2026, 14:35 - Mario: Visita http://127.0.0.1:8080/test
+12/09/2026, 14:36 - Rossi:Mario: Confermo ricezione

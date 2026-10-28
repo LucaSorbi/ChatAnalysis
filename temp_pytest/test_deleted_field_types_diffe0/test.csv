@@ -1,0 +1,2 @@
+Source,MessageType,TimeStamp,Direction,From,To,Body,Attachments,Status,Deleted,Forwarded,ApplicationId,ChatId
+WhatsApp,Text,2024-01-01 12:00:00,Incoming,+39 000 0000001,+39 000 0000002,Test,,Delivered,False,False,com.whatsapp,chat_1

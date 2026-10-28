@@ -614,3 +614,53 @@ class TestOperationalEvidenceAliasAndLiveRecovery:
                 assert "Messaggio forense" not in p_detail
                 if pd.status == ChunkLifecycleStatus.FAILED.value:
                     assert pd.diagnostic_category == ChunkDiagnosticCategory.INVALID_EVIDENCE_ID.value
+
+    def test_09_operational_validation_robustness_against_trailing_blanks_and_duplicates(self):
+        """Verifica che in modalità operativa (con alias_map) stringhe vuote, duplicati e dummy trailing topics siano gestiti in modo sicuro."""
+        doc = _make_document("doc_robust_test", count=4)
+        valid_eids = {s.evidence_id for s in doc.all_evidence_sections}
+        _, alias_to_id = generate_evidence_alias_maps(doc)
+
+        # 1. Trailing empty string in evidence_ids: ["E001", ""]
+        payload_1 = {
+            "topics": [
+                {"label": "Incontro", "short_description": "Riunione orari", "evidence_ids": ["E001", ""]}
+            ]
+        }
+        res_1 = validate_topic_discovery_payload(json.dumps(payload_1), valid_evidence_ids=valid_eids, alias_map=alias_to_id)
+        assert len(res_1) == 1
+        assert res_1[0].label == "Incontro"
+        assert res_1[0].evidence_ids == (doc.all_evidence_sections[0].evidence_id,)
+
+        # 2. Duplicate evidence_ids in operational mode: ["E001", "E002", "E002"]
+        payload_2 = {
+            "topics": [
+                {"label": "Insegnamento", "short_description": "Corsi online", "evidence_ids": ["E001", "E002", "E002"]}
+            ]
+        }
+        res_2 = validate_topic_discovery_payload(json.dumps(payload_2), valid_evidence_ids=valid_eids, alias_map=alias_to_id)
+        assert len(res_2) == 1
+        assert len(res_2[0].evidence_ids) == 2
+
+        # 3. Topic without evidence + valid topic: topic without evidence is discarded, valid kept
+        payload_3 = {
+            "topics": [
+                {"label": "Insegnamento", "short_description": "Corsi online", "evidence_ids": ["E001"]},
+                {"label": "Viaggio", "short_description": "Montagna", "evidence_ids": []}
+            ]
+        }
+        res_3 = validate_topic_discovery_payload(json.dumps(payload_3), valid_evidence_ids=valid_eids, alias_map=alias_to_id)
+        assert len(res_3) == 1
+        assert res_3[0].label == "Insegnamento"
+
+        # 4. Trailing blank dummy topic at the end of the JSON array
+        payload_4 = {
+            "topics": [
+                {"label": "Insegnamento", "short_description": "Corsi online", "evidence_ids": ["E001"]},
+                {"label": "", "short_description": "", "evidence_ids": []}
+            ]
+        }
+        res_4 = validate_topic_discovery_payload(json.dumps(payload_4), valid_evidence_ids=valid_eids, alias_map=alias_to_id)
+        assert len(res_4) == 1
+        assert res_4[0].label == "Insegnamento"
+

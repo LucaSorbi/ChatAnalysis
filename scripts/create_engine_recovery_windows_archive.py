@@ -47,8 +47,18 @@ def get_repo_files_to_pack(repo_root: Path) -> list[str]:
 
     additional_files = [
         "docs/CHATANALYSIS_FINAL_ENGINE_RECOVERY_REPORT_20261026.md",
+        "CHATANALYSIS_VERIFICA_FINALE_26_OF_26_REPORT.md",
         "scripts/run_real_topic_detection_and_consistency.py",
+        "scripts/backup_and_verify_26of26_checkpoint.py",
+        "scripts/export_discovery_26of26.py",
         "scripts/create_engine_recovery_windows_archive.py",
+        "output/discovery_26of26_report.json",
+        "output/discovery_26of26_diagnostics.csv",
+        "output/detection_26of26_results.json",
+        "output/detection_26of26_results.csv",
+        "tests/unit/test_checkpoint_isolation_and_recovery_safety.py",
+        "tests/unit/test_sentinel_checkpoint_protection.py",
+        "test_data/reference_chat_document.zip",
     ]
 
     all_files_set = set(tracked_files)

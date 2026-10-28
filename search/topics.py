@@ -245,7 +245,12 @@ class TopicSearchEngine:
                 )
                 hits.append(hit)
 
-        return TopicSearchResult(hits=tuple(hits), total_hits=len(hits))
+        total_discovered = sum(len(d.topics) for d in self._discoveries)
+        return TopicSearchResult(
+            hits=tuple(hits),
+            total_hits=len(hits),
+            metadata={"total_discovered_topics": total_discovered},
+        )
 
     def search_all(
         self,

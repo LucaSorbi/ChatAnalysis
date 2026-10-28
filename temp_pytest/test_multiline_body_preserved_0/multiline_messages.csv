@@ -1,0 +1,5 @@
+﻿Source,MessageType,TimeStamp,Direction,From,To,Body,Attachments,Status,Deleted,Forwarded,ApplicationId,ChatId
+WhatsApp,Text,2024-11-12 03:09:27,Outgoing,+39 000 0000003,+39 000 0000001,"Prima riga del testo
+Seconda riga del testo
+Terza riga",,Delivered,False,False,com.whatsapp,chat_3
+WhatsApp,Text,2024-11-12 03:10:00,Incoming,+39 000 0000001,+39 000 0000003,Messaggio successivo su riga singola,,Delivered,False,False,com.whatsapp,chat_3

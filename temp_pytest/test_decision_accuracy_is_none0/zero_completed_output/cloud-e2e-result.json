@@ -1,0 +1,389 @@
+{
+  "benchmark": "PRELIMINARY CLOUD E2E VALIDATION",
+  "phase": "PRELIMINARY CLOUD E2E VALIDATION",
+  "protocol_version": 3,
+  "timestamp_utc": "2026-10-26T22:55:39.662188+00:00",
+  "provider": "OpenAI-compatible",
+  "configuration": {
+    "endpoint_url": "https://api.openai.com/v1",
+    "model_id_requested": "gpt-4o",
+    "model_id_returned": null,
+    "json_mode": "json_schema",
+    "timeout_seconds": 60.0,
+    "max_tokens": 1024,
+    "temperature": 0.0,
+    "seed": null,
+    "seed_requested": null,
+    "seed_provider_status": "UNSUPPORTED_OMITTED",
+    "synthetic_dataset_sha256": "2E49A9C62D89125D225726953FF0E879FB49E07D7DB803DB5503C345B051B781",
+    "ground_truth_sha256": "377FB95B7690BA507481F357449B1A56D1F89CB60636DA9DEBD66FE603E5AD6D",
+    "protocol_version": 3,
+    "minimum_request_interval_seconds": 15.0,
+    "provider_rpm_limit_observed": 5,
+    "provider_tpm_limit_observed": 250000,
+    "provider_rpd_limit_observed": 20,
+    "automatic_retry": false
+  },
+  "metrics": {
+    "benchmark_type": "TECHNICAL VALIDATION BENCHMARK",
+    "scientific_disclaimer": "Questo benchmark sintetico è uno strumento di validazione tecnica E2E preliminare su 6 casi controllati. Non costituisce una valutazione statistica generale del modello.",
+    "protocol_version": 3,
+    "cloud_api_requests_sent": 7,
+    "llm_inferences_completed": 0,
+    "model_outputs_received": 0,
+    "total_detection_cases": 6,
+    "completed_detection_cases": 0,
+    "failed_detection_cases": 6,
+    "detection_completion_rate": 0.0,
+    "correct_decisions": 0,
+    "decision_accuracy": null,
+    "present_breakdown": {
+      "total": 4,
+      "completed": 0,
+      "correct": 0
+    },
+    "absent_breakdown": {
+      "total": 1,
+      "completed": 0,
+      "correct": 0
+    },
+    "uncertain_breakdown": {
+      "total": 1,
+      "completed": 0,
+      "correct": 0
+    },
+    "invalid_evidence_citation_count": 0,
+    "structured_output_failure_count": 0,
+    "backend_failure_count": 6,
+    "model_mismatch_count": 0,
+    "average_successful_inference_latency": 0.0,
+    "provider_rpm_limit_observed": 5,
+    "provider_tpm_limit_observed": 250000,
+    "provider_rpd_limit_observed": 20,
+    "minimum_request_interval_seconds": 15.0,
+    "automatic_retry": false,
+    "requests_with_pacing": 7,
+    "minimum_observed_request_start_delta_seconds": 0.0,
+    "average_observed_request_start_delta_seconds": 0.0,
+    "request_start_deltas": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "CASE_1_EXPLICIT_PRESENT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::240f5828436d",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_cycling",
+      "expected_decision": "PRESENT",
+      "actual_decision": null,
+      "decision_correct": false,
+      "returned_evidence_ids": [],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c1_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": false,
+      "rationale": null,
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": null,
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": null,
+      "max_tokens": 1024,
+      "latency_seconds": null,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "error_type": "AiBackendRequestError",
+      "error_message_sanitized": "Simulated 400 Bad Request",
+      "status": "FAILED"
+    },
+    {
+      "case_id": "CASE_2_IMPLICIT_PRESENT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::ccace1c455cf",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_illicit_trade",
+      "expected_decision": "PRESENT",
+      "actual_decision": null,
+      "decision_correct": false,
+      "returned_evidence_ids": [],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c2_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": false,
+      "rationale": null,
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": null,
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": null,
+      "max_tokens": 1024,
+      "latency_seconds": null,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "error_type": "AiBackendRequestError",
+      "error_message_sanitized": "Simulated 400 Bad Request",
+      "status": "FAILED"
+    },
+    {
+      "case_id": "CASE_3_AMBIGUOUS_UNCERTAIN",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::60d22ea935cb",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_illicit_trade",
+      "expected_decision": "UNCERTAIN",
+      "actual_decision": null,
+      "decision_correct": false,
+      "returned_evidence_ids": [],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c3_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": false,
+      "rationale": null,
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": null,
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": null,
+      "max_tokens": 1024,
+      "latency_seconds": null,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "error_type": "AiBackendRequestError",
+      "error_message_sanitized": "Simulated 400 Bad Request",
+      "status": "FAILED"
+    },
+    {
+      "case_id": "CASE_4_ABSENT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::b281cafe2a92",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_illicit_trade",
+      "expected_decision": "ABSENT",
+      "actual_decision": null,
+      "decision_correct": false,
+      "returned_evidence_ids": [],
+      "expected_evidence_ids": [],
+      "evidence_ids_valid": false,
+      "rationale": null,
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": null,
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": null,
+      "max_tokens": 1024,
+      "latency_seconds": null,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "error_type": "AiBackendRequestError",
+      "error_message_sanitized": "Simulated 400 Bad Request",
+      "status": "FAILED"
+    },
+    {
+      "case_id": "CASE_5_MULTILINGUAL_DIRECT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::8ed1a9efaa3d",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_conference_travel",
+      "expected_decision": "PRESENT",
+      "actual_decision": null,
+      "decision_correct": false,
+      "returned_evidence_ids": [],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c5_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": false,
+      "rationale": null,
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": null,
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": null,
+      "max_tokens": 1024,
+      "latency_seconds": null,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "error_type": "AiBackendRequestError",
+      "error_message_sanitized": "Simulated 400 Bad Request",
+      "status": "FAILED"
+    },
+    {
+      "case_id": "CASE_5_MULTILINGUAL_TRANSLATE_FIRST",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::8ed1a9efaa3d",
+      "strategy": "TRANSLATE_FIRST",
+      "topic_id": "top_conference_travel",
+      "expected_decision": "PRESENT",
+      "actual_decision": null,
+      "decision_correct": false,
+      "returned_evidence_ids": [],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c5_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": false,
+      "rationale": null,
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": null,
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": null,
+      "max_tokens": 1024,
+      "latency_seconds": null,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "translation_prompt_version": "evidence_translation_v1",
+      "translation_latency_seconds": null,
+      "translation_prompt_tokens": null,
+      "translation_completion_tokens": null,
+      "translation_total_tokens": null,
+      "error_type": "AiBackendRequestError",
+      "error_message_sanitized": "Simulated 400 Bad Request",
+      "status": "FAILED"
+    },
+    {
+      "case_id": "CASE_6_TOPIC_DISCOVERY",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::985ee94ed2ee",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "evaluation_mode": "QUALITATIVE",
+      "topics": [],
+      "evidence_ids": [],
+      "post_hoc_expected_topics": [
+        {
+          "topic_id": "top_condominium",
+          "label": "Riunione di Condominio",
+          "keywords": [
+            "condominio",
+            "riunione",
+            "amministratore",
+            "spese",
+            "assemblea"
+          ]
+        },
+        {
+          "topic_id": "top_sports",
+          "label": "Calcetto e Attività Sportive",
+          "keywords": [
+            "calcetto",
+            "partita",
+            "giovedì",
+            "campo",
+            "squadra"
+          ]
+        },
+        {
+          "topic_id": "top_dining",
+          "label": "Ristorazione e Cucina",
+          "keywords": [
+            "ristorante",
+            "sushi",
+            "giapponese",
+            "cena",
+            "prenotare"
+          ]
+        },
+        {
+          "topic_id": "top_books",
+          "label": "Libri e Lettura",
+          "keywords": [
+            "libro",
+            "romanzo",
+            "thriller",
+            "libreria",
+            "leggere"
+          ]
+        },
+        {
+          "topic_id": "top_pets",
+          "label": "Animali Domestici e Cure Veterinarie",
+          "keywords": [
+            "cane",
+            "veterinario",
+            "vaccino",
+            "visita",
+            "clinica"
+          ]
+        },
+        {
+          "topic_id": "top_music_events",
+          "label": "Eventi Musicali e Concerti",
+          "keywords": [
+            "concerto",
+            "jazz",
+            "biglietti",
+            "festival",
+            "musica"
+          ]
+        }
+      ],
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": null,
+      "prompt_version": "topic_discovery_v1",
+      "temperature": 0.0,
+      "seed": null,
+      "max_tokens": 1024,
+      "latency_seconds": null,
+      "prompt_tokens": null,
+      "completion_tokens": null,
+      "total_tokens": null,
+      "error_type": "AiBackendRequestError",
+      "error_message_sanitized": "Simulated 400 Bad Request",
+      "status": "FAILED"
+    }
+  ],
+  "request_telemetry": [
+    {
+      "request_sequence_number": 1,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 2,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 3,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 4,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 5,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 6,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 7,
+      "request_start_offset_seconds": 0.0
+    }
+  ]
+}

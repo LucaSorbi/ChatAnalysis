@@ -1,0 +1,5 @@
+<?xml version="1.0"?>
+<!DOCTYPE DumpFile SYSTEM "ufdr.dtd">
+<DumpFile type="UFDR">
+  <InstantMessages><Message id="0"><Body>Test</Body></Message></InstantMessages>
+</DumpFile>

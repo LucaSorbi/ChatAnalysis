@@ -1,0 +1,7 @@
+{
+  "benchmark_mode": "REAL_MODEL_BENCHMARK",
+  "model_spec": {
+    "model_id": "custom-unknown-model"
+  },
+  "results_by_strategy": {}
+}

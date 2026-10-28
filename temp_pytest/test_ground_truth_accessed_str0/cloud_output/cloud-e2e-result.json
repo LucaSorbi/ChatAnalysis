@@ -1,0 +1,427 @@
+{
+  "benchmark": "PRELIMINARY CLOUD E2E VALIDATION",
+  "phase": "PRELIMINARY CLOUD E2E VALIDATION",
+  "protocol_version": 3,
+  "timestamp_utc": "2026-10-26T22:55:39.502088+00:00",
+  "provider": "OpenAI-compatible",
+  "configuration": {
+    "endpoint_url": "https://api.openai.com/v1",
+    "model_id_requested": "gpt-4o",
+    "model_id_returned": "gpt-4o",
+    "json_mode": "json_schema",
+    "timeout_seconds": 60.0,
+    "max_tokens": 1024,
+    "temperature": 0.0,
+    "seed": 42,
+    "seed_requested": 42,
+    "seed_provider_status": "PROVIDED",
+    "synthetic_dataset_sha256": "2E49A9C62D89125D225726953FF0E879FB49E07D7DB803DB5503C345B051B781",
+    "ground_truth_sha256": "377FB95B7690BA507481F357449B1A56D1F89CB60636DA9DEBD66FE603E5AD6D",
+    "protocol_version": 3,
+    "minimum_request_interval_seconds": 15.0,
+    "provider_rpm_limit_observed": 5,
+    "provider_tpm_limit_observed": 250000,
+    "provider_rpd_limit_observed": 20,
+    "automatic_retry": false
+  },
+  "metrics": {
+    "benchmark_type": "TECHNICAL VALIDATION BENCHMARK",
+    "scientific_disclaimer": "Questo benchmark sintetico è uno strumento di validazione tecnica E2E preliminare su 6 casi controllati. Non costituisce una valutazione statistica generale del modello.",
+    "protocol_version": 3,
+    "cloud_api_requests_sent": 8,
+    "llm_inferences_completed": 8,
+    "model_outputs_received": 8,
+    "total_detection_cases": 6,
+    "completed_detection_cases": 6,
+    "failed_detection_cases": 0,
+    "detection_completion_rate": 1.0,
+    "correct_decisions": 6,
+    "decision_accuracy": 1.0,
+    "present_breakdown": {
+      "total": 4,
+      "completed": 4,
+      "correct": 4
+    },
+    "absent_breakdown": {
+      "total": 1,
+      "completed": 1,
+      "correct": 1
+    },
+    "uncertain_breakdown": {
+      "total": 1,
+      "completed": 1,
+      "correct": 1
+    },
+    "invalid_evidence_citation_count": 0,
+    "structured_output_failure_count": 0,
+    "backend_failure_count": 0,
+    "model_mismatch_count": 0,
+    "average_successful_inference_latency": 0.123,
+    "provider_rpm_limit_observed": 5,
+    "provider_tpm_limit_observed": 250000,
+    "provider_rpd_limit_observed": 20,
+    "minimum_request_interval_seconds": 15.0,
+    "automatic_retry": false,
+    "requests_with_pacing": 8,
+    "minimum_observed_request_start_delta_seconds": 0.0,
+    "average_observed_request_start_delta_seconds": 0.0,
+    "request_start_deltas": [
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0,
+      0.0
+    ]
+  },
+  "cases": [
+    {
+      "case_id": "CASE_1_EXPLICIT_PRESENT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::240f5828436d",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_cycling",
+      "expected_decision": "PRESENT",
+      "actual_decision": "PRESENT",
+      "decision_correct": true,
+      "returned_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c1_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_002::ORIGINAL_TEXT"
+      ],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c1_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c1_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": true,
+      "rationale": "Conversazione chiaramente incentrata sul ciclismo.",
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": "gpt-4o",
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": 42,
+      "max_tokens": 1024,
+      "latency_seconds": 0.123,
+      "prompt_tokens": 50,
+      "completion_tokens": 25,
+      "total_tokens": 75,
+      "error_type": null,
+      "error_message_sanitized": null,
+      "status": "SUCCESS"
+    },
+    {
+      "case_id": "CASE_2_IMPLICIT_PRESENT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::ccace1c455cf",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_illicit_trade",
+      "expected_decision": "PRESENT",
+      "actual_decision": "PRESENT",
+      "decision_correct": true,
+      "returned_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c2_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_003::ORIGINAL_TEXT"
+      ],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c2_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c2_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": true,
+      "rationale": "Merci non tracciabili e pagamento contanti clandestino.",
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": "gpt-4o",
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": 42,
+      "max_tokens": 1024,
+      "latency_seconds": 0.123,
+      "prompt_tokens": 50,
+      "completion_tokens": 25,
+      "total_tokens": 75,
+      "error_type": null,
+      "error_message_sanitized": null,
+      "status": "SUCCESS"
+    },
+    {
+      "case_id": "CASE_3_AMBIGUOUS_UNCERTAIN",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::60d22ea935cb",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_illicit_trade",
+      "expected_decision": "UNCERTAIN",
+      "actual_decision": "UNCERTAIN",
+      "decision_correct": true,
+      "returned_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c3_001::ORIGINAL_TEXT"
+      ],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c3_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c3_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": true,
+      "rationale": "Evidenze parziali e ambigue non sufficienti per concludere.",
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": "gpt-4o",
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": 42,
+      "max_tokens": 1024,
+      "latency_seconds": 0.123,
+      "prompt_tokens": 50,
+      "completion_tokens": 25,
+      "total_tokens": 75,
+      "error_type": null,
+      "error_message_sanitized": null,
+      "status": "SUCCESS"
+    },
+    {
+      "case_id": "CASE_4_ABSENT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::b281cafe2a92",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_illicit_trade",
+      "expected_decision": "ABSENT",
+      "actual_decision": "ABSENT",
+      "decision_correct": true,
+      "returned_evidence_ids": [],
+      "expected_evidence_ids": [],
+      "evidence_ids_valid": true,
+      "rationale": "La conversazione verte su risotto e chitarra.",
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": "gpt-4o",
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": 42,
+      "max_tokens": 1024,
+      "latency_seconds": 0.123,
+      "prompt_tokens": 50,
+      "completion_tokens": 25,
+      "total_tokens": 75,
+      "error_type": null,
+      "error_message_sanitized": null,
+      "status": "SUCCESS"
+    },
+    {
+      "case_id": "CASE_5_MULTILINGUAL_DIRECT",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::8ed1a9efaa3d",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "topic_id": "top_conference_travel",
+      "expected_decision": "PRESENT",
+      "actual_decision": "PRESENT",
+      "decision_correct": true,
+      "returned_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c5_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_002::ORIGINAL_TEXT"
+      ],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c5_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": true,
+      "rationale": "Viaggio per conferenza accademica a Barcellona confermato.",
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": "gpt-4o",
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": 42,
+      "max_tokens": 1024,
+      "latency_seconds": 0.123,
+      "prompt_tokens": 50,
+      "completion_tokens": 25,
+      "total_tokens": 75,
+      "error_type": null,
+      "error_message_sanitized": null,
+      "status": "SUCCESS"
+    },
+    {
+      "case_id": "CASE_5_MULTILINGUAL_TRANSLATE_FIRST",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::8ed1a9efaa3d",
+      "strategy": "TRANSLATE_FIRST",
+      "topic_id": "top_conference_travel",
+      "expected_decision": "PRESENT",
+      "actual_decision": "PRESENT",
+      "decision_correct": true,
+      "returned_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c5_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_002::ORIGINAL_TEXT"
+      ],
+      "expected_evidence_ids": [
+        "unified:cellebrite_json:ce2e_c5_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_002::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_003::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_004::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c5_005::ORIGINAL_TEXT"
+      ],
+      "evidence_ids_valid": true,
+      "rationale": "Viaggio per conferenza accademica a Barcellona confermato.",
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": "gpt-4o",
+      "prompt_version": "topic_detection_v1",
+      "temperature": 0.0,
+      "seed": 42,
+      "max_tokens": 1024,
+      "latency_seconds": 0.123,
+      "prompt_tokens": 50,
+      "completion_tokens": 25,
+      "total_tokens": 75,
+      "translation_prompt_version": "evidence_translation_v1",
+      "translation_latency_seconds": 0.123,
+      "translation_prompt_tokens": 50,
+      "translation_completion_tokens": 25,
+      "translation_total_tokens": 75,
+      "error_type": null,
+      "error_message_sanitized": null,
+      "status": "SUCCESS"
+    },
+    {
+      "case_id": "CASE_6_TOPIC_DISCOVERY",
+      "document_id": "doc::cellebrite_json::2e49a9c62d89::985ee94ed2ee",
+      "strategy": "DIRECT_MULTILINGUAL",
+      "evaluation_mode": "QUALITATIVE",
+      "topics": [
+        {
+          "label": "Condominio",
+          "description": "Discussione su spese e assemblea",
+          "evidence_ids": [
+            "unified:cellebrite_json:ce2e_c6_001::ORIGINAL_TEXT"
+          ]
+        },
+        {
+          "label": "Calcetto",
+          "description": "Partita di calcetto settimanale",
+          "evidence_ids": [
+            "unified:cellebrite_json:ce2e_c6_002::ORIGINAL_TEXT"
+          ]
+        }
+      ],
+      "evidence_ids": [
+        "unified:cellebrite_json:ce2e_c6_001::ORIGINAL_TEXT",
+        "unified:cellebrite_json:ce2e_c6_002::ORIGINAL_TEXT"
+      ],
+      "post_hoc_expected_topics": [
+        {
+          "topic_id": "top_condominium",
+          "label": "Riunione di Condominio",
+          "keywords": [
+            "condominio",
+            "riunione",
+            "amministratore",
+            "spese",
+            "assemblea"
+          ]
+        },
+        {
+          "topic_id": "top_sports",
+          "label": "Calcetto e Attività Sportive",
+          "keywords": [
+            "calcetto",
+            "partita",
+            "giovedì",
+            "campo",
+            "squadra"
+          ]
+        },
+        {
+          "topic_id": "top_dining",
+          "label": "Ristorazione e Cucina",
+          "keywords": [
+            "ristorante",
+            "sushi",
+            "giapponese",
+            "cena",
+            "prenotare"
+          ]
+        },
+        {
+          "topic_id": "top_books",
+          "label": "Libri e Lettura",
+          "keywords": [
+            "libro",
+            "romanzo",
+            "thriller",
+            "libreria",
+            "leggere"
+          ]
+        },
+        {
+          "topic_id": "top_pets",
+          "label": "Animali Domestici e Cure Veterinarie",
+          "keywords": [
+            "cane",
+            "veterinario",
+            "vaccino",
+            "visita",
+            "clinica"
+          ]
+        },
+        {
+          "topic_id": "top_music_events",
+          "label": "Eventi Musicali e Concerti",
+          "keywords": [
+            "concerto",
+            "jazz",
+            "biglietti",
+            "festival",
+            "musica"
+          ]
+        }
+      ],
+      "model_id_requested": "gpt-4o",
+      "model_id_returned": "gpt-4o",
+      "prompt_version": "topic_discovery_v1",
+      "temperature": 0.0,
+      "seed": 42,
+      "max_tokens": 1024,
+      "latency_seconds": 0.123,
+      "prompt_tokens": 50,
+      "completion_tokens": 25,
+      "total_tokens": 75,
+      "error_type": null,
+      "error_message_sanitized": null,
+      "status": "SUCCESS",
+      "evidence_ids_valid": true
+    }
+  ],
+  "request_telemetry": [
+    {
+      "request_sequence_number": 1,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 2,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 3,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 4,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 5,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 6,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 7,
+      "request_start_offset_seconds": 0.0
+    },
+    {
+      "request_sequence_number": 8,
+      "request_start_offset_seconds": 0.0
+    }
+  ]
+}

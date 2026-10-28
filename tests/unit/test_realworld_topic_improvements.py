@@ -426,30 +426,30 @@ def test_topic_discovery_25_topics_consolidation():
     """
     bundles = [
         _make_bundle(str(i), f"Conversazione su argomento tematico specifico #{i}")
-        for i in range(1, 41)
+        for i in range(1, 33)
     ]
     doc = ConversationEvidenceDocument(document_id="doc_large_25", bundles=tuple(bundles))
 
-    # Simuliamo 25 topic restituiti dal modello attraverso 4 chunk (max 8 topic per chunk)
+    # Simuliamo 25 topic restituiti dal modello attraverso 4 chunk (max 8 bundle per chunk, <= 8 messaggi sostanziali)
     chunk1_topics = [
         {"label": f"Argomento {i}", "short_description": f"Descrizione {i}", "evidence_ids": [f"unified:whatsapp_txt:{i}::ORIGINAL_TEXT"]}
         for i in range(1, 8)
     ]
     # In chunk 2 ripetiamo Argomento 1 (con evidenza in più da chunk 2) e inseriamo argomenti da 8 a 13
     chunk2_topics = [
-        {"label": "Argomento 1", "short_description": "Descrizione 1 aggiornata", "evidence_ids": ["unified:whatsapp_txt:11::ORIGINAL_TEXT"]}
+        {"label": "Argomento 1", "short_description": "Descrizione 1 aggiornata", "evidence_ids": ["unified:whatsapp_txt:9::ORIGINAL_TEXT"]}
     ] + [
-        {"label": f"Argomento {i}", "short_description": f"Descrizione {i}", "evidence_ids": [f"unified:whatsapp_txt:{i + 4}::ORIGINAL_TEXT"]}
+        {"label": f"Argomento {i}", "short_description": f"Descrizione {i}", "evidence_ids": [f"unified:whatsapp_txt:{i + 2}::ORIGINAL_TEXT"]}
         for i in range(8, 14)
     ]
-    # Chunk 3 (bundles 21..30): argomenti 14..19
+    # Chunk 3 (bundles 17..24): argomenti 14..19
     chunk3_topics = [
-        {"label": f"Argomento {i}", "short_description": f"Descrizione {i}", "evidence_ids": [f"unified:whatsapp_txt:{i + 7}::ORIGINAL_TEXT"]}
+        {"label": f"Argomento {i}", "short_description": f"Descrizione {i}", "evidence_ids": [f"unified:whatsapp_txt:{i + 3}::ORIGINAL_TEXT"]}
         for i in range(14, 20)
     ]
-    # Chunk 4 (bundles 31..40): argomenti 20..25
+    # Chunk 4 (bundles 25..32): argomenti 20..25
     chunk4_topics = [
-        {"label": f"Argomento {i}", "short_description": f"Descrizione {i}", "evidence_ids": [f"unified:whatsapp_txt:{i + 11}::ORIGINAL_TEXT"]}
+        {"label": f"Argomento {i}", "short_description": f"Descrizione {i}", "evidence_ids": [f"unified:whatsapp_txt:{i + 5}::ORIGINAL_TEXT"]}
         for i in range(20, 26)
     ]
 
@@ -462,7 +462,7 @@ def test_topic_discovery_25_topics_consolidation():
         ]
     )
 
-    service = LocalTopicAnalysisService(max_chunk_bundles=10)
+    service = LocalTopicAnalysisService(max_chunk_bundles=8)
     res = service.run_topic_discovery(
         document=doc,
         client=mock_client,
@@ -472,7 +472,7 @@ def test_topic_discovery_25_topics_consolidation():
     # Argomento 1 deve essere consolidato con entrambe le evidenze
     top1 = next(t for t in res.topics if t.label == "Argomento 1")
     assert "unified:whatsapp_txt:1::ORIGINAL_TEXT" in top1.evidence_ids
-    assert "unified:whatsapp_txt:11::ORIGINAL_TEXT" in top1.evidence_ids
+    assert "unified:whatsapp_txt:9::ORIGINAL_TEXT" in top1.evidence_ids
 
     # Totale argomenti consolidati deve essere 25
     assert len(res.topics) == 25

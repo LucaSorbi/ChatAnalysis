@@ -1,0 +1,36 @@
+<?xml version='1.0' encoding='utf-8'?>
+<DumpFile type="UFDR" version="2.0">
+  <DeviceInfo>
+    <Model>Samsung Galaxy S21</Model>
+    <OS>Android 13</OS>
+    <IMEI>000000000000001</IMEI>
+  </DeviceInfo>
+  <InstantMessages>
+    <Message id="0">
+      <Timestamp>2024-04-23T20:30:15+00:00</Timestamp>
+      <Sender>+39 000 0000001</Sender>
+      <Body>Messaggio di test sintetico 08</Body>
+      <Deleted>false</Deleted>
+    </Message>
+    <Message id="1">
+      <Timestamp>2024-09-17T17:28:45+00:00</Timestamp>
+      <Sender>+1 000 0000004</Sender>
+      <Body />
+      <Deleted>false</Deleted>
+    </Message>
+    <Message id="2">
+      <Timestamp>2024-11-22T14:47:37+00:00</Timestamp>
+      <Sender>group_participant_A</Sender>
+      <Body>Messaggio con media</Body>
+      <Deleted>true</Deleted>
+      <Attachment>media/image_01.jpg</Attachment>
+    </Message>
+    <Message>
+      <!-- Messaggio privo di attributo id per testare il fallback -->
+      <Timestamp>2025-01-01T00:00:00+00:00</Timestamp>
+      <Sender>Contatto_001</Sender>
+      <Body>Messaggio senza id</Body>
+      <Deleted>false</Deleted>
+    </Message>
+  </InstantMessages>
+</DumpFile>

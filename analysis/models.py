@@ -30,6 +30,8 @@ class AnalysisOrigin(str, Enum):
     LIVE_LM_STUDIO = "LIVE_LM_STUDIO"
     SYNTHETIC_REFERENCE = "SYNTHETIC_REFERENCE"
     MOCK_INSPECTION = "MOCK_INSPECTION"
+    RECONSTRUCTED_UNVERIFIED = "RECONSTRUCTED_UNVERIFIED"
+    HISTORICAL_RECONSTRUCTED = "HISTORICAL_RECONSTRUCTED"
 
 
 class LoadingMode(str, Enum):
@@ -44,6 +46,8 @@ class AttestationLevel(str, Enum):
     CHECKPOINT_AUTHENTICATED = "CHECKPOINT_AUTHENTICATED"
     MOCK_VERIFIED = "MOCK_VERIFIED"
     UNATTESTED = "UNATTESTED"
+    PROVENANCE_NOT_VERIFIED = "PROVENANCE_NOT_VERIFIED"
+
 
 
 class ConsistencyStatus(str, Enum):
@@ -288,6 +292,8 @@ class TopicAnalysisRunMetadata:
     status: str | None = None
     error_classification: str | None = None
     git_commit: str | None = None
+    original_chunk_count: int | None = None
+    microchunk_count: int | None = None
 
     def to_dict(self) -> dict[str, Any]:
         """Converte i metadata in un dizionario sicuro per inclusione nel risultato."""
@@ -308,6 +314,10 @@ class TopicAnalysisRunMetadata:
             "failed_chunk_count": int(self.failed_chunk_count),
             "data_classification": self.data_classification,
         }
+        if self.original_chunk_count is not None:
+            d["original_chunk_count"] = int(self.original_chunk_count)
+        if self.microchunk_count is not None:
+            d["microchunk_count"] = int(self.microchunk_count)
         if self.git_commit:
             d["git_commit"] = self.git_commit
         if self.reduction_strategy:
@@ -346,8 +356,11 @@ class ChunkLifecycleStatus(str, Enum):
     PENDING = "PENDING"
     RUNNING = "RUNNING"
     SUCCESS = "SUCCESS"
+    SUCCESS_WITH_TOPICS = "SUCCESS_WITH_TOPICS"
+    EMPTY_TOPICS = "EMPTY_TOPICS"
     FAILED = "FAILED"
     RECOVERED_FROM_CHECKPOINT = "RECOVERED_FROM_CHECKPOINT"
+    RECOVERED_EMPTY = "RECOVERED_EMPTY"
 
 
 class ChunkDiagnosticCategory(str, Enum):
@@ -370,6 +383,9 @@ class ChunkDiagnosticCategory(str, Enum):
     CHECKPOINT_SAVE_ERROR = "CHECKPOINT_SAVE_ERROR"
     MODEL_MISMATCH = "MODEL_MISMATCH"
     INTERNAL_VALIDATION_ERROR = "INTERNAL_VALIDATION_ERROR"
+    DEGENERATE_OUTPUT = "DEGENERATE_OUTPUT"
+    GBNF_GRAMMAR_ERROR = "GBNF_GRAMMAR_ERROR"
+    RETRY_EXHAUSTED = "RETRY_EXHAUSTED"
     UNKNOWN_ERROR = "UNKNOWN_ERROR"
     NONE = "NONE"
 
@@ -396,7 +412,7 @@ class ChunkDiagnosticRecord:
     exception_class: str | None = None
     error_type: str | None = None
     diagnostic_category: str = ChunkDiagnosticCategory.NONE.value
-    failure_phase: str = "completed"  # inference, json_parsing, schema_validation, evidence_validation, checkpoint_save, completed, recovered
+    failure_phase: str = "completed"  # inference, json_parsing, schema_validation, evidence_validation, checkpoint_save, completed, recovered, empty_output
     json_validation_ok: bool | None = None
     json_valid: bool | None = None
     schema_validation_ok: bool | None = None
@@ -409,6 +425,8 @@ class ChunkDiagnosticRecord:
     error_detail: str | None = None
     request_correlation_id: str | None = None
     timestamp: str | None = None
+    topics_count: int = 0
+    thematic_status: str = "PENDING"
 
     def __post_init__(self) -> None:
         if not self.model and self.model_id:
@@ -477,6 +495,8 @@ class ChunkDiagnosticRecord:
             "error_detail": self.details,
             "request_correlation_id": self.request_correlation_id,
             "timestamp": self.timestamp,
+            "topics_count": int(self.topics_count),
+            "thematic_status": self.thematic_status,
         }
 
     @classmethod
@@ -504,6 +524,8 @@ class ChunkDiagnosticRecord:
             details=data.get("details") or data.get("error_detail"),
             request_correlation_id=data.get("request_correlation_id"),
             timestamp=data.get("timestamp"),
+            topics_count=int(data.get("topics_count", 0)),
+            thematic_status=str(data.get("thematic_status", "PENDING")),
         )
 
 
@@ -521,6 +543,7 @@ class DiscoveryChunkOutcome:
     attempts: int = 1
     duration_seconds: float = 0.0
     evidence_ids: tuple[str, ...] = ()
+    thematic_status: str = "PENDING"
 
     def __post_init__(self) -> None:
         if self.diagnostic_record is None and self.diagnostic is not None:
@@ -534,6 +557,7 @@ class DiscoveryChunkOutcome:
             "chunk_id": self.chunk_id,
             "chunk_index": self.chunk_index,
             "status": self.status,
+            "thematic_status": self.thematic_status,
             "error_type": self.error_type,
             "safe_error_code": self.safe_error_code,
             "attempts": self.attempts,
@@ -603,6 +627,18 @@ def classify_discovery_exception(
                 "json_parsing",
                 "Sintassi JSON non valida o testo di risposta malformato",
             )
+        if "degenerazione ciclica" in msg or "loop di attrattore" in msg or "carattere ripetuto" in msg:
+            return (
+                ChunkDiagnosticCategory.DEGENERATE_OUTPUT.value,
+                "inference",
+                "Risposta del modello scartata per output ciclico o degenerato",
+            )
+        if "tentativi esauriti" in msg or "attempts exhausted" in msg:
+            return (
+                ChunkDiagnosticCategory.RETRY_EXHAUSTED.value,
+                "inference",
+                "Numero massimo di tentativi esaurito per il blocco",
+            )
         if "length" in msg or finish_reason == "length":
             return (
                 ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value,
@@ -624,6 +660,7 @@ def classify_discovery_exception(
 
     if isinstance(exc, (AiBackendRequestError, AnalysisInputTooLargeError)):
         err_cat = getattr(exc, "error_category", None)
+        exc_str = str(exc).lower()
         if err_cat in ("CONTEXT_OVERFLOW", "HTTP_CONTEXT_OVERFLOW"):
             return (
                 ChunkDiagnosticCategory.HTTP_CONTEXT_OVERFLOW.value,
@@ -636,11 +673,11 @@ def classify_discovery_exception(
                 "inference",
                 "Schema JSON rifiutato dal server locale LM Studio",
             )
-        if err_cat in ("INFERENCE_BACKEND_ERROR", "SERVER_ERROR"):
+        if err_cat in ("INFERENCE_BACKEND_ERROR", "SERVER_ERROR") or "grammar stack" in exc_str or "gbnf" in exc_str:
             return (
-                ChunkDiagnosticCategory.UNKNOWN_ERROR.value,
+                ChunkDiagnosticCategory.GBNF_GRAMMAR_ERROR.value,
                 "inference",
-                "Errore del motore di inferenza locale LM Studio durante la generazione (crash stream/grammar)",
+                "Errore del motore di inferenza locale LM Studio durante la generazione (crash stream/grammar GBNF)",
             )
         if (
             err_cat in ("INVALID_PARAMS", "INVALID_PARAMETER", "HTTP_INVALID_PARAMETERS")

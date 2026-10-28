@@ -1,0 +1,11 @@
+<?xml version='1.0' encoding='utf-8'?>
+<DumpFile xmlns="http://cellebrite.com/ufdr" type="UFDR" version="2.0">
+  <InstantMessages>
+    <Message id="100">
+      <Timestamp>2024-05-01T12:00:00+00:00</Timestamp>
+      <Sender>+39 000 0000001</Sender>
+      <Body>Messaggio con namespace</Body>
+      <Deleted>false</Deleted>
+    </Message>
+  </InstantMessages>
+</DumpFile>

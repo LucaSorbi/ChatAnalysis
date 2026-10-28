@@ -10,8 +10,8 @@ from ai.lmstudio import LmStudioClient
 from ai.topics import TopicDiscoveryAnalyzer
 
 sys.stdout.reconfigure(encoding="utf-8")
-
-p = Path(r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip")
+from scripts.export_discovery_26of26 import resolve_input_archive_path
+p = resolve_input_archive_path()
 req = IngestionRequest(
     file_bytes=p.read_bytes(),
     filename=p.name,

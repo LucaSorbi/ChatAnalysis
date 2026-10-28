@@ -836,12 +836,18 @@ def export_topic_detection_json(
         except Exception:
             pass
 
+    auth_ids: set[str] | None = None
+    det_meta = detection_result.metadata or {}
+    if det_meta.get("provenance_verified") is True and det_meta.get("origin") == "LIVE_LM_STUDIO" and det_meta.get("run_id"):
+        auth_ids = {str(det_meta.get("run_id"))}
+
     report = build_topic_detection_export_report(
         detection_result=detection_result,
         document=document,
         dataset_mode=dataset_mode,
         consistency_result=cons_res,
         redact_sensitive_topics=redact_sensitive_topics,
+        authoritative_live_run_ids=auth_ids,
     )
     if consistency_association_flag:
         report["result"]["consistency_association_flag"] = consistency_association_flag
@@ -887,11 +893,17 @@ def export_topic_discovery_json(
         except Exception:
             pass
 
+    auth_ids: set[str] | None = None
+    disc_meta = discovery_result.metadata or {}
+    if disc_meta.get("provenance_verified") is True and disc_meta.get("origin") == "LIVE_LM_STUDIO" and disc_meta.get("run_id"):
+        auth_ids = {str(disc_meta.get("run_id"))}
+
     report = build_topic_discovery_export_report(
         discovery_result=discovery_result,
         document=document,
         dataset_mode=dataset_mode,
         redact_sensitive_topics=redact_sensitive_topics,
+        authoritative_live_run_ids=auth_ids,
     )
     json_str = serialize_report_to_json(report)
 

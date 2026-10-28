@@ -6,8 +6,8 @@ from analysis.service import LocalTopicAnalysisService
 from ai.models import TopicQuery
 from ai.serializer import serialize_document_for_llm, generate_evidence_alias_maps
 from ai.structured import TOPIC_DETECTION_SCHEMA
-
-zip_path = Path(r"C:\Users\Luca\AppData\Local\Temp\session_media_l7yparo7\Chat WhatsApp con Gre.zip")
+from scripts.export_discovery_26of26 import resolve_input_archive_path
+zip_path = resolve_input_archive_path()
 req = IngestionRequest(file_bytes=zip_path.read_bytes(), filename=zip_path.name, source_format=SourceFormat.WHATSAPP_EXPORT)
 doc = list(ingest_file_payload(req).documents.values())[0]
 

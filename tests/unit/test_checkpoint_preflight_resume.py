@@ -1005,7 +1005,7 @@ class TestCheckpointPreflightResume:
             assert mock_client.call_count == 2
             assert res.metadata["completed_chunk_count"] == 26
             assert res.metadata["recovered_chunk_count"] == 24
-            assert store.has_checkpoint(doc_fp, cfg_fp) is False
+            assert store.has_checkpoint(doc_fp, cfg_fp) is True
 
     def test_27_end_to_end_cli_with_real_synthetic_whatsapp_file(self) -> None:
         """Test end-to-end CLI con vero file WhatsApp sintetico su disco."""
@@ -1766,8 +1766,8 @@ class TestCheckpointPreflightResume:
             assert alien_chk is not None
             assert len(alien_chk.completed_chunk_indices) == 24  # Intatto, non contaminato
 
-            # 4. Cleanup finale: il checkpoint target completato viene rimosso dopo il completamento totale (26/26)
-            assert store.has_checkpoint(doc_fp, cfg_fp) is False
+            # 4. Invariante di persistenza: il checkpoint rimane disponibile su disco per riaperture e verifiche
+            assert store.has_checkpoint(doc_fp, cfg_fp) is True
 
     def test_41_adversarial_arbitrary_plain_text_and_names_zero_leakage(self) -> None:
         """

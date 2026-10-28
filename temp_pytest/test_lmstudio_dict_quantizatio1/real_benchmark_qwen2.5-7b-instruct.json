@@ -1,0 +1,7 @@
+{
+  "benchmark_mode": "REAL_MODEL_BENCHMARK",
+  "model_spec": {
+    "model_id": "qwen2.5-7b-instruct"
+  },
+  "results_by_strategy": {}
+}

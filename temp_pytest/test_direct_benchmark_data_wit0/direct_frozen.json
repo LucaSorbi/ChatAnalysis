@@ -1,0 +1,29 @@
+{
+  "benchmark_mode": "REAL_MODEL_BENCHMARK",
+  "model_spec": {
+    "family": "QWEN",
+    "model_id": "qwen2.5-7b-instruct",
+    "quantization": "Q4_K_M",
+    "parameter_size": "7B",
+    "context_length": 8192,
+    "declared_model_metadata": {
+      "quantization": "Q4_K_M",
+      "parameter_size": "7B",
+      "context_length": 8192
+    },
+    "observed_model_metadata": {
+      "quantization": {
+        "name": "Q4_K_M",
+        "bits_per_weight": 4
+      },
+      "parameter_size": "7B",
+      "context_length": 8192
+    },
+    "metadata_discrepancies": [
+      "discrepancy_1"
+    ]
+  },
+  "timestamp": "2026-10-08T12:00:00Z",
+  "notice": "Test notice",
+  "results_by_strategy": {}
+}
