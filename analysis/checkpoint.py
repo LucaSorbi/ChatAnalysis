@@ -332,6 +332,32 @@ def validate_checkpoint_evidence_references(
         sub_res = sub.get("serialized_result", {})
         if not isinstance(sub_res, dict):
             return False
+
+        if checkpoint.analysis_type == "detection":
+            # Sotto-blocco di Topic Detection: verdetto tri-stato, topic coerente con la query
+            # ed evidenze interamente contenute nel sotto-blocco dichiarato (fail-closed).
+            sub_decision = sub_res.get("decision")
+            if sub_decision not in ("PRESENT", "ABSENT", "UNCERTAIN"):
+                return False
+            sub_det_eids = sub_res.get("evidence_ids")
+            if not isinstance(sub_det_eids, (list, tuple)):
+                return False
+            if any(e not in declared_sub_eids for e in sub_det_eids):
+                return False
+            if sub_decision == "PRESENT" and not sub_det_eids:
+                return False
+            if sub_decision == "ABSENT" and sub_det_eids:
+                return False
+            sub_t = sub_res.get("topic")
+            if not isinstance(sub_t, dict) or not sub_t.get("topic_id") or not sub_t.get("label"):
+                return False
+            if expected_topic_query is not None and (
+                sub_t.get("topic_id") != expected_topic_query.topic_id
+                or sub_t.get("label") != expected_topic_query.label
+            ):
+                return False
+            continue
+
         sub_topics = sub_res.get("topics", [])
         if not isinstance(sub_topics, (list, tuple)):
             return False
@@ -1332,7 +1358,7 @@ class AnalysisCheckpointStore:
         parent_chunk_index: int,
         subchunk_index: int,
         total_subchunks: int,
-        result: TopicDiscoveryResult,
+        result: TopicDiscoveryResult | TopicDetectionResult,
         subchunk_id: str,
         evidence_ids: Sequence[str],
         total_planned_chunks: int = 1,
@@ -1344,8 +1370,17 @@ class AnalysisCheckpointStore:
     ) -> None:
         """
         Salva incrementalmente un sotto-blocco validato in SQLite preservando la relazione parent/child.
+        Il formato di serializzazione dipende dal tipo di risultato (Discovery o Detection) e deve
+        coincidere con analysis_type; una discordanza è un errore di programmazione e viene rifiutata.
         """
-        serialized_chunk = serialize_discovery_result_for_checkpoint(result)
+        if isinstance(result, TopicDetectionResult):
+            if analysis_type != "detection":
+                raise CheckpointSaveError("Risultato di Detection non salvabile come sotto-blocco di tipo diverso da 'detection'.")
+            serialized_chunk = serialize_detection_result_for_checkpoint(result)
+        else:
+            if analysis_type == "detection":
+                raise CheckpointSaveError("Risultato di Discovery non salvabile come sotto-blocco di tipo 'detection'.")
+            serialized_chunk = serialize_discovery_result_for_checkpoint(result)
         serialized_json = json.dumps(serialized_chunk, ensure_ascii=False)
         eids_json = json.dumps(list(evidence_ids), ensure_ascii=False)
         now_iso = datetime.now(timezone.utc).isoformat()
