@@ -12,8 +12,12 @@ Uso:
     python scripts/detection_microchunk_status.py --db <cartella_checkpoint>\\checkpoints.db
     python scripts/detection_microchunk_status.py --db ... --json
 
-Nota: se l'app Streamlit sta scrivendo (modalità WAL) e la lettura fallisce, copiare checkpoints.db insieme a
-checkpoints.db-wal e checkpoints.db-shm in una cartella temporanea e puntare --db alla copia.
+Snapshot consistente (app in esecuzione): NON copiare a mano checkpoints.db/-wal/-shm (una copia ingenua di file
+in scrittura può essere incoerente o corrotta). Usare invece:
+    python scripts/detection_microchunk_status.py --db <...>\\checkpoints.db --snapshot-dir <cartella_nuova>
+che crea la copia con l'Online Backup API di SQLite (sorgente aperta in sola lettura), verifica
+`PRAGMA integrity_check` sulla copia e legge lo stato dalla copia. In alternativa: chiudere l'app e copiare i file offline.
+I checkpoint originali non vengono mai modificati.
 """
 from __future__ import annotations
 
@@ -79,19 +83,53 @@ def collect_status(db_path: Path) -> list[dict[str, Any]]:
         conn.close()
 
 
+def snapshot_db(src: Path, dest_dir: Path) -> Path:
+    """Copia consistente di `src` in `dest_dir` con l'Online Backup API + verifica di integrità. Non tocca l'originale."""
+    src = Path(src).resolve()
+    dest_dir = Path(dest_dir).resolve()
+    dest = dest_dir / "checkpoints_snapshot.db"
+    if dest == src:
+        raise ValueError("destinazione coincidente con la sorgente")
+    if dest.exists():
+        raise FileExistsError("lo snapshot di destinazione esiste già (usare una cartella nuova)")
+    dest_dir.mkdir(parents=True, exist_ok=True)
+    src_conn = sqlite3.connect(f"file:{src.as_posix()}?mode=ro", uri=True)
+    try:
+        src_conn.execute("PRAGMA query_only = ON;")
+        dst_conn = sqlite3.connect(str(dest))
+        try:
+            src_conn.backup(dst_conn)
+        finally:
+            dst_conn.close()
+    finally:
+        src_conn.close()
+    chk = sqlite3.connect(f"file:{dest.as_posix()}?mode=ro", uri=True)
+    try:
+        verdict = chk.execute("PRAGMA integrity_check;").fetchone()[0]
+    finally:
+        chk.close()
+    if verdict != "ok":
+        raise sqlite3.DatabaseError("integrity_check dello snapshot non riuscito")
+    return dest
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Stato (sola lettura) dei checkpoint di Topic Detection a microchunk")
     ap.add_argument("--db", required=True, help="Percorso di checkpoints.db")
     ap.add_argument("--json", action="store_true", help="Output JSON")
+    ap.add_argument("--snapshot-dir", default=None, help="Cartella NUOVA in cui creare uno snapshot consistente (Online Backup API)")
     args = ap.parse_args(argv)
     db = Path(args.db)
     if not db.is_file():
         print("Database non trovato.", file=sys.stderr)
         return 2
     try:
+        if args.snapshot_dir:
+            db = snapshot_db(db, Path(args.snapshot_dir))
+            print("Snapshot consistente creato e verificato (integrity_check=ok); stato letto dallo snapshot.", file=sys.stderr)
         status = collect_status(db)
-    except sqlite3.Error as exc:
-        print(f"Lettura non riuscita ({type(exc).__name__}); vedere la nota sulla copia dei file WAL.", file=sys.stderr)
+    except (sqlite3.Error, OSError, ValueError) as exc:
+        print(f"Operazione non riuscita ({type(exc).__name__}); nessuna modifica ai checkpoint originali.", file=sys.stderr)
         return 2
     if args.json:
         print(json.dumps(status, ensure_ascii=False, indent=2))

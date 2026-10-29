@@ -163,6 +163,10 @@ PROGRAMMING_ERRORS = (
 DETECTION_MICROCHUNK_MAX_SUBSTANTIVE = 8
 DETECTION_MICROCHUNK_MAX_DEPTH = 3
 DETECTION_MAX_CONSECUTIVE_TIMEOUTS = 3
+# Budget finiti (revisione PR #1): il breaker sui timeout consecutivi non contiene i pattern misti
+# (timeout alternati a errori non-timeout che lo azzerano). Limiti aggiuntivi, tutti con resume dai checkpoint:
+DETECTION_MAX_TOTAL_TIMEOUTS = 10  # timeout complessivi nella run, poi interruzione (progresso validato conservato)
+DETECTION_MICROCHUNK_TIME_BUDGET_SECONDS = 600.0  # oltre: niente ulteriori bisezioni né nodi nuovi per quel microchunk
 NON_BISECTABLE_REQUEST_CATEGORIES = frozenset(
     {"HTTP_INVALID_PARAMETERS", "INVALID_PARAMETERS", "HTTP_SCHEMA_REJECTED", "UNSUPPORTED_SCHEMA"}
 )
@@ -179,6 +183,8 @@ def new_detection_stats() -> dict[str, int]:
         "completed": 0,
         "recovered": 0,
         "failed": 0,
+        "checkpoint_writes_ok": 0,
+        "checkpoint_write_failures": 0,
     }
 
 
@@ -902,6 +908,7 @@ class LocalTopicAnalysisService:
         stats: dict[str, int],
         parent_idx: int,
         depth: int = 0,
+        deadline: float | None = None,
     ) -> tuple[list[ChunkAnalysisOutcome], TopicDetectionResult | None, list[ChunkDiagnosticRecord]]:
         """
         Esegue UN microchunk con bisezione adattiva LIMITATA (profondità massima
@@ -910,6 +917,37 @@ class LocalTopicAnalysisService:
         il risultato consolidato è non-None SOLO se l'intero microchunk è stato validato.
         """
         t0 = time.perf_counter()
+        if deadline is None:
+            deadline = t0 + DETECTION_MICROCHUNK_TIME_BUDGET_SECONDS
+        elif depth > 0 and t0 >= deadline:
+            # Budget di tempo del microchunk esaurito: nessuna nuova chiamata, il nodo è un fallimento esplicito.
+            return (
+                [
+                    ChunkAnalysisOutcome(
+                        chunk_id=sub.document_id,
+                        result=None,
+                        status="FAILED",
+                        error_type="TimeBudgetExhausted",
+                        error_message="Budget di tempo del microchunk esaurito.",
+                    )
+                ],
+                None,
+                [
+                    ChunkDiagnosticRecord(
+                        chunk_index=parent_idx,
+                        chunk_id=sub.document_id,
+                        status=ChunkLifecycleStatus.FAILED.value,
+                        attempts=0,
+                        duration_seconds=0.0,
+                        model_id=resolved_model,
+                        error_type="TimeBudgetExhausted",
+                        diagnostic_category="TIME_BUDGET_EXHAUSTED",
+                        failure_phase="budget",
+                        error_detail="Budget di tempo del microchunk esaurito.",
+                        checkpoint_saved=False,
+                    )
+                ],
+            )
         attempts_box = {"n": 1}
 
         def _on_retry(att: int, reason: str) -> None:
@@ -939,7 +977,10 @@ class LocalTopicAnalysisService:
             if isinstance(exc, AiBackendTimeoutError):
                 stats["timeouts"] += 1
                 stats["consecutive_timeouts"] += 1
-                if stats["consecutive_timeouts"] >= DETECTION_MAX_CONSECUTIVE_TIMEOUTS:
+                if (
+                    stats["consecutive_timeouts"] >= DETECTION_MAX_CONSECUTIVE_TIMEOUTS
+                    or stats["timeouts"] >= DETECTION_MAX_TOTAL_TIMEOUTS
+                ):
                     # Backend non reattivo: interrompe l'analisi (il progresso già validato resta nei checkpoint)
                     raise
             else:
@@ -950,6 +991,7 @@ class LocalTopicAnalysisService:
                 and getattr(exc, "error_category", None) not in NON_BISECTABLE_REQUEST_CATEGORIES
                 and len(sub.bundles) > 1
                 and depth < DETECTION_MICROCHUNK_MAX_DEPTH
+                and time.perf_counter() < deadline
             )
             if bisectable:
                 stats["bisections"] += 1
@@ -959,7 +1001,7 @@ class LocalTopicAnalysisService:
                     analyzer=analyzer, topic=topic, strategy=strategy, resolved_model=resolved_model,
                     eff_temp=eff_temp, eff_seed=eff_seed, eff_max_tokens=eff_max_tokens,
                     operational_mode=operational_mode, tracker=tracker, stats=stats,
-                    parent_idx=parent_idx, depth=depth + 1,
+                    parent_idx=parent_idx, depth=depth + 1, deadline=deadline,
                 )
                 out_a, res_a, diag_a = self._execute_detection_microchunk(sub=half_a, **kw)
                 out_b, res_b, diag_b = self._execute_detection_microchunk(sub=half_b, **kw)
@@ -1155,7 +1197,11 @@ class LocalTopicAnalysisService:
                     )
                     for d in sub_diags:
                         d.checkpoint_saved = True
+                    stats["checkpoint_writes_ok"] += 1
                 except Exception as save_err:
+                    # L'inferenza è valida, ma la durabilità/resume di questo microchunk NON è garantita:
+                    # il fallimento è contato e reso osservabile (non cambia la decisione semantica).
+                    stats["checkpoint_write_failures"] += 1
                     logger.warning("Salvataggio microchunk Detection su SQLite non riuscito (%s).", type(save_err).__name__)
             tracker.microchunk_done(recovered=False)
             if legacy_chunk_accounting:
@@ -1265,7 +1311,9 @@ class LocalTopicAnalysisService:
                     origin=origin,
                     run_id=run_id,
                 )
+                stats["checkpoint_writes_ok"] += 1
             except Exception as save_err:
+                stats["checkpoint_write_failures"] += 1
                 logger.warning("Salvataggio del parent Detection non riuscito (%s).", type(save_err).__name__)
         return sub_outcomes, parent_res, diag_sink
 
@@ -1293,6 +1341,8 @@ class LocalTopicAnalysisService:
         conta i sotto-blocchi come blocchi, come nel comportamento storico; il parent non viene ricontato.
         """
         t0 = time.perf_counter()
+        _wf_stats = core_kwargs.get("stats") or {}
+        _wf_before = int(_wf_stats.get("checkpoint_write_failures", 0))
         try:
             sub_outcomes, parent_res, diag_sink = self._run_detection_split_core(
                 document=document,
@@ -1328,7 +1378,8 @@ class LocalTopicAnalysisService:
             diagnostic_category="SUCCESS" if ok else (first_failed.diagnostic_category if first_failed else "UNKNOWN_ERROR"),
             failure_phase="none" if ok else (first_failed.failure_phase if first_failed else "inference"),
             error_detail="" if ok else f"{sum(1 for o in sub_outcomes if o.status != 'SUCCESS')} micro-chunk non validati",
-            checkpoint_saved=ok and chk_store is not None,
+            # vero solo se TUTTE le scritture di questo parent (microchunk + parent) sono riuscite
+            checkpoint_saved=ok and chk_store is not None and int(_wf_stats.get("checkpoint_write_failures", 0)) == _wf_before,
         )
         all_chunk_diagnostics.append(parent_diag)
         if chk_store is not None and doc_fp and cfg_fp:
@@ -1376,6 +1427,13 @@ class LocalTopicAnalysisService:
             "bisections": int(det_stats.get("bisections", 0)),
             "timeouts": int(det_stats.get("timeouts", 0)),
             "callback_errors": int(tracker.callback_errors_count),
+            "checkpoint_writes_ok": int(det_stats.get("checkpoint_writes_ok", 0)),
+            "checkpoint_write_failures": int(det_stats.get("checkpoint_write_failures", 0)),
+            "checkpoint_persistence": (
+                "WRITE_FAILURES" if det_stats.get("checkpoint_write_failures", 0) > 0
+                else ("OK" if det_stats.get("checkpoint_writes_ok", 0) > 0 else "NOT_ATTEMPTED")
+            ),
+            "resume_guaranteed": bool(det_stats.get("checkpoint_write_failures", 0) == 0),
             "duration_seconds": round(time.perf_counter() - start_time, 3),
         }
 
@@ -1912,6 +1970,7 @@ class LocalTopicAnalysisService:
         should_preserve_raw = preserve_raw_response or is_synthetic
         classification = "SYNTHETIC_DEMO" if is_synthetic else "REAL_FORENSIC"
         det_stats = new_detection_stats()
+        single_legacy_split = False  # True solo se il parent singolo è stato diviso dal percorso reattivo storico
         det_prompt_version = "detection_operational" if operational_mode else "detection"
         det_origin = (
             AnalysisOrigin.LIVE_LM_STUDIO.value
@@ -2021,6 +2080,9 @@ class LocalTopicAnalysisService:
                     tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
                     t_chunk_start = time.perf_counter()
                     chunk_attempts = 1
+                    single_from_split = False
+                    single_legacy_split = False
+                    single_wf_before = int(det_stats.get("checkpoint_write_failures", 0))
 
                     def _on_single_detect_retry(att: int, reason: str) -> None:
                         nonlocal chunk_attempts
@@ -2074,6 +2136,7 @@ class LocalTopicAnalysisService:
                                 )
                                 raise _DetectionSplitPartial()
                             result = split_parent_res
+                            single_from_split = True
                         else:
                             result = analyzer.detect_topic(
                                 document=chunks[0],
@@ -2109,10 +2172,15 @@ class LocalTopicAnalysisService:
                             json_valid=True,
                             schema_valid=True,
                             evidence_valid=True,
-                            checkpoint_saved=(chk_store is not None),
+                            checkpoint_saved=False,
                         )
                         all_chunk_diagnostics.append(diag)
-                        if chk_store is not None:
+                        if chk_store is not None and single_from_split:
+                            # Parent già persistito (o fallito e contato) dal core a microchunk: nessun secondo salvataggio.
+                            diag.checkpoint_saved = (
+                                int(det_stats.get("checkpoint_write_failures", 0)) == single_wf_before
+                            )
+                        if chk_store is not None and not single_from_split:
                             try:
                                 eff_origin_val = (
                                     AnalysisOrigin.LIVE_LM_STUDIO.value
@@ -2143,6 +2211,8 @@ class LocalTopicAnalysisService:
                                     origin=eff_origin_val,
                                     run_id=run_id,
                                 )
+                                det_stats["checkpoint_writes_ok"] += 1
+                                diag.checkpoint_saved = True
                                 chk_store.save_chunk_diagnostic(
                                     document_id=document.document_id,
                                     document_fingerprint=doc_fp,
@@ -2154,7 +2224,9 @@ class LocalTopicAnalysisService:
                                     prompt_version="detection_operational" if operational_mode else "detection",
                                 )
                             except Exception as chk_err:
-                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
+                                if not diag.checkpoint_saved:
+                                    det_stats["checkpoint_write_failures"] += 1
+                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({type(chk_err).__name__})"
                     except _DetectionSplitPartial:
                         pass  # copertura incompleta già contabilizzata: prosegue con esito PARTIAL
                     except FATAL_BACKEND_ERRORS as fatal_err:
@@ -2205,6 +2277,7 @@ class LocalTopicAnalysisService:
                                 stats=det_stats,
                                 legacy_chunk_accounting=True,
                             )
+                            single_legacy_split = True
                             all_chunk_diagnostics.extend(split_diags)
                             total_units = len(sub_outcomes)
                             completed_count = sum(1 for o in sub_outcomes if o.status == "SUCCESS")
@@ -2347,9 +2420,15 @@ class LocalTopicAnalysisService:
                 meta.update(run_meta.to_dict())
                 meta["git_commit"] = current_git_commit
                 meta["error_count"] = int(failed_count)
-                meta["chunk_count"] = int(total_units)
-                meta["completed_chunk_count"] = int(completed_count)
-                meta["failed_chunk_count"] = int(failed_count)
+                if not single_legacy_split:
+                    # Pre-split: chunk_* = PARENT (qui sempre 1); microchunk_* = unità di inferenza (separate).
+                    # Il percorso reattivo storico (single_legacy_split) conserva la contabilità a sotto-blocchi.
+                    meta["chunk_count"] = 1
+                    meta["completed_chunk_count"] = 1 if det_status == "SUCCESS" else 0
+                    meta["failed_chunk_count"] = 0 if det_status == "SUCCESS" else 1
+                meta["microchunk_count"] = int(tracker.microchunks_total)
+                meta["microchunk_completed_count"] = int(tracker.microchunks_completed)
+                meta["microchunk_failed_count"] = int(tracker.microchunks_failed)
                 meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
                 meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, 1, 1 if det_status == "SUCCESS" else 0, start_time)
                 is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
@@ -2372,7 +2451,9 @@ class LocalTopicAnalysisService:
 
             # Multi-chunk: esecuzione chunk-by-chunk con tracking dei fallimenti e progress
             outcomes: list[ChunkAnalysisOutcome] = []
+            parent_starts: list[int] = []  # indice in `outcomes` da cui iniziano gli esiti di ciascun parent
             for idx, chunk in enumerate(chunks):
+                parent_starts.append(len(outcomes))
                 current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
                 if idx in cached_results:
                     res = cached_results[idx]
@@ -2527,7 +2608,7 @@ class LocalTopicAnalysisService:
                                 prompt_version="detection_operational" if operational_mode else "detection",
                             )
                         except Exception as chk_err:
-                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
+                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({type(chk_err).__name__})"
                 except FATAL_BACKEND_ERRORS as fatal_err:
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     cat, phase, safe_desc = classify_discovery_exception(fatal_err)
@@ -2683,6 +2764,14 @@ class LocalTopicAnalysisService:
         total_units = len(outcomes)
         completed_count = sum(1 for o in outcomes if o.status == "SUCCESS")
         failed_count = total_units - completed_count
+        # Contabilità SEPARATA: parent pianificati (len(chunks)) vs unità di inferenza (microchunk/sotto-blocchi).
+        _bounds = parent_starts + [len(outcomes)]
+        parent_total = len(chunks)
+        parent_completed = sum(
+            1
+            for _i in range(len(parent_starts))
+            if _bounds[_i + 1] > _bounds[_i] and all(o.status == "SUCCESS" for o in outcomes[_bounds[_i]:_bounds[_i + 1]])
+        )
         if completed_count == 0:
             tracker.fail(f"Tutti i {total_units} blocchi di Topic Detection sono falliti.")
             raise OperationalAnalysisFailedError(
@@ -2699,8 +2788,10 @@ class LocalTopicAnalysisService:
         if failed_count == 0:
             tracker.complete(f"Topic Detection completata: {completed_count}/{total_units} blocchi analizzati.")
             det_status = "SUCCESS"
-            if self.enable_checkpointing and chk_store is not None and doc_fp and cfg_fp:
-                chk_store.clear_checkpoint(doc_fp, cfg_fp)
+            # INVARIANTE DI PERSISTENZA (revisione PR #1): NON cancellare i checkpoint completati.
+            # clear_checkpoint() rimuoveva a cascata checkpoints, checkpoint_chunks e checkpoint_subchunks:
+            # dopo un SUCCESS multi-chunk non restava più nulla per ricarico/riavvio/audit. Come per la Discovery,
+            # i checkpoint SQLite restano l'archivio autorevole; la cancellazione è solo esplicita e manuale.
         else:
             tracker.partial(f"Topic Detection completata parzialmente: {completed_count}/{total_units} blocchi analizzati.")
             det_status = "PARTIAL"
@@ -2751,14 +2842,18 @@ class LocalTopicAnalysisService:
         meta.update(run_meta.to_dict())
         meta["git_commit"] = current_git_commit
         meta["error_count"] = int(failed_count)
-        meta["chunk_count"] = int(total_units)
-        meta["completed_chunk_count"] = int(completed_count)
-        meta["failed_chunk_count"] = int(failed_count)
+        # chunk_* = PARENT pianificati (es. 26), mai il numero di microchunk; microchunk_* = unità di inferenza.
+        meta["chunk_count"] = int(parent_total)
+        meta["completed_chunk_count"] = int(parent_completed)
+        meta["failed_chunk_count"] = int(parent_total - parent_completed)
+        meta["microchunk_count"] = int(tracker.microchunks_total)
+        meta["microchunk_completed_count"] = int(tracker.microchunks_completed)
+        meta["microchunk_failed_count"] = int(tracker.microchunks_failed)
         if det_status == "PARTIAL":
             meta["is_partial_detection"] = True
             meta["coverage_status"] = "PARTIAL"
         meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
-        meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, len(chunks), tracker.completed_chunks, start_time)
+        meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, parent_total, parent_completed, start_time)
         is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
         meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
         meta["is_label_only"] = is_label_only
@@ -3506,7 +3601,7 @@ class LocalTopicAnalysisService:
                             )
                             chk_saved = True
                         except Exception as chk_err:
-                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
+                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({type(chk_err).__name__})"
 
                     obs_finish = res.metadata.get("finish_reason")
                     num_extracted = len(res.topics)

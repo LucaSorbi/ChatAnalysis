@@ -9,16 +9,23 @@ Prova LIMITATA di Topic Detection a microchunk su un documento SINTETICO (nessun
 - Usa SEMPRE una cartella di checkpoint temporanea nuova (mai quella dell'app) salvo --checkpoint-dir esplicito.
 - L'output contiene soli contatori, durate e token: nessun testo di conversazione né output del modello.
 
-Codici di uscita: 0 = eseguita; 1 = fallita; 2 = LM Studio non disponibile (NOT_VERIFIED).
+Codici di uscita (l'exit 0 significa SOLO "criteri tecnici di accettazione soddisfatti", non qualità scientifica):
+  0 = PASS tecnico: status SUCCESS, tutti i parent e i microchunk completati, nessun errore di scrittura dei
+      checkpoint, evidenze valide, chiamate entro i limiti;
+  1 = FAIL: eccezione, status != SUCCESS, copertura incompleta, persistenza non riuscita o evidenze non valide;
+  2 = LM Studio non disponibile (NOT_VERIFIED).
+L'origine (MOCK_VERIFIED / LIVE_VERIFIED), l'esito tecnico e la qualità scientifica sono righe SEPARATE dell'output.
 """
 from __future__ import annotations
 
 import argparse
+import functools
 from datetime import datetime, timezone
 import json
 from pathlib import Path
 import sys
 import tempfile
+import time
 from typing import Any, Mapping, Sequence
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -93,6 +100,29 @@ class _FakeClient(BaseLocalLlmClient):
         return LlmCompletionResponse(content=json.dumps(payload), model=self.model_id, raw_response={"finish_reason": "stop"})
 
 
+def evaluate_acceptance(res: Any, doc: ConversationEvidenceDocument, chat_calls: int) -> list[str]:
+    """Criteri tecnici di accettazione. Restituisce l'elenco dei motivi di FAIL (vuoto = PASS)."""
+    md = res.metadata
+    d = md.get("detection_diagnostics", {}) or {}
+    reasons: list[str] = []
+    if md.get("status") != "SUCCESS":
+        reasons.append(f"status={md.get('status')} (atteso SUCCESS)")
+    pt, pc = int(d.get("parent_chunks_total", 0)), int(d.get("parent_chunks_completed", 0))
+    if pt <= 0 or pc != pt:
+        reasons.append(f"parent completati {pc}/{pt}")
+    mt, mc, mf = int(d.get("microchunks_total", 0)), int(d.get("microchunks_completed", 0)), int(d.get("microchunks_failed", 0))
+    if mt <= 0 or mc != mt or mf != 0:
+        reasons.append(f"microchunk completati {mc}/{mt}, falliti {mf}")
+    if d.get("checkpoint_persistence") != "OK" or int(d.get("checkpoint_write_failures", 0)) != 0:
+        reasons.append(f"persistenza checkpoint={d.get('checkpoint_persistence')}")
+    valid = {sec.evidence_id for sec in doc.all_evidence_sections}
+    if not set(res.evidence_ids) <= valid:
+        reasons.append("evidenze non presenti nel documento sintetico")
+    if mt > 0 and not (mt <= chat_calls <= mt * 30):
+        reasons.append(f"chiamate chat_completion={chat_calls} fuori dai limiti [{mt}, {mt * 30}]")
+    return reasons
+
+
 def main(argv: list[str] | None = None) -> int:
     ap = argparse.ArgumentParser(description="Prova limitata di Topic Detection a microchunk su dati sintetici")
     ap.add_argument("--fake", action="store_true", help="Client simulato (MOCK_VERIFIED, mai LIVE)")
@@ -104,33 +134,63 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.fake:
         client: Any = _FakeClient(args.model)
-        origin = "MOCK_VERIFIED"
     else:
         from ai.lmstudio import LmStudioClient
         client = LmStudioClient(base_url="http://127.0.0.1:1234")
-        origin = "LIVE_VERIFIED"
         if not client.is_available():
             print("LM Studio non raggiungibile su 127.0.0.1:1234: NOT_VERIFIED")
             return 2
+
+    # conteggio delle chiamate effettive a chat_completion (livello client; i retry interni del trasporto
+    # sono visibili solo in http_requests_sent del tracker)
+    chat_calls = {"n": 0}
+    _orig_chat = client.chat_completion
+
+    @functools.wraps(_orig_chat)  # conserva la firma: il service ispeziona i parametri accettati
+    def _counted_chat(*a: Any, **k: Any) -> Any:
+        chat_calls["n"] += 1
+        return _orig_chat(*a, **k)
+
+    client.chat_completion = _counted_chat
 
     chk_dir = Path(args.checkpoint_dir) if args.checkpoint_dir else Path(tempfile.mkdtemp(prefix="chatanalysis_limited_det_"))
     store = AnalysisCheckpointStore(checkpoint_dir=chk_dir)
     service = LocalTopicAnalysisService(client=client, checkpoint_store=store, enable_checkpointing=True)
     doc = build_synthetic_document(args.messages)
     topic = TopicQuery(topic_id="limited_probe", label=args.topic, description=args.topic)
+    t0 = time.perf_counter()
     try:
         res = service.run_topic_detection(document=doc, topic=topic, client=client, model_name=args.model)
     except Exception as exc:  # esito esplicito, senza messaggi dell'eccezione (potrebbero contenere testo)
-        print(f"FALLITA ({type(exc).__name__})")
+        print(f"esito_tecnico=FAIL motivo=eccezione:{type(exc).__name__} chiamate_chat_completion={chat_calls['n']}")
         return 1
+    elapsed = round(time.perf_counter() - t0, 2)
 
     d = res.metadata.get("detection_diagnostics", {})
-    print(f"esito={origin} decisione={res.decision.value} stato={res.metadata.get('status')} modello={res.metadata.get('model')}")
+    live = (not args.fake) and res.metadata.get("origin") == "LIVE_LM_STUDIO"
+    reasons = evaluate_acceptance(res, doc, chat_calls["n"])
+    print(f"origine={'LIVE_VERIFIED' if live else 'MOCK_VERIFIED' if args.fake else 'NOT_VERIFIED'} modello={res.metadata.get('model')}")
+    print(f"status={res.metadata.get('status')} decisione={res.decision.value} evidenze={len(res.evidence_ids)}")
+    print(
+        f"parent={d.get('parent_chunks_completed')}/{d.get('parent_chunks_total')} "
+        f"microchunk={d.get('microchunks_completed')}/{d.get('microchunks_total')} falliti={d.get('microchunks_failed')} "
+        f"persistenza={d.get('checkpoint_persistence')} tempo_s={elapsed}"
+    )
+    print(
+        f"chiamate_chat_completion={chat_calls['n']} http_requests_sent={d.get('http_requests_sent')} "
+        f"retry={d.get('retries')} bisezioni={d.get('bisections')} timeout={d.get('timeouts')}"
+    )
     print("contatori=" + json.dumps(dict(d), ensure_ascii=False, sort_keys=True))
     print("micro-chunk (indice parent | stato | tentativi | secondi | token prompt/completion):")
     for r in res.metadata.get("chunk_diagnostics", []):
         print(f"  {r.get('chunk_index')} | {r.get('status')} | {r.get('attempts')} | {r.get('duration_seconds')} | {r.get('prompt_tokens')}/{r.get('completion_tokens')}")
     print(f"checkpoint_dir={chk_dir}")
+    # qualità scientifica: SEPARATA dall'esito tecnico (sul sintetico ci si attende PRESENT; non è un criterio di accettazione)
+    print(f"qualita_scientifica={'ATTESA_PRESENT_OTTENUTA' if res.decision.value == 'PRESENT' else 'DIVERGENTE_DA_PRESENT'} (informativa, non vincolante)")
+    if reasons:
+        print("esito_tecnico=FAIL motivi=" + "; ".join(reasons))
+        return 1
+    print("esito_tecnico=PASS (exit 0 = criteri tecnici soddisfatti, non prova di qualità del modello)")
     return 0
 
 
