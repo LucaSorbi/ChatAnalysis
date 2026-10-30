@@ -94,50 +94,62 @@ def create_streamlit_progress_callback(container: Any, title: str = "ANALISI IN 
     Crea un callback thread-safe compatibile con Streamlit per aggiornare
     in tempo reale il pannello di avanzamento e i contatori di inferenza.
     Garantisce piena visibilità della separazione tra ciclo di vita chunk e chiamate HTTP.
+
+    Un errore di rendering NON viene più taciuto: l'eccezione risale al tracker
+    (analysis.progress), che la conta (callback_errors_count), la registra in forma sanificata
+    (solo il nome della classe) e prosegue senza perdere lo stato dell'analisi.
     """
     def _callback(event: AnalysisProgressEvent) -> None:
-        try:
-            with container.container():
-                st.markdown(f"#### ⏳ {title}")
-                st.markdown(f"**Fase:** {event.phase}")
-                progress_val = max(0.0, min(1.0, event.percentage / 100.0))
-                st.progress(progress_val, text=f"Progresso fase corrente: {event.percentage:.1f}%")
+        with container.container():
+            st.markdown(f"#### ⏳ {title}")
+            st.markdown(f"**Fase:** {event.phase}")
+            progress_val = max(0.0, min(1.0, event.percentage / 100.0))
+            st.progress(progress_val, text=f"Progresso fase corrente: {event.percentage:.1f}%")
 
-                c1, c2, c3 = st.columns(3)
-                with c1:
-                    st.metric("Blocchi completati", f"{event.completed_chunks} / {event.total_chunks}")
-                    st.metric("Blocco attuale", f"{event.current_chunk_index} di {event.total_chunks}")
-                with c2:
-                    st.metric("Blocchi rimanenti", f"{event.remaining_chunks}")
-                    sent_txt = f"{event.requests_sent}"
-                    if event.requests_in_flight > 0:
-                        sent_txt += f" ({event.requests_in_flight} in volo)"
-                    st.metric("Richieste inviate", sent_txt)
-                with c3:
-                    st.metric("Richieste riuscite", f"{event.requests_successful}")
-                    st.metric("Retry / Fallite", f"{event.retries_count} / {event.requests_failed}")
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.metric("Blocchi completati", f"{event.completed_chunks} / {event.total_chunks}")
+                st.metric("Blocco attuale", f"{event.current_chunk_index} di {event.total_chunks}")
+            with c2:
+                st.metric("Blocchi rimanenti", f"{event.remaining_chunks}")
+                sent_txt = f"{event.requests_sent}"
+                if event.requests_in_flight > 0:
+                    sent_txt += f" ({event.requests_in_flight} in volo)"
+                st.metric("Richieste inviate", sent_txt)
+            with c3:
+                st.metric("Richieste riuscite", f"{event.requests_successful}")
+                st.metric("Retry / Fallite", f"{event.retries_count} / {event.requests_failed}")
 
-                diag_parts = []
-                if event.http_errors_count > 0:
-                    diag_parts.append(f"HTTP Error: {event.http_errors_count}")
-                if event.timeouts_count > 0:
-                    diag_parts.append(f"Timeout: {event.timeouts_count}")
-                if event.protocol_errors_count > 0:
-                    diag_parts.append(f"Protocollo/JSON: {event.protocol_errors_count}")
-                if event.split_count > 0:
-                    diag_parts.append(f"Suddivisioni dinamiche: {event.split_count}")
+            diag_parts = []
+            if event.http_errors_count > 0:
+                diag_parts.append(f"HTTP Error: {event.http_errors_count}")
+            if event.timeouts_count > 0:
+                diag_parts.append(f"Timeout: {event.timeouts_count}")
+            if event.protocol_errors_count > 0:
+                diag_parts.append(f"Protocollo/JSON: {event.protocol_errors_count}")
+            if event.split_count > 0:
+                diag_parts.append(f"Suddivisioni dinamiche: {event.split_count}")
 
-                diag_str = f" | Contabilità: {', '.join(diag_parts)}" if diag_parts else ""
+            diag_str = f" | Contabilità: {', '.join(diag_parts)}" if diag_parts else ""
+            st.caption(
+                f"⏱️ **Tempo trascorso:** `{event.elapsed_formatted}` | "
+                f"**Stato:** {event.status_message}{diag_str}"
+            )
+            if event.microchunks_total > 0:
                 st.caption(
-                    f"⏱️ **Tempo trascorso:** `{event.elapsed_formatted}` | "
-                    f"**Stato:** {event.status_message}{diag_str}"
+                    f"🧩 **Micro-chunk:** {event.microchunks_completed} / {event.microchunks_total} completati "
+                    f"(da checkpoint: {event.microchunks_recovered}, falliti: {event.microchunks_failed}, "
+                    f"bisezioni: {event.bisections_count})"
                 )
-                if "recuperati" in event.phase.casefold():
-                    st.info(f"💾 **Stato Checkpoint:** {event.phase}")
-                elif "consolidamento" in event.phase.casefold():
-                    st.info(f"🔄 **Fase:** {event.phase}")
-        except Exception:
-            pass
+            if event.callback_errors_count > 0:
+                st.caption(
+                    f"⚠️ Errori di aggiornamento interfaccia: {event.callback_errors_count} "
+                    f"(ultimo: {event.last_callback_error}). L'analisi prosegue regolarmente."
+                )
+            if "recuperati" in event.phase.casefold():
+                st.info(f"💾 **Stato Checkpoint:** {event.phase}")
+            elif "consolidamento" in event.phase.casefold():
+                st.info(f"🔄 **Fase:** {event.phase}")
 
     return _callback
 
@@ -830,6 +842,28 @@ def render_search() -> None:
                         st.write(f"- **Termini Riconosciuti**: `{', '.join(hit.matched_terms)}`")
 
 
+def discovery_completion_banner(status: str, completed_chunks: int, total_chunks: int, failed_chunks: int) -> tuple[str, str]:
+    """
+    Livello ('warning' | 'success') e testo del banner di completamento della Discovery.
+    Un esito COMPLETE_EMPTY_UNVERIFIED NON è mai presentato come successo: nessun argomento estratto
+    da testo sostanziale non equivale a «argomenti assenti» ed è un esito non verificato.
+    """
+    if status == "PARTIAL" or failed_chunks > 0:
+        return (
+            "warning",
+            f"⚠️ Topic Discovery parziale: {completed_chunks} blocchi completati su {total_chunks}. "
+            f"{failed_chunks} blocchi non sono stati validati. "
+            f"Gli argomenti visualizzati rappresentano soltanto la porzione analizzata.",
+        )
+    if status == "COMPLETE_EMPTY_UNVERIFIED":
+        return (
+            "warning",
+            f"⚠️ Topic Discovery conclusa senza argomenti ({completed_chunks}/{total_chunks} blocchi elaborati). "
+            f"Esito NON verificato: l'assenza di argomenti estratti da testo sostanziale non prova che non vi siano argomenti.",
+        )
+    return ("success", f"Topic Discovery completa: {completed_chunks}/{total_chunks} blocchi validati.")
+
+
 def render_discovery_diagnostics(
     discovery_res: TopicDiscoveryResult | None,
     document: ConversationEvidenceDocument,
@@ -871,14 +905,8 @@ def render_discovery_diagnostics(
                 f"Per analizzare il documento con '{req_m}', avviare una nuova Topic Discovery."
             )
 
-        if status == "PARTIAL" or failed_chunks > 0:
-            st.warning(
-                f"⚠️ Topic Discovery parziale: {completed_chunks} blocchi completati su {total_chunks}. "
-                f"{failed_chunks} blocchi non sono stati validati. "
-                f"Gli argomenti visualizzati rappresentano soltanto la porzione analizzata."
-            )
-        else:
-            st.success(f"Topic Discovery completa: {completed_chunks}/{total_chunks} blocchi validati.")
+        banner_level, banner_text = discovery_completion_banner(status, completed_chunks, total_chunks, failed_chunks)
+        getattr(st, banner_level)(banner_text)
 
         # Metriche di esecuzione
         m_col1, m_col2, m_col3, m_col4, m_col5 = st.columns(5)

@@ -228,7 +228,9 @@ def test_http_counter_exact_audit_scenario_overflow_split_recovery():
     requests_in_flight = 0
     Invariant: requests_sent == requests_successful + requests_failed + requests_in_flight
     """
-    doc = make_test_document(40)
+    # Parent con <= 8 messaggi sostanziali: NON viene pre-suddiviso (il pre-splitting della Detection scatta
+    # oltre 8 messaggi, come nella Discovery) e il contabile di overflow reattivo resta quello storico.
+    doc = make_test_document(6)
     topic = TopicQuery(topic_id="top_1", label="Transazioni", description="Attività finanziarie")
 
     # Simulazione: prima chiamata fallisce per overflow HTTP 400, poi 2 subchunk riescono
@@ -599,7 +601,8 @@ def test_service_resume_from_checkpoint_skips_already_completed_chunks():
     """
     with tempfile.TemporaryDirectory() as tmp_dir:
         store = AnalysisCheckpointStore(checkpoint_dir=tmp_dir)
-        doc = make_test_document(60)  # Genera ~3 chunk con max_bundles=20
+        # 3 parent da 8 messaggi (<= soglia di pre-splitting): ogni parent costa una sola chiamata.
+        doc = make_test_document(24)  # Genera 3 chunk con max_bundles=8
         topic = TopicQuery(topic_id="top_1", label="Contratti", description="Accordi contrattuali")
 
         # Prepariamo un client mock che terrebbe traccia delle chiamate
@@ -612,7 +615,7 @@ def test_service_resume_from_checkpoint_skips_already_completed_chunks():
 
         service = LocalTopicAnalysisService(
             client=mock_client,
-            max_chunk_bundles=20,
+            max_chunk_bundles=8,
             checkpoint_store=store,
             enable_checkpointing=True,
         )

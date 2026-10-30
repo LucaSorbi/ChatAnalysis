@@ -159,6 +159,38 @@ PROGRAMMING_ERRORS = (
     AssertionError,
 )
 
+# --- Topic Detection a microchunk: limiti espliciti e finiti (nessun loop infinito) ---
+DETECTION_MICROCHUNK_MAX_SUBSTANTIVE = 8
+DETECTION_MICROCHUNK_MAX_DEPTH = 3
+DETECTION_MAX_CONSECUTIVE_TIMEOUTS = 3
+# Budget finiti (revisione PR #1): il breaker sui timeout consecutivi non contiene i pattern misti
+# (timeout alternati a errori non-timeout che lo azzerano). Limiti aggiuntivi, tutti con resume dai checkpoint:
+DETECTION_MAX_TOTAL_TIMEOUTS = 10  # timeout complessivi nella run, poi interruzione (progresso validato conservato)
+DETECTION_MICROCHUNK_TIME_BUDGET_SECONDS = 600.0  # oltre: niente ulteriori bisezioni né nodi nuovi per quel microchunk
+NON_BISECTABLE_REQUEST_CATEGORIES = frozenset(
+    {"HTTP_INVALID_PARAMETERS", "INVALID_PARAMETERS", "HTTP_SCHEMA_REJECTED", "UNSUPPORTED_SCHEMA"}
+)
+
+
+def new_detection_stats() -> dict[str, int]:
+    """Contatori numerici (nessun testo) per la diagnostica della Detection a microchunk."""
+    return {
+        "detect_calls": 0,
+        "retries": 0,
+        "timeouts": 0,
+        "consecutive_timeouts": 0,
+        "bisections": 0,
+        "completed": 0,
+        "recovered": 0,
+        "failed": 0,
+        "checkpoint_writes_ok": 0,
+        "checkpoint_write_failures": 0,
+    }
+
+
+class _DetectionSplitPartial(Exception):
+    """Controllo di flusso interno: split Detection concluso con copertura incompleta."""
+
 
 def calculate_discovery_max_tokens(
     max_topics: int,
@@ -712,6 +744,327 @@ class LocalTopicAnalysisService:
             return True
         return False
 
+    # ------------------------------------------------------------------
+    # TOPIC DETECTION A MICROCHUNK (pre-splitting, checkpoint, bisezione limitata)
+    # ------------------------------------------------------------------
+
+    @staticmethod
+    def _is_live_lms_client(client: Any) -> bool:
+        return isinstance(client, LmStudioClient) or isinstance(getattr(client, "inner", None), LmStudioClient)
+
+    @staticmethod
+    def _halve_detection_document(
+        doc: ConversationEvidenceDocument, suffix_a: str, suffix_b: str
+    ) -> tuple[ConversationEvidenceDocument, ConversationEvidenceDocument]:
+        """Bisezione deterministica dei bundle: nessuna evidenza persa o duplicata."""
+        mid = len(doc.bundles) // 2
+        return (
+            ConversationEvidenceDocument(
+                document_id=f"{doc.document_id}{suffix_a}",
+                bundles=doc.bundles[:mid],
+                chat_id=doc.chat_id,
+                source_name=doc.source_name,
+            ),
+            ConversationEvidenceDocument(
+                document_id=f"{doc.document_id}{suffix_b}",
+                bundles=doc.bundles[mid:],
+                chat_id=doc.chat_id,
+                source_name=doc.source_name,
+            ),
+        )
+
+    def _should_presplit_detection(
+        self,
+        chunk: ConversationEvidenceDocument,
+        operational_mode: bool,
+        chk_store: Any,
+        doc_fp: str,
+        cfg_fp: str,
+        parent_chunk_index: int,
+    ) -> bool:
+        """
+        Stessa regola di innesco della Discovery: pre-split deterministico se il parent supera
+        DETECTION_MICROCHUNK_MAX_SUBSTANTIVE messaggi sostanziali, oppure se esistono già sotto-blocchi
+        persistiti per questo parent (ripresa). Solo in modalità operativa (i percorsi di benchmark
+        congelati restano invariati).
+        """
+        if not operational_mode or len(chunk.bundles) <= 1:
+            return False
+        subst = sum(1 for b in chunk.bundles if is_substantive_message_bundle(b))
+        if subst > DETECTION_MICROCHUNK_MAX_SUBSTANTIVE:
+            return True
+        if chk_store is not None and doc_fp and cfg_fp:
+            try:
+                return bool(chk_store.get_subchunks(doc_fp, cfg_fp, parent_chunk_index=parent_chunk_index))
+            except Exception:
+                return False
+        return False
+
+    def _plan_detection_subchunks(
+        self, chunk: ConversationEvidenceDocument, operational_mode: bool
+    ) -> list[ConversationEvidenceDocument]:
+        """Piano deterministico dei sotto-blocchi (microchunk, o due metà come ripiego)."""
+        if operational_mode:
+            subs = list(split_chunk_into_microchunks(chunk, max_substantive_messages=DETECTION_MICROCHUNK_MAX_SUBSTANTIVE))
+            if len(subs) > 1 or len(chunk.bundles) <= 1:
+                return subs
+        if len(chunk.bundles) <= 1:
+            return [chunk]
+        return list(self._halve_detection_document(chunk, "::sub::0", "::sub::1"))
+
+    @staticmethod
+    def _recover_detection_subchunk(
+        chk_store: Any,
+        doc_fp: str,
+        cfg_fp: str,
+        parent_chunk_index: int,
+        subchunk_index: int,
+        sub: ConversationEvidenceDocument,
+        parent_chunk: ConversationEvidenceDocument,
+        parent_document_id: str,
+        topic: TopicQuery,
+        origin: str,
+    ) -> TopicDetectionResult | None:
+        """
+        Recupera un microchunk Detection già validato. Fail-closed: qualunque incoerenza
+        (id, insieme esatto di evidenze, topic, provenienza, origine, verdetto) restituisce None
+        e il microchunk viene re-inferito; nulla viene mai cancellato o migrato.
+        """
+        if chk_store is None or not doc_fp or not cfg_fp:
+            return None
+        try:
+            cached = chk_store.get_subchunk(
+                document_fingerprint=doc_fp,
+                config_fingerprint=cfg_fp,
+                parent_chunk_index=parent_chunk_index,
+                subchunk_index=subchunk_index,
+            )
+            if cached is None:
+                return None
+            sub_eids = {s.evidence_id for s in sub.all_evidence_sections}
+            if cached.get("subchunk_id") != sub.document_id:
+                return None
+            if set(cached.get("evidence_ids", [])) != sub_eids:
+                return None
+            res = deserialize_detection_result_from_checkpoint(cached["serialized_result"])
+            if res.provenance_document_id not in (parent_document_id, parent_chunk.document_id, sub.document_id):
+                return None
+            if res.topic.topic_id != topic.topic_id or res.topic.label != topic.label:
+                return None
+            if not set(res.evidence_ids).issubset(sub_eids):
+                return None
+            if res.decision == TopicDecision.PRESENT and not res.evidence_ids:
+                return None
+            if res.decision == TopicDecision.ABSENT and res.evidence_ids:
+                return None
+            if origin and res.metadata.get("origin") != origin:
+                return None
+            return res
+        except Exception as rec_err:
+            logger.warning("Rivalidazione microchunk Detection da checkpoint non riuscita (%s).", type(rec_err).__name__)
+            return None
+
+    @staticmethod
+    def _merge_detection_halves(
+        topic: TopicQuery,
+        sub: ConversationEvidenceDocument,
+        res_a: TopicDetectionResult,
+        res_b: TopicDetectionResult,
+    ) -> TopicDetectionResult:
+        """Consolida due metà ENTRAMBE riuscite con le regole forensi di aggregazione (PRESENT/ABSENT/UNCERTAIN)."""
+        agg = aggregate_topic_detection(
+            outcomes=[res_a, res_b],
+            topic=topic,
+            parent_document_id=sub.document_id,
+            expected_chunk_count=2,
+        )
+        meta = dict(agg.metadata)
+        meta["bisected"] = True
+        meta["attempts"] = int(res_a.metadata.get("attempts", 1) or 1) + int(res_b.metadata.get("attempts", 1) or 1)
+        for key in ("prompt_version", "model", "strategy", "operational_mode"):
+            if res_a.metadata.get(key) is not None:
+                meta[key] = res_a.metadata.get(key)
+        return TopicDetectionResult(
+            topic=agg.topic,
+            decision=agg.decision,
+            evidence_ids=agg.evidence_ids,
+            rationale=agg.rationale,
+            provenance_document_id=sub.document_id,
+            metadata=meta,
+        )
+
+    def _execute_detection_microchunk(
+        self,
+        sub: ConversationEvidenceDocument,
+        analyzer: TopicDetectionAnalyzer,
+        topic: TopicQuery,
+        strategy: AnalysisLanguageStrategy,
+        resolved_model: str,
+        eff_temp: float,
+        eff_seed: int | None,
+        eff_max_tokens: int,
+        operational_mode: bool,
+        tracker: AnalysisProgressTracker,
+        stats: dict[str, int],
+        parent_idx: int,
+        depth: int = 0,
+        deadline: float | None = None,
+    ) -> tuple[list[ChunkAnalysisOutcome], TopicDetectionResult | None, list[ChunkDiagnosticRecord]]:
+        """
+        Esegue UN microchunk con bisezione adattiva LIMITATA (profondità massima
+        DETECTION_MICROCHUNK_MAX_DEPTH, solo su errori recuperabili, mai su timeout) e circuit breaker
+        sui timeout consecutivi. Restituisce (outcomes, risultato consolidato, diagnostiche):
+        il risultato consolidato è non-None SOLO se l'intero microchunk è stato validato.
+        """
+        t0 = time.perf_counter()
+        if deadline is None:
+            deadline = t0 + DETECTION_MICROCHUNK_TIME_BUDGET_SECONDS
+        elif depth > 0 and t0 >= deadline:
+            # Budget di tempo del microchunk esaurito: nessuna nuova chiamata, il nodo è un fallimento esplicito.
+            return (
+                [
+                    ChunkAnalysisOutcome(
+                        chunk_id=sub.document_id,
+                        result=None,
+                        status="FAILED",
+                        error_type="TimeBudgetExhausted",
+                        error_message="Budget di tempo del microchunk esaurito.",
+                    )
+                ],
+                None,
+                [
+                    ChunkDiagnosticRecord(
+                        chunk_index=parent_idx,
+                        chunk_id=sub.document_id,
+                        status=ChunkLifecycleStatus.FAILED.value,
+                        attempts=0,
+                        duration_seconds=0.0,
+                        model_id=resolved_model,
+                        error_type="TimeBudgetExhausted",
+                        diagnostic_category="TIME_BUDGET_EXHAUSTED",
+                        failure_phase="budget",
+                        error_detail="Budget di tempo del microchunk esaurito.",
+                        checkpoint_saved=False,
+                    )
+                ],
+            )
+        attempts_box = {"n": 1}
+
+        def _on_retry(att: int, reason: str) -> None:
+            attempts_box["n"] = max(attempts_box["n"], att + 1)
+            stats["retries"] += 1
+            tracker.record_retry(reason)
+
+        stats["detect_calls"] += 1
+        try:
+            res = analyzer.detect_topic(
+                document=sub,
+                topic=topic,
+                strategy=strategy,
+                model_id=resolved_model,
+                temperature=eff_temp,
+                seed=eff_seed,
+                timeout_seconds=self.timeout_seconds,
+                max_tokens=eff_max_tokens,
+                operational_mode=operational_mode,
+                context_length=self.context_length,
+                on_retry_callback=_on_retry,
+            )
+        except Exception as exc:
+            if isinstance(exc, (*PROGRAMMING_ERRORS, *SYSTEMIC_BACKEND_ERRORS)):
+                raise
+            cat, phase, safe_desc = classify_discovery_exception(exc)
+            if isinstance(exc, AiBackendTimeoutError):
+                stats["timeouts"] += 1
+                stats["consecutive_timeouts"] += 1
+                if (
+                    stats["consecutive_timeouts"] >= DETECTION_MAX_CONSECUTIVE_TIMEOUTS
+                    or stats["timeouts"] >= DETECTION_MAX_TOTAL_TIMEOUTS
+                ):
+                    # Backend non reattivo: interrompe l'analisi (il progresso già validato resta nei checkpoint)
+                    raise
+            else:
+                stats["consecutive_timeouts"] = 0
+
+            bisectable = (
+                isinstance(exc, (AiBackendRequestError, AnalysisInputTooLargeError, AiStructuredOutputError))
+                and getattr(exc, "error_category", None) not in NON_BISECTABLE_REQUEST_CATEGORIES
+                and len(sub.bundles) > 1
+                and depth < DETECTION_MICROCHUNK_MAX_DEPTH
+                and time.perf_counter() < deadline
+            )
+            if bisectable:
+                stats["bisections"] += 1
+                tracker.microchunk_bisected()
+                half_a, half_b = self._halve_detection_document(sub, f"::d{depth + 1}a", f"::d{depth + 1}b")
+                kw = dict(
+                    analyzer=analyzer, topic=topic, strategy=strategy, resolved_model=resolved_model,
+                    eff_temp=eff_temp, eff_seed=eff_seed, eff_max_tokens=eff_max_tokens,
+                    operational_mode=operational_mode, tracker=tracker, stats=stats,
+                    parent_idx=parent_idx, depth=depth + 1, deadline=deadline,
+                )
+                out_a, res_a, diag_a = self._execute_detection_microchunk(sub=half_a, **kw)
+                out_b, res_b, diag_b = self._execute_detection_microchunk(sub=half_b, **kw)
+                if res_a is not None and res_b is not None:
+                    merged = self._merge_detection_halves(topic, sub, res_a, res_b)
+                    return (
+                        [ChunkAnalysisOutcome(chunk_id=sub.document_id, result=merged, status="SUCCESS")],
+                        merged,
+                        diag_a + diag_b,
+                    )
+                return out_a + out_b, None, diag_a + diag_b
+
+            diag = ChunkDiagnosticRecord(
+                chunk_index=parent_idx,
+                chunk_id=sub.document_id,
+                status=ChunkLifecycleStatus.FAILED.value,
+                attempts=int(getattr(exc, "attempts", attempts_box["n"])),
+                duration_seconds=round(time.perf_counter() - t0, 3),
+                model_id=resolved_model,
+                http_status=getattr(exc, "status_code", None),
+                error_type=type(exc).__name__,
+                diagnostic_category=cat,
+                failure_phase=phase,
+                error_detail=safe_desc,
+                checkpoint_saved=False,
+            )
+            return (
+                [
+                    ChunkAnalysisOutcome(
+                        chunk_id=sub.document_id,
+                        result=None,
+                        status="FAILED",
+                        error_type=type(exc).__name__,
+                        error_message=safe_desc,
+                    )
+                ],
+                None,
+                [diag],
+            )
+
+        stats["consecutive_timeouts"] = 0
+        diag = ChunkDiagnosticRecord(
+            chunk_index=parent_idx,
+            chunk_id=sub.document_id,
+            status=ChunkLifecycleStatus.SUCCESS.value,
+            attempts=int(res.metadata.get("attempts", attempts_box["n"])),
+            duration_seconds=round(time.perf_counter() - t0, 3),
+            model_id=resolved_model,
+            http_status=200,
+            finish_reason=res.metadata.get("finish_reason"),
+            prompt_tokens=res.metadata.get("prompt_tokens"),
+            completion_tokens=res.metadata.get("completion_tokens"),
+            total_tokens=res.metadata.get("total_tokens"),
+            diagnostic_category="SUCCESS",
+            failure_phase="none",
+            error_detail="",
+            json_valid=True,
+            schema_valid=True,
+            evidence_valid=True,
+            checkpoint_saved=False,
+        )
+        return [ChunkAnalysisOutcome(chunk_id=sub.document_id, result=res, status="SUCCESS")], res, [diag]
+
     def _process_subchunks_detection(
         self,
         chunk: ConversationEvidenceDocument,
@@ -725,99 +1078,364 @@ class LocalTopicAnalysisService:
         operational_mode: bool,
         tracker: AnalysisProgressTracker,
         chunk_idx_1based: int,
-        depth: int = 0,
-        use_microchunks: bool = False,
+        *,
+        chk_store: Any = None,
+        doc_fp: str = "",
+        cfg_fp: str = "",
+        parent_chunk_index: int = 0,
+        parent_document_id: str = "",
+        total_planned_chunks: int = 1,
+        prompt_version: str = "detection_operational",
+        origin: str = "",
+        run_id: str = "",
+        diagnostics_out: list[ChunkDiagnosticRecord] | None = None,
+        stats: dict[str, int] | None = None,
+        legacy_chunk_accounting: bool = False,
     ) -> list[ChunkAnalysisOutcome]:
-        """Esegue suddivisione controllata di un blocco che supera la finestra di contesto."""
-        if depth == 0 and operational_mode and use_microchunks:
-            subs = list(split_chunk_into_microchunks(chunk, max_substantive_messages=8))
-            if len(subs) <= 1 and len(chunk.bundles) > 1:
-                mid = len(chunk.bundles) // 2
-                subs = [
-                    ConversationEvidenceDocument(
-                        document_id=f"{chunk.document_id}::sub::0",
-                        bundles=chunk.bundles[:mid],
-                        chat_id=chunk.chat_id,
-                        source_name=chunk.source_name,
-                    ),
-                    ConversationEvidenceDocument(
-                        document_id=f"{chunk.document_id}::sub::1",
-                        bundles=chunk.bundles[mid:],
-                        chat_id=chunk.chat_id,
-                        source_name=chunk.source_name,
-                    ),
-                ]
-        else:
-            mid = len(chunk.bundles) // 2
-            subs = [
-                ConversationEvidenceDocument(
-                    document_id=f"{chunk.document_id}::sub::0",
-                    bundles=chunk.bundles[:mid],
-                    chat_id=chunk.chat_id,
-                    source_name=chunk.source_name,
-                ),
-                ConversationEvidenceDocument(
-                    document_id=f"{chunk.document_id}::sub::1",
-                    bundles=chunk.bundles[mid:],
-                    chat_id=chunk.chat_id,
-                    source_name=chunk.source_name,
-                ),
-            ]
-        outcomes: list[ChunkAnalysisOutcome] = []
+        """
+        Esegue la Detection microchunk per microchunk con persistenza incrementale: ogni microchunk
+        validato viene salvato su SQLite e, in caso di ripresa, SALTATO senza nuova inferenza.
+        Un microchunk fallito NON viene salvato (sarà ritentato) e NON certifica il parent.
+        """
+        stats = stats if stats is not None else new_detection_stats()
+        diag_sink = diagnostics_out if diagnostics_out is not None else []
+        parent_document_id = parent_document_id or chunk.document_id
+        subs = self._plan_detection_subchunks(chunk, operational_mode)
         total_subs = len(subs)
-        for s_idx, sub in enumerate(subs, start=1):
-            sub_display_idx = chunk_idx_1based + (s_idx - 1)
-            tracker.start_chunk(sub_display_idx, phase=f"Analisi sotto-blocco {s_idx}/{total_subs}", record_request=False)
-            try:
-                res = analyzer.detect_topic(
-                    document=sub,
-                    topic=topic,
-                    strategy=strategy,
-                    model_id=resolved_model,
-                    temperature=eff_temp,
-                    seed=eff_seed,
-                    timeout_seconds=self.timeout_seconds,
-                    max_tokens=eff_max_tokens,
-                    operational_mode=operational_mode,
-                    context_length=self.context_length,
-                )
-                outcomes.append(
-                    ChunkAnalysisOutcome(
+        tracker.begin_microchunks(chunk_idx_1based, total_subs)
+        outcomes: list[ChunkAnalysisOutcome] = []
+
+        for s_idx0, sub in enumerate(subs):
+            sub_eids = tuple(s.evidence_id for s in sub.all_evidence_sections)
+            cached = self._recover_detection_subchunk(
+                chk_store, doc_fp, cfg_fp, parent_chunk_index, s_idx0, sub, chunk, parent_document_id, topic, origin
+            )
+            if cached is not None:
+                stats["recovered"] += 1
+                outcomes.append(ChunkAnalysisOutcome(chunk_id=sub.document_id, result=cached, status="SUCCESS"))
+                diag_sink.append(
+                    ChunkDiagnosticRecord(
+                        chunk_index=parent_chunk_index,
                         chunk_id=sub.document_id,
-                        result=res,
-                        status="SUCCESS",
+                        status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
+                        attempts=0,
+                        duration_seconds=0.0,
+                        model_id=resolved_model,
+                        diagnostic_category="NONE",
+                        failure_phase="recovered",
+                        error_detail="Recuperato da checkpoint SQLite",
+                        json_valid=True,
+                        schema_valid=True,
+                        evidence_valid=True,
+                        checkpoint_saved=True,
                     )
                 )
-                tracker.chunk_success(sub_display_idx, record_request=False)
-            except Exception as s_exc:
-                if depth < 3 and len(sub.bundles) > 1 and isinstance(s_exc, (AiBackendRequestError, AnalysisInputTooLargeError, AiStructuredOutputError)):
-                    nested = self._process_subchunks_detection(
-                        chunk=sub,
-                        analyzer=analyzer,
-                        topic=topic,
-                        strategy=strategy,
-                        resolved_model=resolved_model,
-                        eff_temp=eff_temp,
-                        eff_seed=eff_seed,
-                        eff_max_tokens=eff_max_tokens,
-                        operational_mode=operational_mode,
-                        tracker=tracker,
-                        chunk_idx_1based=sub_display_idx,
-                        depth=depth + 1,
+                tracker.microchunk_done(recovered=True)
+                if legacy_chunk_accounting:
+                    tracker.chunk_success(chunk_idx_1based + s_idx0, record_request=False)
+                continue
+
+            tracker.start_chunk(
+                chunk_idx_1based,
+                phase=f"Analisi micro-chunk {s_idx0 + 1}/{total_subs}",
+                record_request=False,
+            )
+            sub_outcomes, sub_res, sub_diags = self._execute_detection_microchunk(
+                sub=sub,
+                analyzer=analyzer,
+                topic=topic,
+                strategy=strategy,
+                resolved_model=resolved_model,
+                eff_temp=eff_temp,
+                eff_seed=eff_seed,
+                eff_max_tokens=eff_max_tokens,
+                operational_mode=operational_mode,
+                tracker=tracker,
+                stats=stats,
+                parent_idx=parent_chunk_index,
+            )
+            diag_sink.extend(sub_diags)
+            outcomes.extend(sub_outcomes)
+            if sub_res is None:
+                stats["failed"] += 1
+                tracker.microchunk_failed()
+                if legacy_chunk_accounting:
+                    tracker.chunk_failed(chunk_idx_1based + s_idx0, "sotto-blocco non validato", record_request=False)
+                continue
+
+            stats["completed"] += 1
+            if chk_store is not None and doc_fp and cfg_fp:
+                try:
+                    meta = {k: v for k, v in dict(sub_res.metadata).items() if k != "raw_response"}
+                    if origin:
+                        meta["origin"] = origin
+                    if run_id:
+                        meta["run_id"] = run_id
+                    chk_store.save_subchunk(
+                        document_id=parent_document_id,
+                        document_fingerprint=doc_fp,
+                        config_fingerprint=cfg_fp,
+                        parent_chunk_index=parent_chunk_index,
+                        subchunk_index=s_idx0,
+                        total_subchunks=total_subs,
+                        result=TopicDetectionResult(
+                            topic=sub_res.topic,
+                            decision=sub_res.decision,
+                            evidence_ids=sub_res.evidence_ids,
+                            rationale=sub_res.rationale,
+                            provenance_document_id=sub_res.provenance_document_id,
+                            metadata=meta,
+                        ),
+                        subchunk_id=sub.document_id,
+                        evidence_ids=sub_eids,
+                        total_planned_chunks=total_planned_chunks,
+                        analysis_type="detection",
+                        model_id=resolved_model,
+                        prompt_version=prompt_version,
+                        origin=origin,
+                        run_id=run_id,
                     )
-                    outcomes.extend(nested)
-                    continue
-                tracker.chunk_failed(sub_display_idx, str(s_exc))
-                outcomes.append(
-                    ChunkAnalysisOutcome(
-                        chunk_id=sub.document_id,
-                        result=None,
-                        status="FAILED",
-                        error_type=type(s_exc).__name__,
-                        error_message=str(s_exc),
-                    )
-                )
+                    for d in sub_diags:
+                        d.checkpoint_saved = True
+                    stats["checkpoint_writes_ok"] += 1
+                except Exception as save_err:
+                    # L'inferenza è valida, ma la durabilità/resume di questo microchunk NON è garantita:
+                    # il fallimento è contato e reso osservabile (non cambia la decisione semantica).
+                    stats["checkpoint_write_failures"] += 1
+                    logger.warning("Salvataggio microchunk Detection su SQLite non riuscito (%s).", type(save_err).__name__)
+            tracker.microchunk_done(recovered=False)
+            if legacy_chunk_accounting:
+                tracker.chunk_success(chunk_idx_1based + s_idx0, record_request=False)
         return outcomes
+
+    def _run_detection_split_core(
+        self,
+        *,
+        document: ConversationEvidenceDocument,
+        chunk: ConversationEvidenceDocument,
+        parent_idx: int,
+        tracker_idx: int,
+        total_planned_chunks: int,
+        analyzer: TopicDetectionAnalyzer,
+        topic: TopicQuery,
+        strategy: AnalysisLanguageStrategy,
+        resolved_model: str,
+        eff_temp: float,
+        eff_seed: int | None,
+        eff_max_tokens: int,
+        operational_mode: bool,
+        tracker: AnalysisProgressTracker,
+        chk_store: Any,
+        doc_fp: str,
+        cfg_fp: str,
+        prompt_version: str,
+        origin: str,
+        run_id: str,
+        stats: dict[str, int],
+        legacy_chunk_accounting: bool = False,
+    ) -> tuple[list[ChunkAnalysisOutcome], TopicDetectionResult | None, list[ChunkDiagnosticRecord]]:
+        """
+        Detection di UN parent via microchunk. Il parent è certificato (risultato non-None, checkpoint
+        del parent salvato) SOLO se TUTTI i microchunk sono validati; altrimenti nessun SUCCESS spurio.
+        """
+        diag_sink: list[ChunkDiagnosticRecord] = []
+        try:
+            sub_outcomes = self._process_subchunks_detection(
+                chunk=chunk,
+                analyzer=analyzer,
+                topic=topic,
+                strategy=strategy,
+                resolved_model=resolved_model,
+                eff_temp=eff_temp,
+                eff_seed=eff_seed,
+                eff_max_tokens=eff_max_tokens,
+                operational_mode=operational_mode,
+                tracker=tracker,
+                chunk_idx_1based=tracker_idx,
+                chk_store=chk_store,
+                doc_fp=doc_fp,
+                cfg_fp=cfg_fp,
+                parent_chunk_index=parent_idx,
+                parent_document_id=document.document_id,
+                total_planned_chunks=total_planned_chunks,
+                prompt_version=prompt_version,
+                origin=origin,
+                run_id=run_id,
+                diagnostics_out=diag_sink,
+                stats=stats,
+                legacy_chunk_accounting=legacy_chunk_accounting,
+            )
+        finally:
+            tracker.end_microchunks()
+
+        if not sub_outcomes or any(o.status != "SUCCESS" for o in sub_outcomes):
+            return sub_outcomes, None, diag_sink
+
+        parent_res = aggregate_topic_detection(
+            outcomes=sub_outcomes,
+            topic=topic,
+            parent_document_id=chunk.document_id,
+            expected_chunk_count=len(sub_outcomes),
+        )
+        meta = dict(parent_res.metadata)
+        meta.update(
+            {
+                "origin": origin,
+                "run_id": run_id,
+                "prompt_version": prompt_version,
+                "model": resolved_model,
+                "split_via_microchunks": True,
+                "microchunk_count": len(sub_outcomes),
+            }
+        )
+        parent_res = TopicDetectionResult(
+            topic=parent_res.topic,
+            decision=parent_res.decision,
+            evidence_ids=parent_res.evidence_ids,
+            rationale=parent_res.rationale,
+            provenance_document_id=chunk.document_id,
+            metadata=meta,
+        )
+        if chk_store is not None and doc_fp and cfg_fp:
+            try:
+                chk_store.save_chunk(
+                    document_id=document.document_id,
+                    document_fingerprint=doc_fp,
+                    config_fingerprint=cfg_fp,
+                    chunk_idx=parent_idx,
+                    result=parent_res,
+                    total_planned_chunks=total_planned_chunks,
+                    analysis_type="detection",
+                    model_id=resolved_model,
+                    prompt_version=prompt_version,
+                    origin=origin,
+                    run_id=run_id,
+                )
+                stats["checkpoint_writes_ok"] += 1
+            except Exception as save_err:
+                stats["checkpoint_write_failures"] += 1
+                logger.warning("Salvataggio del parent Detection non riuscito (%s).", type(save_err).__name__)
+        return sub_outcomes, parent_res, diag_sink
+
+    def _run_detection_parent_split(
+        self,
+        *,
+        all_chunk_diagnostics: list[ChunkDiagnosticRecord],
+        chunk: ConversationEvidenceDocument,
+        parent_idx: int,
+        tracker_idx: int,
+        total_planned_chunks: int,
+        document: ConversationEvidenceDocument,
+        tracker: AnalysisProgressTracker,
+        chk_store: Any,
+        doc_fp: str,
+        cfg_fp: str,
+        resolved_model: str,
+        prompt_version: str,
+        legacy_chunk_accounting: bool = False,
+        **core_kwargs: Any,
+    ) -> tuple[list[ChunkAnalysisOutcome], bool]:
+        """
+        Percorso multi-chunk: split del parent + contabilità a livello di parent (una sola volta).
+        Con legacy_chunk_accounting=True (split reattivo dopo un tentativo sul parent intero) il tracker
+        conta i sotto-blocchi come blocchi, come nel comportamento storico; il parent non viene ricontato.
+        """
+        t0 = time.perf_counter()
+        _wf_stats = core_kwargs.get("stats") or {}
+        _wf_before = int(_wf_stats.get("checkpoint_write_failures", 0))
+        try:
+            sub_outcomes, parent_res, diag_sink = self._run_detection_split_core(
+                document=document,
+                chunk=chunk,
+                parent_idx=parent_idx,
+                tracker_idx=tracker_idx,
+                total_planned_chunks=total_planned_chunks,
+                tracker=tracker,
+                chk_store=chk_store,
+                doc_fp=doc_fp,
+                cfg_fp=cfg_fp,
+                resolved_model=resolved_model,
+                prompt_version=prompt_version,
+                legacy_chunk_accounting=legacy_chunk_accounting,
+                **core_kwargs,
+            )
+        except Exception as abort_exc:
+            tracker.chunk_failed(tracker_idx, type(abort_exc).__name__, record_request=False)
+            tracker.fail(f"Topic Detection interrotta: {type(abort_exc).__name__}")
+            raise
+        all_chunk_diagnostics.extend(diag_sink)
+        ok = parent_res is not None
+        dur = round(time.perf_counter() - t0, 3)
+        first_failed = next((d for d in diag_sink if d.status == ChunkLifecycleStatus.FAILED.value), None)
+        parent_diag = ChunkDiagnosticRecord(
+            chunk_index=parent_idx,
+            chunk_id=chunk.document_id,
+            status=(ChunkLifecycleStatus.SUCCESS.value if ok else ChunkLifecycleStatus.FAILED.value),
+            attempts=sum(int(d.attempts or 0) for d in diag_sink),
+            duration_seconds=dur,
+            model_id=resolved_model,
+            http_status=200 if ok else None,
+            diagnostic_category="SUCCESS" if ok else (first_failed.diagnostic_category if first_failed else "UNKNOWN_ERROR"),
+            failure_phase="none" if ok else (first_failed.failure_phase if first_failed else "inference"),
+            error_detail="" if ok else f"{sum(1 for o in sub_outcomes if o.status != 'SUCCESS')} micro-chunk non validati",
+            # vero solo se TUTTE le scritture di questo parent (microchunk + parent) sono riuscite
+            checkpoint_saved=ok and chk_store is not None and int(_wf_stats.get("checkpoint_write_failures", 0)) == _wf_before,
+        )
+        all_chunk_diagnostics.append(parent_diag)
+        if chk_store is not None and doc_fp and cfg_fp:
+            try:
+                chk_store.save_chunk_diagnostic(
+                    document_id=document.document_id,
+                    document_fingerprint=doc_fp,
+                    config_fingerprint=cfg_fp,
+                    diagnostic=parent_diag,
+                    total_planned_chunks=total_planned_chunks,
+                    analysis_type="detection",
+                    model_id=resolved_model,
+                    prompt_version=prompt_version,
+                )
+            except Exception:
+                pass
+        if ok:
+            if not legacy_chunk_accounting:
+                tracker.chunk_success(tracker_idx, record_request=False)
+            return [ChunkAnalysisOutcome(chunk_id=chunk.document_id, result=parent_res, status="SUCCESS")], True
+        if not legacy_chunk_accounting:
+            tracker.chunk_failed(tracker_idx, "micro-chunk non validati", record_request=False)
+        return sub_outcomes, False
+
+    @staticmethod
+    def _detection_diagnostics_summary(
+        tracker: AnalysisProgressTracker,
+        det_stats: Mapping[str, int],
+        parent_total: int,
+        parent_completed: int,
+        start_time: float,
+    ) -> dict[str, Any]:
+        """Diagnostica numerica sanificata della Detection (nessun testo di conversazione né output del modello)."""
+        return {
+            "parent_chunks_total": int(parent_total),
+            "parent_chunks_completed": int(parent_completed),
+            "microchunks_total": int(tracker.microchunks_total),
+            "microchunks_completed": int(tracker.microchunks_completed),
+            "microchunks_recovered_from_checkpoint": int(tracker.microchunks_recovered),
+            "microchunks_failed": int(tracker.microchunks_failed),
+            "detect_topic_calls": int(det_stats.get("detect_calls", 0)),
+            "http_requests_sent": int(tracker.requests_sent),
+            "http_requests_failed": int(tracker.requests_failed),
+            "retries": int(tracker.retries_count),
+            "bisections": int(det_stats.get("bisections", 0)),
+            "timeouts": int(det_stats.get("timeouts", 0)),
+            "callback_errors": int(tracker.callback_errors_count),
+            "checkpoint_writes_ok": int(det_stats.get("checkpoint_writes_ok", 0)),
+            "checkpoint_write_failures": int(det_stats.get("checkpoint_write_failures", 0)),
+            "checkpoint_persistence": (
+                "WRITE_FAILURES" if det_stats.get("checkpoint_write_failures", 0) > 0
+                else ("OK" if det_stats.get("checkpoint_writes_ok", 0) > 0 else "NOT_ATTEMPTED")
+            ),
+            "resume_guaranteed": bool(det_stats.get("checkpoint_write_failures", 0) == 0),
+            "duration_seconds": round(time.perf_counter() - start_time, 3),
+        }
 
     def _execute_microchunk_with_adaptive_fallback(
         self,
@@ -1351,6 +1969,14 @@ class LocalTopicAnalysisService:
         is_synthetic = self._is_synthetic_document(document)
         should_preserve_raw = preserve_raw_response or is_synthetic
         classification = "SYNTHETIC_DEMO" if is_synthetic else "REAL_FORENSIC"
+        det_stats = new_detection_stats()
+        single_legacy_split = False  # True solo se il parent singolo è stato diviso dal percorso reattivo storico
+        det_prompt_version = "detection_operational" if operational_mode else "detection"
+        det_origin = (
+            AnalysisOrigin.LIVE_LM_STUDIO.value
+            if self._is_live_lms_client(target_client)
+            else AnalysisOrigin.MOCK_INSPECTION.value
+        )
 
         # Checkpoint: caricamento risultati validati pregressi se abilitato
         chk_store = self.checkpoint_store if self.enable_checkpointing else None
@@ -1454,17 +2080,22 @@ class LocalTopicAnalysisService:
                     tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
                     t_chunk_start = time.perf_counter()
                     chunk_attempts = 1
+                    single_from_split = False
+                    single_legacy_split = False
+                    single_wf_before = int(det_stats.get("checkpoint_write_failures", 0))
 
                     def _on_single_detect_retry(att: int, reason: str) -> None:
                         nonlocal chunk_attempts
                         chunk_attempts = max(chunk_attempts, att + 1)
 
                     try:
-                        is_live_lms_det = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
-                        subst_cnt0 = sum(1 for b in chunks[0].bundles if is_substantive_message_bundle(b))
-                        if operational_mode and is_live_lms_det and subst_cnt0 > 8 and len(chunks[0].bundles) > 1:
-                            sub_outcomes = self._process_subchunks_detection(
+                        if self._should_presplit_detection(chunks[0], operational_mode, chk_store, doc_fp, cfg_fp, 0):
+                            sub_outcomes, split_parent_res, split_diags = self._run_detection_split_core(
+                                document=document,
                                 chunk=chunks[0],
+                                parent_idx=0,
+                                tracker_idx=1,
+                                total_planned_chunks=1,
                                 analyzer=analyzer,
                                 topic=topic,
                                 strategy=strategy,
@@ -1474,15 +2105,38 @@ class LocalTopicAnalysisService:
                                 eff_max_tokens=eff_max_tokens,
                                 operational_mode=operational_mode,
                                 tracker=tracker,
-                                chunk_idx_1based=1,
-                                use_microchunks=True,
+                                chk_store=chk_store,
+                                doc_fp=doc_fp,
+                                cfg_fp=cfg_fp,
+                                prompt_version=det_prompt_version,
+                                origin=det_origin,
+                                run_id=run_id,
+                                stats=det_stats,
                             )
-                            result = aggregate_topic_detection(
-                                outcomes=sub_outcomes,
-                                topic=topic,
-                                parent_document_id=document.document_id,
-                                expected_chunk_count=len(sub_outcomes),
-                            )
+                            all_chunk_diagnostics.extend(split_diags)
+                            if split_parent_res is None:
+                                # Almeno un microchunk non validato: il parent NON è certificato (nessun SUCCESS spurio).
+                                total_units = len(sub_outcomes)
+                                completed_count = sum(1 for o in sub_outcomes if o.status == "SUCCESS")
+                                failed_count = total_units - completed_count
+                                if completed_count == 0:
+                                    raise OperationalAnalysisFailedError(
+                                        f"Tutti i {total_units} micro-chunk di Topic Detection sono falliti."
+                                    )
+                                result = aggregate_topic_detection(
+                                    outcomes=sub_outcomes,
+                                    topic=topic,
+                                    parent_document_id=document.document_id,
+                                    expected_chunk_count=total_units,
+                                )
+                                det_status = "PARTIAL"
+                                tracker.chunk_failed(1, "micro-chunk non validati", record_request=False)
+                                tracker.partial(
+                                    f"Topic Detection parziale tramite micro-chunk ({completed_count}/{total_units} validati)."
+                                )
+                                raise _DetectionSplitPartial()
+                            result = split_parent_res
+                            single_from_split = True
                         else:
                             result = analyzer.detect_topic(
                                 document=chunks[0],
@@ -1518,10 +2172,15 @@ class LocalTopicAnalysisService:
                             json_valid=True,
                             schema_valid=True,
                             evidence_valid=True,
-                            checkpoint_saved=(chk_store is not None),
+                            checkpoint_saved=False,
                         )
                         all_chunk_diagnostics.append(diag)
-                        if chk_store is not None:
+                        if chk_store is not None and single_from_split:
+                            # Parent già persistito (o fallito e contato) dal core a microchunk: nessun secondo salvataggio.
+                            diag.checkpoint_saved = (
+                                int(det_stats.get("checkpoint_write_failures", 0)) == single_wf_before
+                            )
+                        if chk_store is not None and not single_from_split:
                             try:
                                 eff_origin_val = (
                                     AnalysisOrigin.LIVE_LM_STUDIO.value
@@ -1552,6 +2211,8 @@ class LocalTopicAnalysisService:
                                     origin=eff_origin_val,
                                     run_id=run_id,
                                 )
+                                det_stats["checkpoint_writes_ok"] += 1
+                                diag.checkpoint_saved = True
                                 chk_store.save_chunk_diagnostic(
                                     document_id=document.document_id,
                                     document_fingerprint=doc_fp,
@@ -1563,7 +2224,11 @@ class LocalTopicAnalysisService:
                                     prompt_version="detection_operational" if operational_mode else "detection",
                                 )
                             except Exception as chk_err:
-                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
+                                if not diag.checkpoint_saved:
+                                    det_stats["checkpoint_write_failures"] += 1
+                                tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({type(chk_err).__name__})"
+                    except _DetectionSplitPartial:
+                        pass  # copertura incompleta già contabilizzata: prosegue con esito PARTIAL
                     except FATAL_BACKEND_ERRORS as fatal_err:
                         dur = round(time.perf_counter() - t_chunk_start, 3)
                         cat, phase, safe_desc = classify_discovery_exception(fatal_err)
@@ -1582,9 +2247,18 @@ class LocalTopicAnalysisService:
                             and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
                         )
                         if (is_context_overflow or is_truncation) and len(chunks[0].bundles) > 1:
-                            tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
-                            sub_outcomes = self._process_subchunks_detection(
+                            tracker.split_chunk(
+                                1,
+                                subchunks_count=len(self._plan_detection_subchunks(chunks[0], operational_mode)),
+                                failed_prior_request=True,
+                                prior_error_msg=type(fatal_err).__name__,
+                            )
+                            sub_outcomes, _split_parent, split_diags = self._run_detection_split_core(
+                                document=document,
                                 chunk=chunks[0],
+                                parent_idx=0,
+                                tracker_idx=1,
+                                total_planned_chunks=1,
                                 analyzer=analyzer,
                                 topic=topic,
                                 strategy=strategy,
@@ -1594,8 +2268,17 @@ class LocalTopicAnalysisService:
                                 eff_max_tokens=eff_max_tokens,
                                 operational_mode=operational_mode,
                                 tracker=tracker,
-                                chunk_idx_1based=1,
+                                chk_store=chk_store,
+                                doc_fp=doc_fp,
+                                cfg_fp=cfg_fp,
+                                prompt_version=det_prompt_version,
+                                origin=det_origin,
+                                run_id=run_id,
+                                stats=det_stats,
+                                legacy_chunk_accounting=True,
                             )
+                            single_legacy_split = True
+                            all_chunk_diagnostics.extend(split_diags)
                             total_units = len(sub_outcomes)
                             completed_count = sum(1 for o in sub_outcomes if o.status == "SUCCESS")
                             failed_count = total_units - completed_count
@@ -1737,10 +2420,17 @@ class LocalTopicAnalysisService:
                 meta.update(run_meta.to_dict())
                 meta["git_commit"] = current_git_commit
                 meta["error_count"] = int(failed_count)
-                meta["chunk_count"] = int(total_units)
-                meta["completed_chunk_count"] = int(completed_count)
-                meta["failed_chunk_count"] = int(failed_count)
+                if not single_legacy_split:
+                    # Pre-split: chunk_* = PARENT (qui sempre 1); microchunk_* = unità di inferenza (separate).
+                    # Il percorso reattivo storico (single_legacy_split) conserva la contabilità a sotto-blocchi.
+                    meta["chunk_count"] = 1
+                    meta["completed_chunk_count"] = 1 if det_status == "SUCCESS" else 0
+                    meta["failed_chunk_count"] = 0 if det_status == "SUCCESS" else 1
+                meta["microchunk_count"] = int(tracker.microchunks_total)
+                meta["microchunk_completed_count"] = int(tracker.microchunks_completed)
+                meta["microchunk_failed_count"] = int(tracker.microchunks_failed)
                 meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
+                meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, 1, 1 if det_status == "SUCCESS" else 0, start_time)
                 is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
                 meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
                 meta["is_label_only"] = is_label_only
@@ -1761,7 +2451,9 @@ class LocalTopicAnalysisService:
 
             # Multi-chunk: esecuzione chunk-by-chunk con tracking dei fallimenti e progress
             outcomes: list[ChunkAnalysisOutcome] = []
+            parent_starts: list[int] = []  # indice in `outcomes` da cui iniziano gli esiti di ciascun parent
             for idx, chunk in enumerate(chunks):
+                parent_starts.append(len(outcomes))
                 current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
                 if idx in cached_results:
                     res = cached_results[idx]
@@ -1800,6 +2492,35 @@ class LocalTopicAnalysisService:
                 def _on_chunk_detect_retry(att: int, reason: str) -> None:
                     nonlocal chunk_attempts
                     chunk_attempts = max(chunk_attempts, att + 1)
+
+                if self._should_presplit_detection(chunk, operational_mode, chk_store, doc_fp, cfg_fp, idx):
+                    # Pre-splitting deterministico (come la Discovery): nessuna chiamata sul parent intero.
+                    split_outcomes, _split_ok = self._run_detection_parent_split(
+                        all_chunk_diagnostics=all_chunk_diagnostics,
+                        document=document,
+                        chunk=chunk,
+                        parent_idx=idx,
+                        tracker_idx=current_tracker_idx,
+                        total_planned_chunks=len(chunks),
+                        analyzer=analyzer,
+                        topic=topic,
+                        strategy=strategy,
+                        resolved_model=resolved_model,
+                        eff_temp=eff_temp,
+                        eff_seed=eff_seed,
+                        eff_max_tokens=eff_max_tokens,
+                        operational_mode=operational_mode,
+                        tracker=tracker,
+                        chk_store=chk_store,
+                        doc_fp=doc_fp,
+                        cfg_fp=cfg_fp,
+                        prompt_version=det_prompt_version,
+                        origin=det_origin,
+                        run_id=run_id,
+                        stats=det_stats,
+                    )
+                    outcomes.extend(split_outcomes)
+                    continue
 
                 try:
                     res = analyzer.detect_topic(
@@ -1887,7 +2608,7 @@ class LocalTopicAnalysisService:
                                 prompt_version="detection_operational" if operational_mode else "detection",
                             )
                         except Exception as chk_err:
-                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
+                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({type(chk_err).__name__})"
                 except FATAL_BACKEND_ERRORS as fatal_err:
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     cat, phase, safe_desc = classify_discovery_exception(fatal_err)
@@ -1908,9 +2629,19 @@ class LocalTopicAnalysisService:
                         and getattr(fatal_err, "error_category", None) in ("CONTEXT_OVERFLOW", "INFERENCE_BACKEND_ERROR")
                     )
                     if (is_context_overflow or is_truncation) and len(chunk.bundles) > 1:
-                        tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
-                        sub_outcomes = self._process_subchunks_detection(
+                        tracker.split_chunk(
+                            current_tracker_idx,
+                            subchunks_count=len(self._plan_detection_subchunks(chunk, operational_mode)),
+                            failed_prior_request=True,
+                            prior_error_msg=type(fatal_err).__name__,
+                        )
+                        split_outcomes, _split_ok = self._run_detection_parent_split(
+                            all_chunk_diagnostics=all_chunk_diagnostics,
+                            document=document,
                             chunk=chunk,
+                            parent_idx=idx,
+                            tracker_idx=current_tracker_idx,
+                            total_planned_chunks=len(chunks),
                             analyzer=analyzer,
                             topic=topic,
                             strategy=strategy,
@@ -1920,13 +2651,16 @@ class LocalTopicAnalysisService:
                             eff_max_tokens=eff_max_tokens,
                             operational_mode=operational_mode,
                             tracker=tracker,
-                            chunk_idx_1based=current_tracker_idx,
+                            chk_store=chk_store,
+                            doc_fp=doc_fp,
+                            cfg_fp=cfg_fp,
+                            prompt_version=det_prompt_version,
+                            origin=det_origin,
+                            run_id=run_id,
+                            stats=det_stats,
+                            legacy_chunk_accounting=True,
                         )
-                        outcomes.extend(sub_outcomes)
-                        for so in sub_outcomes:
-                            diag_obj = getattr(so, "diagnostic", None)
-                            if diag_obj:
-                                all_chunk_diagnostics.append(diag_obj)
+                        outcomes.extend(split_outcomes)
                     else:
                         diag = ChunkDiagnosticRecord(
                             chunk_index=idx,
@@ -2030,6 +2764,14 @@ class LocalTopicAnalysisService:
         total_units = len(outcomes)
         completed_count = sum(1 for o in outcomes if o.status == "SUCCESS")
         failed_count = total_units - completed_count
+        # Contabilità SEPARATA: parent pianificati (len(chunks)) vs unità di inferenza (microchunk/sotto-blocchi).
+        _bounds = parent_starts + [len(outcomes)]
+        parent_total = len(chunks)
+        parent_completed = sum(
+            1
+            for _i in range(len(parent_starts))
+            if _bounds[_i + 1] > _bounds[_i] and all(o.status == "SUCCESS" for o in outcomes[_bounds[_i]:_bounds[_i + 1]])
+        )
         if completed_count == 0:
             tracker.fail(f"Tutti i {total_units} blocchi di Topic Detection sono falliti.")
             raise OperationalAnalysisFailedError(
@@ -2046,8 +2788,10 @@ class LocalTopicAnalysisService:
         if failed_count == 0:
             tracker.complete(f"Topic Detection completata: {completed_count}/{total_units} blocchi analizzati.")
             det_status = "SUCCESS"
-            if self.enable_checkpointing and chk_store is not None and doc_fp and cfg_fp:
-                chk_store.clear_checkpoint(doc_fp, cfg_fp)
+            # INVARIANTE DI PERSISTENZA (revisione PR #1): NON cancellare i checkpoint completati.
+            # clear_checkpoint() rimuoveva a cascata checkpoints, checkpoint_chunks e checkpoint_subchunks:
+            # dopo un SUCCESS multi-chunk non restava più nulla per ricarico/riavvio/audit. Come per la Discovery,
+            # i checkpoint SQLite restano l'archivio autorevole; la cancellazione è solo esplicita e manuale.
         else:
             tracker.partial(f"Topic Detection completata parzialmente: {completed_count}/{total_units} blocchi analizzati.")
             det_status = "PARTIAL"
@@ -2098,13 +2842,18 @@ class LocalTopicAnalysisService:
         meta.update(run_meta.to_dict())
         meta["git_commit"] = current_git_commit
         meta["error_count"] = int(failed_count)
-        meta["chunk_count"] = int(total_units)
-        meta["completed_chunk_count"] = int(completed_count)
-        meta["failed_chunk_count"] = int(failed_count)
+        # chunk_* = PARENT pianificati (es. 26), mai il numero di microchunk; microchunk_* = unità di inferenza.
+        meta["chunk_count"] = int(parent_total)
+        meta["completed_chunk_count"] = int(parent_completed)
+        meta["failed_chunk_count"] = int(parent_total - parent_completed)
+        meta["microchunk_count"] = int(tracker.microchunks_total)
+        meta["microchunk_completed_count"] = int(tracker.microchunks_completed)
+        meta["microchunk_failed_count"] = int(tracker.microchunks_failed)
         if det_status == "PARTIAL":
             meta["is_partial_detection"] = True
             meta["coverage_status"] = "PARTIAL"
         meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
+        meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, parent_total, parent_completed, start_time)
         is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
         meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
         meta["is_label_only"] = is_label_only
@@ -2852,7 +3601,7 @@ class LocalTopicAnalysisService:
                             )
                             chk_saved = True
                         except Exception as chk_err:
-                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({chk_err})"
+                            tracker.phase = f"Avviso: Salvataggio checkpoint blocco {idx + 1} non riuscito ({type(chk_err).__name__})"
 
                     obs_finish = res.metadata.get("finish_reason")
                     num_extracted = len(res.topics)

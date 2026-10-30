@@ -28,6 +28,7 @@ Principi architetturali e forensi:
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+import logging
 import threading
 import time
 from typing import Any, Callable, Mapping
@@ -63,6 +64,15 @@ class AnalysisProgressEvent:
     planned_chunks: int = 0
     subchunks_added: int = 0
     metadata: Mapping[str, Any] = field(default_factory=dict)
+    # Contatori Detection a microchunk (default 0: compatibilità con eventi esistenti)
+    microchunks_total: int = 0
+    microchunks_completed: int = 0
+    microchunks_recovered: int = 0
+    microchunks_failed: int = 0
+    bisections_count: int = 0
+    # Errori del callback UI: solo conteggio e nome della classe dell'eccezione (mai il messaggio)
+    callback_errors_count: int = 0
+    last_callback_error: str | None = None
 
     @property
     def elapsed_formatted(self) -> str:
@@ -108,11 +118,20 @@ class AnalysisProgressEvent:
             "failed_chunks": self.failed_chunks,
             "planned_chunks": self.planned_chunks,
             "subchunks_added": self.subchunks_added,
+            "microchunks_total": self.microchunks_total,
+            "microchunks_completed": self.microchunks_completed,
+            "microchunks_recovered": self.microchunks_recovered,
+            "microchunks_failed": self.microchunks_failed,
+            "bisections_count": self.bisections_count,
+            "callback_errors_count": self.callback_errors_count,
+            "last_callback_error": self.last_callback_error,
             "metadata": dict(self.metadata),
         }
 
 
 AnalysisProgressCallback = Callable[[AnalysisProgressEvent], None]
+
+logger = logging.getLogger(__name__)
 
 
 class AnalysisProgressTracker:
@@ -145,6 +164,15 @@ class AnalysisProgressTracker:
         self.protocol_errors_count = 0
         self.valid_responses_count = 0
         self.split_count = 0
+        self.microchunks_total = 0
+        self.microchunks_completed = 0
+        self.microchunks_recovered = 0
+        self.microchunks_failed = 0
+        self.bisections_count = 0
+        self._active_micro_total = 0
+        self._active_micro_done = 0
+        self.callback_errors_count = 0
+        self.last_callback_error: str | None = None
         self.start_time = time.perf_counter()
         self.is_complete = False
         self.is_failed = False
@@ -167,7 +195,12 @@ class AnalysisProgressTracker:
         if self.total_chunks <= 0:
             return 0.0
         # Cappa al 95% finché la fase di consolidamento non è terminata
-        raw = (self.completed_chunks / self.total_chunks) * 95.0
+        # Durante l'elaborazione a microchunk del parent corrente, la frazione di microchunk
+        # già esaminati contribuisce al progresso (mai oltre 0.99 di un parent non concluso).
+        frac = 0.0
+        if self._active_micro_total > 0:
+            frac = min(0.99, self._active_micro_done / self._active_micro_total)
+        raw = ((self.completed_chunks + frac) / self.total_chunks) * 95.0
         return round(min(95.0, max(0.0, raw)), 1)
 
     def _emit(
@@ -214,13 +247,31 @@ class AnalysisProgressTracker:
             planned_chunks=self.planned_chunks,
             subchunks_added=self.subchunks_added,
             metadata=meta or {},
+            microchunks_total=self.microchunks_total,
+            microchunks_completed=self.microchunks_completed,
+            microchunks_recovered=self.microchunks_recovered,
+            microchunks_failed=self.microchunks_failed,
+            bisections_count=self.bisections_count,
+            callback_errors_count=self.callback_errors_count,
+            last_callback_error=self.last_callback_error,
         )
         if self.callback:
             try:
                 self.callback(event)
-            except Exception:
-                # Il callback UI non deve mai far fallire il processing del service layer
-                pass
+            except Exception as cb_exc:
+                # Il callback UI non deve mai far fallire il processing del service layer, ma il
+                # fallimento NON viene più taciuto: stato del tracker intatto, errore contabilizzato
+                # e registrato in forma sanificata (solo classe dell'eccezione, mai il messaggio,
+                # che potrebbe contenere testo di conversazione).
+                self.callback_errors_count += 1
+                self.last_callback_error = type(cb_exc).__name__
+                if self.callback_errors_count == 1 or self.callback_errors_count % 50 == 0:
+                    logger.warning(
+                        "Callback di avanzamento fallito (%s); errori callback totali: %d. "
+                        "L'analisi prosegue, l'interfaccia potrebbe non essere aggiornata.",
+                        self.last_callback_error,
+                        self.callback_errors_count,
+                    )
         return event
 
     # =========================================================================
@@ -394,6 +445,56 @@ class AnalysisProgressTracker:
             msg = f"Blocco {chunk_idx_1based} di {self.total_chunks} fallito{detail}."
             return self._emit(msg)
 
+    # =========================================================================
+    # CICLO DI VITA DEI MICROCHUNK (Topic Detection)
+    # I contatori dei parent (completed_chunks/total_chunks) NON vengono alterati dai microchunk.
+    # =========================================================================
+
+    def begin_microchunks(self, parent_idx_1based: int, count: int) -> AnalysisProgressEvent:
+        """Registra il piano di microchunk del parent corrente (totale dinamico)."""
+        with self._lock:
+            n = max(0, int(count))
+            self.microchunks_total += n
+            self._active_micro_total = n
+            self._active_micro_done = 0
+            msg = f"Blocco {parent_idx_1based} di {self.total_chunks} pianificato in {n} micro-chunk."
+            return self._emit(msg)
+
+    def microchunk_done(self, recovered: bool = False) -> AnalysisProgressEvent:
+        """Un microchunk concluso con successo (nuova inferenza o recupero da checkpoint)."""
+        with self._lock:
+            self.microchunks_completed += 1
+            if recovered:
+                self.microchunks_recovered += 1
+            self._active_micro_done += 1
+            kind = "recuperato da checkpoint" if recovered else "completato"
+            msg = f"Micro-chunk {kind} ({self.microchunks_completed}/{self.microchunks_total})."
+            return self._emit(msg)
+
+    def microchunk_failed(self) -> AnalysisProgressEvent:
+        """Un microchunk fallito in modo definitivo (non certifica il parent)."""
+        with self._lock:
+            self.microchunks_failed += 1
+            self._active_micro_done += 1
+            msg = f"Micro-chunk fallito (falliti: {self.microchunks_failed}/{self.microchunks_total})."
+            return self._emit(msg)
+
+    def microchunk_bisected(self) -> AnalysisProgressEvent:
+        """Bisezione adattiva di un microchunk: il totale dinamico cresce di 1."""
+        with self._lock:
+            self.bisections_count += 1
+            self.microchunks_total += 1
+            self._active_micro_total += 1
+            msg = f"Micro-chunk suddiviso (bisezioni: {self.bisections_count})."
+            return self._emit(msg)
+
+    def end_microchunks(self) -> AnalysisProgressEvent:
+        """Chiude la finestra di microchunk del parent corrente."""
+        with self._lock:
+            self._active_micro_total = 0
+            self._active_micro_done = 0
+            return self._emit("Micro-chunk del blocco corrente conclusi.")
+
     def start_consolidation(self) -> AnalysisProgressEvent:
         """Registra l'avvio della fase di consolidamento / aggregazione topic."""
         with self._lock:
@@ -413,12 +514,18 @@ class AnalysisProgressTracker:
         """
         with self._lock:
             should_be_partial = is_partial or self.failed_chunks > 0 or self.completed_chunks < self.total_chunks
-            if should_be_partial and self.completed_chunks > 0:
+            micro_progress = self.microchunks_completed > 0 and self.completed_chunks == 0
+            if should_be_partial and (self.completed_chunks > 0 or micro_progress):
                 self.phase = "Completato parzialmente"
                 self.is_complete = False
                 self.is_partial = True
                 self.is_failed = False
-                pct = round((self.completed_chunks / self.total_chunks) * 100.0, 1) if self.total_chunks > 0 else 0.0
+                if self.completed_chunks > 0:
+                    pct = round((self.completed_chunks / self.total_chunks) * 100.0, 1) if self.total_chunks > 0 else 0.0
+                else:
+                    # Nessun parent concluso ma microchunk validati: copertura reale a livello di microchunk
+                    pct = round((self.microchunks_completed / max(1, self.microchunks_total)) * 100.0, 1)
+                    pct = min(pct, 99.0)
                 return self._emit(summary_msg, is_complete=False, is_failed=False, is_partial=True, override_pct=pct)
             elif should_be_partial and self.completed_chunks == 0:
                 self.phase = "Fallito"
