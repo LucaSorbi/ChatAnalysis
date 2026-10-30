@@ -93,6 +93,15 @@ bash run_benchmark.sh
 
 ---
 
+## Archivio storico (`Trash/`)
+
+I report, gli audit e i materiali di lavoro storici sono stati spostati (non cancellati) in [`Trash/`](Trash/README.md):
+indice per la tesi in [`Trash/INDICE_TESI.md`](Trash/INDICE_TESI.md), elenco completo con hash in `Trash/MANIFEST.csv`.
+Il repository è pubblico: `Trash/Privato_Locale/` è l'unica area ignorata da git e serve solo a conservare in locale
+analisi private (vedi `docs/TRASH_ARCHIVIAZIONE_LOCALE_RUNBOOK_WINDOWS.md`).
+
+---
+
 ## Licenza
 
 Progetto sviluppato per tesi universitaria in Informatica Forense. Licenza MIT.
