@@ -61,6 +61,18 @@ creano unità; completed+failed ≤ total. Non toccati: prompt, parsing, chunkin
 | `tests/unit` completo (9 file UI ignorati come in baseline) | 51 falliti, 1859 passati, 2 saltati: gli stessi 51 della baseline (dipendenze `ijson`/`streamlit` mancanti), nessuna nuova rottura |
 | `tests/integration` | 30 falliti / 137 passati / 33 errori: identico alla baseline |
 
+## Esito del primo collaudo Windows (30/10/2026) e correzione minima
+Primo collaudo su Windows con Python 3.12.10, Streamlit e ijson autentici:
+`python -m pytest tests/unit/test_progress_panel_apptest.py tests/unit/test_apptest_flows.py tests/unit/test_ui_smoke.py -q`
+→ **4 FAILED, 20 PASSED** (riportato dal proprietario; non rieseguito da Claude).
+Causa dei 4 fallimenti (tutti in `test_progress_panel_apptest.py`, stessa origine): nello script di anteprima l'ultima riga di `main()` era
+un'istruzione-espressione condizionale su più righe (`st.success(...) if ... else st.info(...)`); durante AppTest la "magic" di Streamlit
+riscrive le istruzioni-espressione e ne analizza il frammento con `ast.parse`, sollevando `SyntaxError: '(' was never closed`. **Non è un errore della
+pipeline Discovery**; l'ipotesi della causa deriva dal traceback riportato e dalla struttura del codice, non è riproducibile qui senza Streamlit reale.
+Correzione: stessa logica di banner, riscritta come normale blocco `if/else` su righe distinte (solo `scripts/preview_discovery_progress_panel.py`).
+Verifica statica [STATICALLY_VERIFIED]: prima dello script c'era 1 istruzione-espressione di tipo condizionale, dopo 0.
+Stato AppTest reale dopo la correzione: **NOT_VERIFIED** finché non c'è una riesecuzione reale su Windows (non va considerato PASSED).
+
 ## NOT_VERIFIED e comando Windows
 Moduli AppTest prima non collezionati, i 51 test falliti per dipendenze e il pannello reale. Sul PC Windows (ambiente del progetto, Streamlit e ijson veri):
 ```

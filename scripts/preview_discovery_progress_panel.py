@@ -85,8 +85,11 @@ def main() -> None:
             panel = st.empty()
             cb = create_streamlit_progress_callback(panel, title="TOPIC DISCOVERY SINTETICA IN CORSO")
             res = svc.run_topic_discovery(document=doc, client=client, model_name=MODEL, progress_callback=cb)
-            st.success(f"Esito del servizio: {res.metadata.get('status')}") if res.metadata.get("status") == "COMPLETE" else st.info(
-                f"Esito del servizio: {res.metadata.get('status')}")
+            status = res.metadata.get("status")
+            if status == "COMPLETE":
+                st.success(f"Esito del servizio: {status}")
+            else:
+                st.info(f"Esito del servizio: {status}")
 
 
 main()
