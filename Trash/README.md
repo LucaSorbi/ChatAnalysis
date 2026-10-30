@@ -32,6 +32,12 @@ che prima affollavano la radice del repository. Nulla è stato cancellato; la st
 - I documenti già esistenti che nominano un report spostato (es. `docs/*.md`, runbook in radice) conservano il testo
   originale; per il nuovo percorso usare `MANIFEST.csv`.
 
+## Limiti dell'autoverifica
+`inventory/INVENTORY_AFTER.csv` è un'istantanea al commit `4e30039`: non include sé stesso e non è aggiornato dai commit
+successivi. Un file di hash non prova la propria integrità: la prova indipendente è `git diff -M --name-status 93c106d 4e30039`
+(57 voci `R100`). Dettagli in `inventory/README.md`. Gli script storici `scripts/create_*_archive.py` sono documentati come
+non eseguibili in `scripts/HISTORICAL_ARCHIVE_BUILDERS.md`.
+
 ## Verifica
 
 `tests/unit/test_trash_archive_integrity.py` controlla che ogni file `MOVED` esista al nuovo percorso con lo stesso

@@ -3136,7 +3136,7 @@ class LocalTopicAnalysisService:
                                 tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi (sub-chunk).", thematic_unverified=True)
                                 disc_status = "COMPLETE_EMPTY_UNVERIFIED"
                             else:
-                                tracker.complete("Topic Discovery completata: nessun argomento emerso.")
+                                tracker.complete("Topic Discovery completata: nessun argomento emerso.", no_topics=True)
                                 disc_status = "COMPLETE_NO_TOPICS"
                         elif completed_count > 0:
                             disc_res = aggregate_topic_discovery(
@@ -3180,7 +3180,7 @@ class LocalTopicAnalysisService:
                                     tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi.", thematic_unverified=True)
                                     disc_status = "COMPLETE_EMPTY_UNVERIFIED"
                                 else:
-                                    tracker.complete("Topic Discovery completata: nessun argomento emerso.")
+                                    tracker.complete("Topic Discovery completata: nessun argomento emerso.", no_topics=True)
                                     disc_status = "COMPLETE_NO_TOPICS"
                             chk_saved = False
                             eff_origin_val = (
@@ -3282,7 +3282,7 @@ class LocalTopicAnalysisService:
                                 and getattr(fatal_err, "error_category", None) == "CONTEXT_OVERFLOW"
                             )
                             if (is_context_overflow or is_truncation) and len(chunks[0].bundles) > 1:
-                                tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                                tracker.split_chunk(1, subchunks_count=2, failed_prior_request=True, prior_error_msg=type(fatal_err).__name__, grow_total=False)
                                 is_live_lms_s = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
                                 eff_origin_s = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms_s else AnalysisOrigin.MOCK_INSPECTION.value
                                 sub_outs, sub_res = self._process_subchunks_discovery(
@@ -3313,6 +3313,11 @@ class LocalTopicAnalysisService:
                                 total_units = len(sub_outs)
                                 completed_count = len(sub_res)
                                 failed_count = total_units - completed_count
+                                # Il parent e' SUCCESS solo se tutti i microchunk sono validati (stessa regola del pre-split).
+                                if completed_count == total_units:
+                                    tracker.chunk_success(1, record_request=False)
+                                elif completed_count > 0:
+                                    tracker.chunk_failed(1, "micro-chunk non validati", record_request=False)
                                 if completed_count == total_units:
                                     disc_res = aggregate_topic_discovery(
                                         chunk_results=sub_res,
@@ -3326,7 +3331,7 @@ class LocalTopicAnalysisService:
                                         tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi (sub-chunk).", thematic_unverified=True)
                                         disc_status = "COMPLETE_EMPTY_UNVERIFIED"
                                     else:
-                                        tracker.complete("Topic Discovery completata: nessun argomento emerso.")
+                                        tracker.complete("Topic Discovery completata: nessun argomento emerso.", no_topics=True)
                                         disc_status = "COMPLETE_NO_TOPICS"
                                 elif completed_count > 0:
                                     disc_res = aggregate_topic_discovery(
@@ -3904,7 +3909,7 @@ class LocalTopicAnalysisService:
                         tracker.complete(f"Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi ({completed_count}/{total_units} blocchi completati).", thematic_unverified=True)
                         disc_status = "COMPLETE_EMPTY_UNVERIFIED"
                     else:
-                        tracker.complete(f"Topic Discovery completata: nessun argomento emerso su conversazione breve ({completed_count}/{total_units} blocchi completati).")
+                        tracker.complete(f"Topic Discovery completata: nessun argomento emerso su conversazione breve ({completed_count}/{total_units} blocchi completati).", no_topics=True)
                         disc_status = "COMPLETE_NO_TOPICS"
                 # INVARIANTE FORENSE E PERSISTENZA: NON invocare MAI clear_checkpoint(doc_fp, cfg_fp)!
                 # I checkpoint SQLite rappresentano l'archivio autorevole e permanente per:

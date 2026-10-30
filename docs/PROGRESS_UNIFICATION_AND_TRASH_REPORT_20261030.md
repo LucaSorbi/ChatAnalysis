@@ -1,66 +1,72 @@
-# Unificazione progress Discovery/Detection + riordino conservativo — report finale (30/10/2026)
+# Unificazione progress Discovery/Detection + riordino conservativo — report (30/10/2026, rev. dopo revisione)
 
-Branch `feat/discovery-progress-trash-20261030` (da `main` @ `93c106d`). Due commit separati: **A** (progress Discovery),
-**B** (archivio `Trash/`, inventari, script locale, test, questo report). Nessuna modifica a main, nessun merge/force-push,
-nessuna riscrittura della storia. Etichette: STATIC / TEST / MOCK / LIVE / NOT VERIFIED. **Nessun LIVE eseguito.**
+PR #2 (draft). Branch `feat/discovery-progress-trash-20261030` da `main` @ `93c106d`. Commit: **A** `0d13bb9` (progress Discovery),
+**B** `4e30039` (archivio `Trash/`), **C** (correzioni dopo la revisione del 30/10, vedi sotto). Nessun merge, nessuna riscrittura della storia,
+nessun test LIVE. Etichette: STATICALLY_VERIFIED / TEST_VERIFIED / MOCK_VERIFIED / LIVE_VERIFIED / NOT_VERIFIED / FAILED.
 
-## Verità scomode (da leggere prima)
-1. **Il repository pubblico già contiene dati di campagna reale**: 8 database SQLite di checkpoint in
-   `forensic_provenance_audit_backup_20261027/`, `scratch/fresh_live_test_store/checkpoints.db`, una request body LLM grezza
-   (`scratch_call_385_request_body.json`), un percorso privato Windows in `scratch/debug_actual_output.py`, e 484 residui di
-   pytest in `temp_pytest/` (76 `.db`, 81 `.zip`, non ispezionati). Non li ho spostati né copiati (spostarli in `Trash/` non li
-   rende privati) e **non ho riscritto la storia**: restano pubblici nella cronologia finché non decidi tu un'operazione
-   dedicata (rimozione dall'indice + riscrittura storia + rotazione di eventuali segreti). Contenuto dei DB non letto (solo conteggi tabelle). [STATIC]
-2. **La UI Streamlit reale NON è verificata**: nell'ambiente cloud `ijson` e `streamlit` non sono installabili (PyPI bloccato).
-   La resa è provata solo con un registratore al posto di `st` [MOCK]; nessun AppTest reale, nessuno screenshot.
+**DECISIONE: MERGE BLOCKED.** (1) La UI Streamlit reale e i moduli AppTest non sono verificati con librerie autentiche (NOT_VERIFIED).
+(2) Il repository pubblico contiene file versionati la cui sensibilità è da verificare; il riordino non la riduce e non riscrive la storia:
+la decisione sul trattamento spetta al proprietario (vedi "Sicurezza"). Il triage dettagliato è solo locale, fuori dal repository.
 
-## Parte A — Progress Discovery = Detection (commit A)
-- Pannello unico (`ui/progress_view.py`, modello puro testabile): "Blocchi principali X/26" (totale stabile), "Blocco principale
-  corrente k/26", "Microchunk completati X/Y (totale dinamico)", "Microchunk del blocco corrente", recuperati da checkpoint, falliti,
-  bisezioni, richieste LLM inviate/riuscite/fallite/in corso, retry/timeout/HTTP/protocollo, tempo trascorso, fase leggibile.
-  Barra dei blocchi mai al 100% senza evento finale; nessuna ETA.
-- Tracker: regola delle unità (bisezione/retry non creano unità; `completed+failed ≤ total`), campi evento opzionali
-  `current_micro_total/current_micro_done` (retro-compatibili), `split_chunk(grow_total=False)`.
-- Discovery: microchunk, recuperi (senza nuova richiesta HTTP), retry e bisezioni riportati al tracker; parent SUCCESS solo con tutti
-  i microchunk validati; nessun doppio conteggio HTTP (il tracker è già il `request_listener`).
-- **Difetto trovato e corretto**: dopo suddivisione in sub-chunk, 0 topic chiudeva `COMPLETE` (banner verde); ora
-  `COMPLETE_EMPTY_UNVERIFIED` (≥10 evidenze) o `COMPLETE_NO_TOPICS`.
-- **Modifica di un'aspettativa di test di PR #1**: `test_tracker_counts_callback_errors_without_losing_state` passa da 5 a 4 unità,
-  perché con la nuova regola la bisezione non crea unità. Cambio motivato dal modello dei conteggi, non per "far diventare verde" un test.
-- Non toccati: prompt, parsing, chunking reale, schema evidenze, serializzatore, modello, temperature, seed, aggregazioni, benchmark.
+## Sicurezza (sanificata)
+- Misura immediata raccomandata al proprietario: rendere privato il repository (non rimuove copie, fork, cache o cronologia).
+- È stata fatta una ricognizione ESCLUSIVAMENTE locale dei file versionati potenzialmente sensibili (categorie: residui di test,
+  backup/copie di database, file di scratch, archivi). Esito pubblico, solo per categorie: nessuna credenziale confermata; sensibilità
+  dei database e degli archivi **da verificare** dal proprietario; una voce (percorso locale personale in un file di scratch) è
+  confermata. Elenchi, hash e dettagli restano fuori dal repository.
+- Nessun file potenzialmente privato è stato spostato né copiato in `Trash/` (non diventerebbe privato) e non è stato usato `git rm --cached`
+  come falsa garanzia. Eventuale rimozione dalla cronologia (git-filter-repo, secondo la documentazione GitHub, con backup fuori dal repo e
+  coinvolgendo branch/PR/cloni) richiede approvazione esplicita e NON è stata eseguita.
+- Limite: il testo del commit B e il corpo iniziale della PR descrivevano le categorie in modo più esplicito; restano nella cronologia del branch
+  (non riscrivibile senza force-push, non autorizzato).
 
-## Parte B — `Trash/` (commit B)
-- 57 file **MOVED** con `git mv` (33 `Audit_Storici`, 12 `Analisi_Tesi`, 7 `Documentazione_Storica`, 5 `Materiale_Obsoleto/scratch`), SHA-256 prima/dopo **identico per tutti** [TEST + verifica in esecuzione]. I tre report di tesi duplicati in `docs/` restano là.
-- **KEPT** (26 voci): pacchetti, test, fixture, packaging, `RUNBOOK_UBUNTU.txt` (letto da un test), benchmark congelati e `benchmark_frozen_sha256.txt`,
-  runbook di riproduzione (UNCERTAIN: tenuti per prudenza). **PRIVATE_NOT_MOVED** (11), **UNKNOWN_NOT_MOVED** (2: zip di chat da 97 membri di benchmark, `temp_pytest/`).
-  Dettaglio per file in `Trash/MANIFEST.csv`; inventari SHA-256 completi in `Trash/inventory/` (BEFORE: 1001 file tracciati; AFTER: stato finale, non include sé stesso).
-- `.gitignore`: ignorato **solo** `Trash/Privato_Locale/*` (README escluso dall'ignore). Nessun ignore globale su `Trash/`.
-- Indice tesi (`Trash/INDICE_TESI.md`): solo rimandi ai documenti. I valori "contatore recuperati = 0" e "export 0,386 s" della Detection
-  **non compaiono in alcun file del repository**: marcati NON IN REPO, da non citare senza log/run originale.
-- Script locale `scripts/archive_private_local.py` + runbook Windows: dry-run di default, copia (mai sposta), SHA-256, SQLite via Online Backup API,
-  checkpoint attivi esclusi. Provato solo su dati sintetici [TEST].
-- Limiti noti: gli script storici `scripts/create_*_archive.py` citano ancora i vecchi percorsi in radice (non aggiornati; non eseguiti);
-  vari documenti nominano report spostati per nome (testo storico invariato; usare `MANIFEST.csv`).
-  Aprire in sola lettura un DB WAL crea `-wal/-shm` vuoti: è successo durante l'ispezione e li ho rimossi (hash dei 87 `.db` tracciati verificati invariati).
+## Commit A — progress Discovery = Detection
+Pannello condiviso (`ui/progress_view.py`, modello puro): blocchi principali X/26 con totale stabile, blocco corrente, microchunk con totale
+dinamico, recuperati da checkpoint, falliti, bisezioni, richieste LLM, retry/timeout/HTTP/protocollo, tempo; barra dei blocchi mai al 100%
+senza evento finale; nessuna ETA. Regola delle unità: il totale dei microchunk è il numero PIANIFICATO di primo livello; bisezione e retry non
+creano unità; completed+failed ≤ total. Non toccati: prompt, parsing, chunking reale, schema evidenze, modello, seed, benchmark.
 
-## Test eseguiti (ambiente: Python 3.13, stub MOCK di `ijson`/`streamlit` fuori dal repo)
+## Correzioni dopo la revisione (commit C)
+1. **Callsite `split_chunk`** [STATICALLY_VERIFIED + TEST_VERIFIED]: l'ultimo callsite Discovery (percorso reattivo a chunk singolo) cresceva ancora
+   `total_chunks` e riportava `str(errore)`. Ora `grow_total=False` e solo il nome della classe. I due callsite della Detection restano storici (contratto
+   di `test_integrated_audit_fixes`). Un test AST impone `grow_total=False` per ogni callsite in `run_topic_discovery`.
+2. **Regressione trovata e corretta**: nel percorso reattivo a chunk singolo il servizio riportava `COMPLETE` mentre il pannello chiudeva `PARTIAL`
+   (parent non marcato SUCCESS). Ora parent SUCCESS/FAILED coerente con i microchunk validati. Test sul caso singolo e su 26 parent con un parent reattivo
+   (nessuna rinumerazione, totale sempre 26).
+3. **Barra microchunk**: ora `validati/totale` (4 validati + 1 fallito su 5 = 80%, stato PARTIAL, mai 100%); le "Unità processate" (validate+fallite) sono
+   una riga separata. "Microchunk del blocco corrente" è etichettato come elaborati.
+4. **Contabilità richieste**: invariante `inviate = riuscite + fallite + in corso` provata sul client LM Studio reale con `urlopen` sostituito
+   (successo, HTTP 500, timeout, connessione rifiutata, JSON malformato: un solo esito per richiesta, nessun doppio conteggio). Se il client non riporta dati di trasporto
+   pur avendo eseguito inferenze, il pannello mostra "non disponibile" invece di zero.
+5. **Zero topic**: numeratore e denominatore coerenti (denominatore = sezioni di evidenza del documento, soglia 10). Casi 5, 8, 9 → `COMPLETE_NO_TOPICS`
+   (banner blu "nessun argomento emerso", non verde); 10, 11 → `COMPLETE_EMPTY_UNVERIFIED` (banner giallo); 0 evidenze → errore esplicito;
+   ≥10 evidenze con un microchunk non validato → `PARTIAL`, mai "non verificato".
+6. **4 unità invece di 5**: dimostrato su 32 messaggi (`split_chunk_into_microchunks` = 4 unità pianificate); la bisezione sostituisce un'unità con due metà
+   della stessa unità e non ne crea una quinta. Il vecchio scenario (begin(4), done, recuperato, bisected, failed) è conservato in un test esplicito:
+   con il vecchio modello dava totale 5 con 3 soli esiti terminali (un'unità che non poteva concludersi).
+
+## P1 — `Trash/` e riproducibilità
+- 57 rinomine: `git diff -M --name-status 93c106d 4e30039` → 57 voci `R100` (prova indipendente di git) + SHA-256 nel manifest [TEST_VERIFIED].
+- I builder storici `scripts/create_*` sono documentati come NON eseguibili in `scripts/HISTORICAL_ARCHIVE_BUILDERS.md` (nessuno modificato né eseguito).
+- Indici per la tesi conservati; nessuna copia di dati reali in `Trash/`. L'inventario "dopo" è un'istantanea che non include sé stessa: limiti
+  dell'autoverifica in `Trash/inventory/README.md`.
+
+## Test e comandi (Python 3.13; `ijson`/`streamlit` autentici NON installabili qui: stub MOCK fuori dal repo)
 | Verifica | Esito |
 |---|---|
-| `python -m compileall -q ai analysis ui` | exit 0 |
-| `tests/unit/test_discovery_progress_unification.py` (10 test: 26 parent, 5 microchunk 1/3/1, bisezione+retry, recupero 100% con 0 HTTP, zero topic, resa callback, PARTIAL/FAILED, compatibilità) | 10 passati [MOCK] |
-| `tests/unit/test_trash_archive_integrity.py` (11 test: hash, riferimenti, gitignore, niente DB/zip in Trash, script locale) | 11 passati [TEST] |
-| `tests/unit` completo (con 9 file UI ignorati come in baseline) | 51 falliti, 1839 passati: **stessi 51 della baseline** (tutti per `ijson`/`streamlit` assenti) |
-| `tests/integration` | 30 falliti / 137 passati / 33 errori: identico alla baseline su albero pulito |
-| `git diff --check` | exit 0 |
+| `python -m compileall -q ai analysis ui scripts/archive_private_local.py scripts/preview_discovery_progress_panel.py` | exit 0 |
+| `tests/unit/test_discovery_progress_unification.py` | 28 passati [MOCK_VERIFIED per la resa; TEST_VERIFIED per contatori/servizio] |
+| `tests/unit/test_trash_archive_integrity.py` | 13 passati [TEST_VERIFIED] |
+| `tests/unit/test_progress_panel_apptest.py` (AppTest reale) | 1 saltato → **NOT_VERIFIED** (nessuno Streamlit reale) |
+| `tests/unit` completo (9 file UI ignorati come in baseline) | 51 falliti, 1859 passati, 2 saltati: gli stessi 51 della baseline (dipendenze `ijson`/`streamlit` mancanti), nessuna nuova rottura |
+| `tests/integration` | 30 falliti / 137 passati / 33 errori: identico alla baseline |
 
-**NOT VERIFIED**: AppTest/UI Streamlit reale, i 51+9 test dipendenti da `ijson`/`streamlit`, qualsiasi comportamento con LM Studio. Sul PC Windows, con l'ambiente del progetto:
+## NOT_VERIFIED e comando Windows
+Moduli AppTest prima non collezionati, i 51 test falliti per dipendenze e il pannello reale. Sul PC Windows (ambiente del progetto, Streamlit e ijson veri):
 ```
-python -m pytest tests\unit\test_apptest_flows.py tests\unit\test_ui_smoke.py tests\unit\test_discovery_progress_unification.py tests\unit\test_trash_archive_integrity.py -q
+python -m pytest tests\unit\test_progress_panel_apptest.py tests\unit\test_apptest_flows.py tests\unit\test_ui_smoke.py tests\unit\test_discovery_progress_unification.py -q
 echo exit=%ERRORLEVEL%
+streamlit run scripts\preview_discovery_progress_panel.py
 ```
-Poi avvia l'app e osserva a occhio il pannello su una Discovery sintetica breve (screenshot non ottenuti qui).
-
-## Raccomandazioni
-1. Decidi tu come trattare i file sensibili già pubblici (punto 1): è l'unico rischio reale emerso; il riordino non lo riduce.
-2. Backup locale indipendente (disco esterno) di checkpoint e dati originali prima di qualsiasi operazione sulla storia.
-3. Passo dedicato e separato per `temp_pytest/` (`git rm --cached` + `.gitignore`), dopo ispezione dei file.
+L'ultimo comando apre una Discovery SINTETICA breve (4 scenari: successo, parziale, zero topic con 12 evidenze, zero topic con 6 evidenze) con client finto, senza LM Studio
+né dati reali: serve per uno screenshot locale. Nessuno screenshot è stato ottenuto qui. Nessuna Discovery LIVE completa.

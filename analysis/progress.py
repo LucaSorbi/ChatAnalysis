@@ -525,6 +525,7 @@ class AnalysisProgressTracker:
         summary_msg: str = "Analisi completata con successo.",
         is_partial: bool = False,
         thematic_unverified: bool = False,
+        no_topics: bool = False,
     ) -> AnalysisProgressEvent:
         """
         Segnala il completamento dell'analisi.
@@ -559,7 +560,10 @@ class AnalysisProgressTracker:
                 self.is_failed = False
                 return self._emit(
                     summary_msg, is_complete=True, is_failed=False, is_partial=False, override_pct=100.0,
-                    meta={"thematic_unverified": True} if thematic_unverified else None,
+                    meta=(
+                        {"thematic_unverified": True} if thematic_unverified
+                        else ({"no_topics": True} if no_topics else None)
+                    ),
                 )
 
     def partial(self, summary_msg: str = "Analisi completata parzialmente.") -> AnalysisProgressEvent:

@@ -111,8 +111,10 @@ def create_streamlit_progress_callback(container: Any, title: str = "ANALISI IN 
             if view.micro_line is not None:
                 st.progress(
                     view.micro_fraction or 0.0,
-                    text=f"{view.micro_line}  (attività microchunk, separata dai blocchi principali)",
+                    text=f"{view.micro_line}  (quota VALIDATA, separata dai blocchi principali)",
                 )
+                if view.micro_processed_line:
+                    st.caption(f"📊 {view.micro_processed_line}")
                 if view.micro_current_line:
                     st.caption(f"🧩 {view.micro_current_line}")
                 if view.micro_detail_line:

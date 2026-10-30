@@ -34,6 +34,7 @@ from tests.unit.test_detection_microchunk_checkpoint_resume import (
 pytest.importorskip("ui.progress_view")
 from ui.progress_view import (  # noqa: E402
     STATUS_FAILED,
+    STATUS_NO_TOPICS,
     STATUS_PARTIAL,
     STATUS_RUNNING,
     STATUS_SUCCESS,
@@ -368,3 +369,249 @@ def test_view_never_shows_100_percent_for_incomplete_and_handles_unknown_current
     ev = t._emit("consolidamento")
     v = build_progress_view(ev)
     assert v.status == STATUS_RUNNING and v.parent_fraction < 1.0
+
+
+# ============================================================================
+# Revisione P0 del 30/10/2026: semantica dei contatori
+# ============================================================================
+import ast
+import io
+import socket
+import urllib.error
+from pathlib import Path
+
+from ai.chunking import split_chunk_into_microchunks, split_document_into_chunks
+from ai.lmstudio import LmStudioClient
+from analysis.models import AnalysisNoEvidenceError  # noqa: E402
+
+
+def _discovery_split_calls() -> list[ast.Call]:
+    tree = ast.parse((Path(__file__).resolve().parent.parent.parent / "analysis" / "service.py").read_text(encoding="utf-8"))
+    out: list[ast.Call] = []
+    for fn in ast.walk(tree):
+        if isinstance(fn, ast.FunctionDef) and fn.name == "run_topic_discovery":
+            out += [c for c in ast.walk(fn) if isinstance(c, ast.Call) and isinstance(c.func, ast.Attribute) and c.func.attr == "split_chunk"]
+    return out
+
+
+def test_every_discovery_split_chunk_callsite_keeps_parent_total_fixed():
+    """STATICALLY_VERIFIED: nessun callsite di split_chunk in run_topic_discovery fa crescere total_chunks."""
+    calls = _discovery_split_calls()
+    assert len(calls) >= 2
+    for c in calls:
+        kw = {k.arg: k.value for k in c.keywords}
+        assert "grow_total" in kw and isinstance(kw["grow_total"], ast.Constant) and kw["grow_total"].value is False
+        # il messaggio mostrato all'utente riporta solo il nome della classe dell'errore, mai il testo
+        assert "str(" not in ast.unparse(kw["prior_error_msg"])
+
+
+def test_reactive_single_parent_split_keeps_one_parent_and_completes_it(tmp_path):
+    doc = _doc("rx1", 8)  # <=8 messaggi sostanziali: percorso reattivo (nessun pre-split)
+
+    def handler(u, n):
+        if len(_msg_ids(u, "rx1")) == 8:
+            raise AiStructuredOutputError("JSONDecodeError simulato")
+        return _topics_resp()
+
+    client = ReportingClient(handler)
+    res, events = _discover(_service(client, AnalysisCheckpointStore(checkpoint_dir=tmp_path / "chk")), doc, client)
+    last = events[-1]
+    assert {e.total_chunks for e in events} == {1}, "il totale dei parent non cresce con la suddivisione reattiva"
+    assert last.is_complete and (last.completed_chunks, last.failed_chunks) == (1, 0)
+    assert res.metadata["status"] == "COMPLETE", "stato del servizio e stato del pannello devono coincidere"
+    assert last.microchunks_total == last.microchunks_completed == 2
+    assert last.requests_sent == len(client.calls) == last.requests_successful + last.requests_failed
+    # la chiamata sul parent intero fallisce e viene ritentata una volta (2 chiamate fallite), poi 2 sub-chunk riusciti
+    assert len(client.calls) == 4 and last.requests_failed == 2 and last.protocol_errors_count == 2
+    assert last.requests_successful == 2 and last.requests_in_flight == 0 and last.retries_count >= 1
+
+
+def test_reactive_split_inside_26_parent_run_never_renumbers_or_grows(tmp_path):
+    doc = _doc("rx26", 208)  # 26 parent da 8 messaggi (nessun pre-split)
+    boom_parent = {"hit": False}
+
+    def handler(u, n):
+        ids = _msg_ids(u, "rx26")
+        if not boom_parent["hit"] and len(ids) == 8 and ids[0] == 8 * 12:  # il 13° parent fallisce alla prima chiamata
+            boom_parent["hit"] = True
+            raise AiStructuredOutputError("JSONDecodeError simulato")
+        return _topics_resp()
+
+    client = ReportingClient(handler)
+    _, events = _discover(_service(client, AnalysisCheckpointStore(checkpoint_dir=tmp_path / "chk"), max_chunk_bundles=8), doc, client)
+    assert boom_parent["hit"]
+    assert {e.total_chunks for e in events} == {26}
+    cur = [e.current_chunk_index for e in events if e.current_chunk_index]
+    assert max(cur) <= 26 and min(cur) >= 1
+    assert cur == sorted(cur), "i blocchi originali non vengono rinumerati"
+    last = events[-1]
+    assert last.is_complete and last.completed_chunks == 26 and last.failed_chunks == 0
+
+
+def test_microchunk_bar_counts_only_validated_units_four_validated_one_failed_is_partial():
+    t = AnalysisProgressTracker(total_chunks=1)
+    t.begin_microchunks(1, 5)
+    for _ in range(4):
+        t.microchunk_done()
+    t.microchunk_failed()
+    t.end_microchunks()
+    t.chunk_failed(1, "micro-chunk non validati", record_request=False)
+    ev = t.partial("parziale")
+    v = build_progress_view(ev)
+    assert v.status == STATUS_PARTIAL
+    assert v.micro_fraction == pytest.approx(0.8) and v.micro_fraction < 1.0, "il fallimento non porta la barra al 100%"
+    assert v.micro_processed_fraction == pytest.approx(1.0)
+    assert "validate 4, fallite 1" in v.micro_processed_line and v.micro_processed_line.startswith("Unità processate: 5 / 5")
+    assert v.micro_line.startswith("Microchunk completati: 4 / 5")
+    # 5 fallimenti su 5: barra a zero, stato FAILED
+    t2 = AnalysisProgressTracker(total_chunks=1)
+    t2.begin_microchunks(1, 5)
+    for _ in range(5):
+        t2.microchunk_failed()
+    t2.chunk_failed(1, "x", record_request=False)
+    v2 = build_progress_view(t2.fail("tutti falliti"))
+    assert v2.micro_fraction == 0.0 and v2.status == STATUS_FAILED
+
+
+def test_missing_transport_data_is_shown_as_unavailable_not_zero():
+    t = AnalysisProgressTracker(total_chunks=1)  # nessun client collegato come listener: nessun dato di trasporto
+    t.begin_microchunks(1, 2)
+    t.microchunk_done()
+    ev = t.microchunk_done()
+    v = build_progress_view(ev)
+    assert v.transport_available is False
+    assert "non disponibile" in v.requests_line and "inviate 0" not in v.requests_line
+    # microchunk interamente recuperati: zero richieste è un dato vero, non "non disponibile"
+    t2 = AnalysisProgressTracker(total_chunks=1)
+    t2.begin_microchunks(1, 2)
+    t2.microchunk_done(recovered=True)
+    v2 = build_progress_view(t2.microchunk_done(recovered=True))
+    assert v2.transport_available is True and "inviate 0" in v2.requests_line
+
+
+class _Resp:
+    def __init__(self, body: bytes) -> None:
+        self._b = body
+
+    def read(self) -> bytes:
+        return self._b
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, *a):
+        return False
+
+
+def _ok_body() -> bytes:
+    return json.dumps({
+        "model": MODEL,
+        "choices": [{"message": {"content": "{\"topics\": []}"}, "finish_reason": "stop"}],
+        "usage": {"prompt_tokens": 1, "completion_tokens": 1, "total_tokens": 2},
+    }).encode()
+
+
+@pytest.mark.parametrize(
+    "scenario",
+    ["ok", "http500", "timeout", "connection", "malformed_json"],
+)
+def test_real_client_closes_every_sent_request_exactly_once(monkeypatch, scenario):
+    """TEST_VERIFIED sul client reale (urlopen sostituito, nessuna rete): ogni richiesta inviata ha UN solo esito."""
+    def fake_urlopen(req, timeout=None):
+        if scenario == "ok":
+            return _Resp(_ok_body())
+        if scenario == "http500":
+            raise urllib.error.HTTPError("http://x", 500, "err", {}, io.BytesIO(b"{}"))
+        if scenario == "timeout":
+            raise socket.timeout("timed out")
+        if scenario == "connection":
+            raise urllib.error.URLError(ConnectionRefusedError("rifiutata"))
+        return _Resp(b"non e' json")
+
+    monkeypatch.setattr("ai.lmstudio.urllib.request.urlopen", fake_urlopen)
+    tracker = AnalysisProgressTracker(total_chunks=1)
+    client = LmStudioClient(base_url="http://127.0.0.1:1234", model_id=MODEL)
+    client.request_listener = tracker
+    try:
+        client.chat_completion([{"role": "user", "content": "x"}], model_id=MODEL, timeout_seconds=1.0)
+    except Exception:  # noqa: BLE001
+        assert scenario != "ok"
+    ev = tracker._emit("fine")
+    assert ev.requests_sent == 1 and ev.requests_in_flight == 0
+    assert ev.requests_sent == ev.requests_successful + ev.requests_failed + ev.requests_in_flight
+    assert ev.requests_successful == (1 if scenario == "ok" else 0)
+    assert ev.timeouts_count == (1 if scenario == "timeout" else 0)
+    assert ev.http_errors_count == (1 if scenario in ("http500", "connection") else 0)
+    assert ev.protocol_errors_count == (1 if scenario == "malformed_json" else 0)
+
+
+@pytest.mark.parametrize("n,expected", [(9, "COMPLETE_NO_TOPICS"), (10, "COMPLETE_EMPTY_UNVERIFIED"), (11, "COMPLETE_EMPTY_UNVERIFIED"),
+                                        (5, "COMPLETE_NO_TOPICS"), (8, "COMPLETE_NO_TOPICS")])
+def test_zero_topic_states_for_evidence_counts_around_the_threshold(tmp_path, n, expected):
+    doc = _doc(f"zt{n}", n)
+    client = ReportingClient(lambda u, k: LlmCompletionResponse(content=json.dumps({"topics": []}), model=MODEL, raw_response={"finish_reason": "stop"}))
+    res, events = _discover(_service(client, AnalysisCheckpointStore(checkpoint_dir=tmp_path / "chk")), doc, client)
+    last = events[-1]
+    assert res.metadata["total_evidence_count"] == n, "denominatore = sezioni di evidenza del documento"
+    assert res.metadata["status"] == expected
+    v = build_progress_view(last)
+    assert v.status == (STATUS_SUCCESS_UNVERIFIED if expected == "COMPLETE_EMPTY_UNVERIFIED" else STATUS_NO_TOPICS)
+    assert "🟩" not in v.badge, "nessun banner verde per zero topic"
+    assert v.parent_fraction == 1.0 and last.is_complete  # tecnicamente concluso, ma non "successo scientifico"
+
+
+def test_zero_evidence_document_is_rejected_not_reported_as_complete(tmp_path):
+    doc = _doc("zt0", 0)
+    client = ReportingClient(lambda u, k: _topics_resp())
+    with pytest.raises(AnalysisNoEvidenceError):
+        _service(client, AnalysisCheckpointStore(checkpoint_dir=tmp_path / "chk")).run_topic_discovery(
+            document=doc, client=client, model_name=MODEL)
+    assert client.calls == []
+
+
+def test_ten_plus_evidences_with_a_failed_microchunk_is_partial_never_unverified_empty(tmp_path):
+    doc = _doc("zneg", 16)  # 2 microchunk da 8; il secondo non viene mai validato, il primo da' zero topic
+
+    def handler(u, n):
+        if 15 in _msg_ids(u, "zneg"):
+            raise AiStructuredOutputError("JSONDecodeError simulato")
+        return LlmCompletionResponse(content=json.dumps({"topics": []}), model=MODEL, raw_response={"finish_reason": "stop"})
+
+    client = ReportingClient(handler)
+    res, events = _discover(_service(client, AnalysisCheckpointStore(checkpoint_dir=tmp_path / "chk")), doc, client)
+    last = events[-1]
+    assert res.metadata["status"] == "PARTIAL" and last.is_partial and not last.is_complete
+    v = build_progress_view(last)
+    assert v.status == STATUS_PARTIAL and v.parent_fraction < 1.0
+    assert "🟩" not in v.badge and not last.metadata.get("thematic_unverified")
+
+
+def test_bisection_keeps_four_planned_units_formal_and_legacy_scenario_is_documented(tmp_path):
+    """
+    Dimostrazione dell'unità di lavoro: il totale dei microchunk e' il numero PIANIFICATO di primo livello
+    (split_chunk_into_microchunks), qui 32 messaggi / 8 = 4. Una bisezione sostituisce un'unita' con due meta'
+    che appartengono alla STESSA unita': non puo' produrre una quinta unita'.
+    Scenario storico (modello precedente): begin(4) + done + done(recovered) + bisected + failed dava totale 5
+    con soli 3 esiti terminali, cioe' un'unita' che non poteva mai concludersi (2 + 1 su 5 ≠ 4 pianificati).
+    """
+    doc = _doc("bis4", 32)
+    plan = split_chunk_into_microchunks(split_document_into_chunks(doc, max_bundles=40)[0], max_substantive_messages=8)
+    assert len(plan) == 4
+
+    def handler(u, n):
+        ids = _msg_ids(u, "bis4")
+        if len(ids) == 8 and 0 in ids:
+            raise AiStructuredOutputError("JSONDecodeError simulato")  # forza la bisezione del primo microchunk
+        return _topics_resp()
+
+    client = ReportingClient(handler)
+    _, events = _discover(_service(client, AnalysisCheckpointStore(checkpoint_dir=tmp_path / "chk"), max_chunk_bundles=40), doc, client)
+    last = events[-1]
+    assert max(e.microchunks_total for e in events) == len(plan) == 4
+    assert last.bisections_count >= 1 and (last.microchunks_completed, last.microchunks_failed) == (4, 0)
+    # scenario storico riprodotto sul solo tracker (nuova regola): resta 4, e 2+1 esiti terminali su 4 pianificati
+    t = AnalysisProgressTracker(total_chunks=2)
+    t.begin_microchunks(1, 4)
+    t.microchunk_done(); t.microchunk_done(recovered=True); t.microchunk_bisected(); t.microchunk_failed()
+    assert t.microchunks_total == 4 != 5
+    assert t.microchunks_completed + t.microchunks_failed == 3 < t.microchunks_total, "resta un'unita' ancora da concludere"

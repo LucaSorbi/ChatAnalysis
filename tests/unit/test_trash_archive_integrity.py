@@ -185,3 +185,18 @@ def test_archive_rejects_destination_outside_private_area_and_bad_labels(repo):
     assert apl.main(["--source", str(repo / "output"), "--label", "lab", "--dest", str(repo / "altrove"),
                      "--repo-root", str(repo)]) == 2
     assert not (repo / "altrove").exists()
+
+
+def test_historical_archive_builders_are_all_documented_as_non_executable():
+    doc = (ROOT / "scripts" / "HISTORICAL_ARCHIVE_BUILDERS.md").read_text(encoding="utf-8")
+    assert "STORICI" in doc and "non eseguire" in doc
+    missing = [p.name for p in (ROOT / "scripts").glob("create_*.py") if p.name not in doc]
+    assert missing == [], f"builder non documentati: {missing}"
+
+
+def test_inventory_limits_are_documented_and_after_snapshot_does_not_list_itself():
+    readme = (TRASH / "inventory" / "README.md").read_text(encoding="utf-8")
+    assert "Non include sé stesso" in readme.replace("non include", "Non include") or "non include sé stesso" in readme
+    with open(TRASH / "inventory" / "INVENTORY_AFTER.csv", newline="", encoding="utf-8") as fh:
+        paths = {r["path"] for r in csv.DictReader(fh)}
+    assert "Trash/inventory/INVENTORY_AFTER.csv" not in paths
