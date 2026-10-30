@@ -73,6 +73,9 @@ class AnalysisProgressEvent:
     # Errori del callback UI: solo conteggio e nome della classe dell'eccezione (mai il messaggio)
     callback_errors_count: int = 0
     last_callback_error: str | None = None
+    # Finestra di microchunk del blocco principale corrente (0/0 se non autorevolmente disponibile)
+    current_micro_total: int = 0
+    current_micro_done: int = 0
 
     @property
     def elapsed_formatted(self) -> str:
@@ -125,6 +128,8 @@ class AnalysisProgressEvent:
             "bisections_count": self.bisections_count,
             "callback_errors_count": self.callback_errors_count,
             "last_callback_error": self.last_callback_error,
+            "current_micro_total": self.current_micro_total,
+            "current_micro_done": self.current_micro_done,
             "metadata": dict(self.metadata),
         }
 
@@ -254,6 +259,8 @@ class AnalysisProgressTracker:
             bisections_count=self.bisections_count,
             callback_errors_count=self.callback_errors_count,
             last_callback_error=self.last_callback_error,
+            current_micro_total=self._active_micro_total,
+            current_micro_done=self._active_micro_done,
         )
         if self.callback:
             try:
@@ -356,9 +363,12 @@ class AnalysisProgressTracker:
         subchunks_count: int = 2,
         failed_prior_request: bool = True,
         prior_error_msg: str = "",
+        grow_total: bool = True,
     ) -> AnalysisProgressEvent:
         """
         Registra la suddivisione dinamica di un chunk oversize in sotto-chunk.
+        Con grow_total=False (Discovery/Detection a microchunk) il totale dei blocchi principali NON cresce:
+        i sotto-blocchi sono contati dai contatori `microchunks_*`; resta solo la contabilità della richiesta fallita.
         Se una richiesta per questo blocco era in volo e ha causato lo split (es. per context overflow),
         la contabilizza rigorosamente come richiesta fallita, garantendo l'invariante:
         requests_sent == requests_successful + requests_failed + requests_in_flight.
@@ -369,15 +379,18 @@ class AnalysisProgressTracker:
                 self.requests_failed += 1
                 self.http_errors_count += 1
 
-            added = max(0, subchunks_count - 1)
+            added = max(0, subchunks_count - 1) if grow_total else 0
             self.subchunks_added += added
             self.total_chunks += added
             self.split_count += 1
             detail = f" a causa di: {prior_error_msg}" if prior_error_msg else ""
-            msg = (
-                f"Blocco {chunk_idx_1based} suddiviso in {subchunks_count} sotto-blocchi{detail} "
-                f"(totale blocchi aggiornato: {self.total_chunks})."
-            )
+            if grow_total:
+                msg = (
+                    f"Blocco {chunk_idx_1based} suddiviso in {subchunks_count} sotto-blocchi{detail} "
+                    f"(totale blocchi aggiornato: {self.total_chunks})."
+                )
+            else:
+                msg = f"Blocco {chunk_idx_1based} di {self.total_chunks} suddiviso in micro-chunk{detail}."
             return self._emit(msg)
 
     def start_chunk(
@@ -446,14 +459,21 @@ class AnalysisProgressTracker:
             return self._emit(msg)
 
     # =========================================================================
-    # CICLO DI VITA DEI MICROCHUNK (Topic Detection)
+    # CICLO DI VITA DEI MICROCHUNK (Topic Detection e Topic Discovery)
     # I contatori dei parent (completed_chunks/total_chunks) NON vengono alterati dai microchunk.
+    #
+    # REGOLA DELLE UNITA' DI LAVORO: l'unità è il microchunk PIANIFICATO di primo livello. Il totale
+    # (`microchunks_total`) cresce solo quando si pianifica un nuovo blocco principale (totale dinamico).
+    # Ogni unità termina UNA sola volta, in modo disgiunto: completata (nuova inferenza o recuperata dal
+    # checkpoint) oppure fallita. Bisezioni e retry NON creano unità né successi: sono contatori a parte
+    # (`bisections_count`, `retries_count`). Quindi completed + failed <= total in ogni momento.
     # =========================================================================
 
     def begin_microchunks(self, parent_idx_1based: int, count: int) -> AnalysisProgressEvent:
         """Registra il piano di microchunk del parent corrente (totale dinamico)."""
         with self._lock:
             n = max(0, int(count))
+            self.current_chunk_index = parent_idx_1based
             self.microchunks_total += n
             self._active_micro_total = n
             self._active_micro_done = 0
@@ -480,11 +500,9 @@ class AnalysisProgressTracker:
             return self._emit(msg)
 
     def microchunk_bisected(self) -> AnalysisProgressEvent:
-        """Bisezione adattiva di un microchunk: il totale dinamico cresce di 1."""
+        """Bisezione adattiva: contata a parte. NON modifica totale, completati né falliti (stessa unità)."""
         with self._lock:
             self.bisections_count += 1
-            self.microchunks_total += 1
-            self._active_micro_total += 1
             msg = f"Micro-chunk suddiviso (bisezioni: {self.bisections_count})."
             return self._emit(msg)
 
@@ -506,6 +524,7 @@ class AnalysisProgressTracker:
         self,
         summary_msg: str = "Analisi completata con successo.",
         is_partial: bool = False,
+        thematic_unverified: bool = False,
     ) -> AnalysisProgressEvent:
         """
         Segnala il completamento dell'analisi.
@@ -538,7 +557,10 @@ class AnalysisProgressTracker:
                 self.is_complete = True
                 self.is_partial = False
                 self.is_failed = False
-                return self._emit(summary_msg, is_complete=True, is_failed=False, is_partial=False, override_pct=100.0)
+                return self._emit(
+                    summary_msg, is_complete=True, is_failed=False, is_partial=False, override_pct=100.0,
+                    meta={"thematic_unverified": True} if thematic_unverified else None,
+                )
 
     def partial(self, summary_msg: str = "Analisi completata parzialmente.") -> AnalysisProgressEvent:
         """Segnala esplicitamente un completamento parziale (PARTIAL)."""

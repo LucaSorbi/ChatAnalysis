@@ -1463,7 +1463,7 @@ class LocalTopicAnalysisService:
         def _on_sub_retry(att: int, r: str) -> None:
             nonlocal sub_attempts
             sub_attempts = max(sub_attempts, att + 1)
-            tracker.chunk_retry(sub_display_idx, f"sub_d{depth}:{r}")
+            tracker.record_retry(f"sub_d{depth}:{r}")
 
         micro_target_topics = min(chunk_target_topics, max(2, min(5, len(sub.bundles))))
         micro_max_tokens = min(eff_max_tokens or self.default_max_tokens or 640, 640 if depth == 0 else 448)
@@ -1546,6 +1546,7 @@ class LocalTopicAnalysisService:
             )
 
             if can_bisect:
+                tracker.microchunk_bisected()
                 mid = len(sub.bundles) // 2
                 half_a = ConversationEvidenceDocument(
                     document_id=f"{sub.document_id}::d{depth + 1}a",
@@ -1717,150 +1718,152 @@ class LocalTopicAnalysisService:
         results: list[TopicDiscoveryResult] = []
         total_subs = len(subs)
 
-        for s_idx, sub in enumerate(subs, start=1):
-            sub_idx_0based = s_idx - 1
-            sub_display_idx = chunk_idx_1based + sub_idx_0based
-            sub_eids = tuple(s.evidence_id for s in sub.all_evidence_sections)
+        # Contabilità a microchunk (totale dinamico per blocco principale); i parent restano contati dal chiamante.
+        tracker.begin_microchunks(chunk_idx_1based, total_subs)
+        try:
+            for s_idx, sub in enumerate(subs, start=1):
+                sub_idx_0based = s_idx - 1
+                sub_display_idx = chunk_idx_1based + sub_idx_0based
+                sub_eids = tuple(s.evidence_id for s in sub.all_evidence_sections)
 
-            # Controllo recupero da checkpoint se abilitato
-            cached_sub = None
-            if chk_store is not None and doc_fp and cfg_fp:
-                try:
-                    cached_sub = chk_store.get_subchunk(
-                        document_fingerprint=doc_fp,
-                        config_fingerprint=cfg_fp,
-                        parent_chunk_index=parent_chunk_index,
-                        subchunk_index=sub_idx_0based,
-                    )
-                except Exception as c_err:
-                    logger.warning("Errore interrogazione sotto-blocco da checkpoint: %s", c_err)
-                    cached_sub = None
-
-            # Rivalidazione forense del sotto-blocco recuperato
-            valid_cached_res = None
-            if cached_sub is not None:
-                try:
-                    cand_res = deserialize_discovery_result_from_checkpoint(cached_sub["serialized_result"])
-                    cand_prov = getattr(cand_res, "provenance_document_id", None)
-                    if cand_prov in (parent_document_id, chunk.document_id, sub.document_id):
-                        all_sub_eids_set = set(sub_eids)
-                        eids_valid = True
-                        for t in cand_res.topics:
-                            if not set(t.evidence_ids).issubset(all_sub_eids_set):
-                                eids_valid = False
-                                break
-                        if eids_valid:
-                            valid_cached_res = cand_res
-                except Exception as val_c_err:
-                    logger.warning("Rivalidazione sotto-blocco fallita: %s", val_c_err)
-                    valid_cached_res = None
-
-            if valid_cached_res is not None:
-                obs_finish = valid_cached_res.metadata.get("finish_reason")
-                num_extracted = len(valid_cached_res.topics)
-                thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
-                sub_diag = ChunkDiagnosticRecord(
-                    chunk_index=sub_display_idx - 1,
-                    chunk_id=sub.document_id,
-                    status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
-                    thematic_status=thematic_st,
-                    attempts=0,
-                    duration_seconds=0.0,
-                    model_id=resolved_model,
-                    http_status=None,
-                    finish_reason=obs_finish,
-                    prompt_tokens=valid_cached_res.metadata.get("prompt_tokens"),
-                    completion_tokens=valid_cached_res.metadata.get("completion_tokens"),
-                    error_type=None,
-                    diagnostic_category="NONE",
-                    failure_phase="recovered",
-                    error_detail="Recuperato con successo da checkpoint SQLite",
-                    json_valid=True,
-                    schema_valid=True,
-                    evidence_valid=True,
-                    checkpoint_saved=True,
-                    topics_count=num_extracted,
-                )
-                outcomes.append(
-                    DiscoveryChunkOutcome(
-                        chunk_id=sub.document_id,
-                        status="RECOVERED_FROM_CHECKPOINT",
-                        thematic_status=thematic_st,
-                        result=valid_cached_res,
-                        evidence_ids=sub_eids,
-                        diagnostic=sub_diag,
-                        chunk_index=sub_display_idx - 1,
-                        attempts=0,
-                        duration_seconds=0.0,
-                    )
-                )
-                results.append(valid_cached_res)
-                tracker.chunk_success(sub_display_idx, record_request=False)
-                continue
-
-            # Esecuzione inferenza sul microchunk mancante
-            tracker.start_chunk(sub_display_idx, phase=f"Analisi micro-chunk {s_idx}/{total_subs}", record_request=False)
-            sub_outcome, sub_res = self._execute_microchunk_with_adaptive_fallback(
-                sub=sub,
-                analyzer=analyzer,
-                resolved_model=resolved_model,
-                eff_temp=eff_temp,
-                eff_seed=eff_seed,
-                chunk_target_topics=chunk_target_topics,
-                tracker=tracker,
-                sub_display_idx=sub_display_idx,
-                eff_max_tokens=eff_max_tokens,
-                depth=0,
-                max_depth=3,
-                parent_document_id=parent_document_id or chunk.document_id,
-            )
-
-            if sub_res is not None:
-                if origin or run_id:
-                    s_m = dict(sub_res.metadata)
-                    if origin:
-                        s_m["origin"] = origin
-                    if run_id:
-                        s_m["run_id"] = run_id
-                    sub_res = TopicDiscoveryResult(
-                        topics=sub_res.topics,
-                        provenance_document_id=sub_res.provenance_document_id,
-                        metadata=s_m,
-                    )
-                chk_saved = False
+                # Controllo recupero da checkpoint se abilitato
+                cached_sub = None
                 if chk_store is not None and doc_fp and cfg_fp:
                     try:
-                        chk_store.save_subchunk(
-                            document_id=parent_document_id or chunk.document_id,
+                        cached_sub = chk_store.get_subchunk(
                             document_fingerprint=doc_fp,
                             config_fingerprint=cfg_fp,
                             parent_chunk_index=parent_chunk_index,
                             subchunk_index=sub_idx_0based,
-                            total_subchunks=total_subs,
-                            result=sub_res,
-                            subchunk_id=sub.document_id,
-                            evidence_ids=sub_eids,
-                            total_planned_chunks=total_planned_chunks,
-                            analysis_type="discovery",
-                            model_id=resolved_model,
-                            prompt_version="discovery_operational",
                         )
-                        chk_saved = True
-                    except Exception as s_save_err:
-                        logger.warning("Salvataggio sotto-blocco %s su SQLite non riuscito: %s", sub.document_id, s_save_err)
+                    except Exception as c_err:
+                        logger.warning("Errore interrogazione sotto-blocco da checkpoint: %s", c_err)
+                        cached_sub = None
 
-                if sub_outcome.diagnostic:
-                    sub_outcome.diagnostic.checkpoint_saved = chk_saved
-                outcomes.append(sub_outcome)
-                results.append(sub_res)
-                tracker.chunk_success(sub_display_idx, record_request=False)
-            else:
-                outcomes.append(sub_outcome)
-                tracker.chunk_failed(
-                    sub_display_idx,
-                    sub_outcome.diagnostic.error_detail if sub_outcome.diagnostic else "Fallimento microchunk",
-                    is_protocol_or_validation=False,
+                # Rivalidazione forense del sotto-blocco recuperato
+                valid_cached_res = None
+                if cached_sub is not None:
+                    try:
+                        cand_res = deserialize_discovery_result_from_checkpoint(cached_sub["serialized_result"])
+                        cand_prov = getattr(cand_res, "provenance_document_id", None)
+                        if cand_prov in (parent_document_id, chunk.document_id, sub.document_id):
+                            all_sub_eids_set = set(sub_eids)
+                            eids_valid = True
+                            for t in cand_res.topics:
+                                if not set(t.evidence_ids).issubset(all_sub_eids_set):
+                                    eids_valid = False
+                                    break
+                            if eids_valid:
+                                valid_cached_res = cand_res
+                    except Exception as val_c_err:
+                        logger.warning("Rivalidazione sotto-blocco fallita: %s", val_c_err)
+                        valid_cached_res = None
+
+                if valid_cached_res is not None:
+                    obs_finish = valid_cached_res.metadata.get("finish_reason")
+                    num_extracted = len(valid_cached_res.topics)
+                    thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
+                    sub_diag = ChunkDiagnosticRecord(
+                        chunk_index=sub_display_idx - 1,
+                        chunk_id=sub.document_id,
+                        status=ChunkLifecycleStatus.RECOVERED_FROM_CHECKPOINT.value,
+                        thematic_status=thematic_st,
+                        attempts=0,
+                        duration_seconds=0.0,
+                        model_id=resolved_model,
+                        http_status=None,
+                        finish_reason=obs_finish,
+                        prompt_tokens=valid_cached_res.metadata.get("prompt_tokens"),
+                        completion_tokens=valid_cached_res.metadata.get("completion_tokens"),
+                        error_type=None,
+                        diagnostic_category="NONE",
+                        failure_phase="recovered",
+                        error_detail="Recuperato con successo da checkpoint SQLite",
+                        json_valid=True,
+                        schema_valid=True,
+                        evidence_valid=True,
+                        checkpoint_saved=True,
+                        topics_count=num_extracted,
+                    )
+                    outcomes.append(
+                        DiscoveryChunkOutcome(
+                            chunk_id=sub.document_id,
+                            status="RECOVERED_FROM_CHECKPOINT",
+                            thematic_status=thematic_st,
+                            result=valid_cached_res,
+                            evidence_ids=sub_eids,
+                            diagnostic=sub_diag,
+                            chunk_index=sub_display_idx - 1,
+                            attempts=0,
+                            duration_seconds=0.0,
+                        )
+                    )
+                    results.append(valid_cached_res)
+                    tracker.microchunk_done(recovered=True)
+                    continue
+
+                # Esecuzione inferenza sul microchunk mancante
+                tracker.start_chunk(chunk_idx_1based, phase=f"Analisi micro-chunk {s_idx}/{total_subs}", record_request=False)
+                sub_outcome, sub_res = self._execute_microchunk_with_adaptive_fallback(
+                    sub=sub,
+                    analyzer=analyzer,
+                    resolved_model=resolved_model,
+                    eff_temp=eff_temp,
+                    eff_seed=eff_seed,
+                    chunk_target_topics=chunk_target_topics,
+                    tracker=tracker,
+                    sub_display_idx=sub_display_idx,
+                    eff_max_tokens=eff_max_tokens,
+                    depth=0,
+                    max_depth=3,
+                    parent_document_id=parent_document_id or chunk.document_id,
                 )
+
+                if sub_res is not None:
+                    if origin or run_id:
+                        s_m = dict(sub_res.metadata)
+                        if origin:
+                            s_m["origin"] = origin
+                        if run_id:
+                            s_m["run_id"] = run_id
+                        sub_res = TopicDiscoveryResult(
+                            topics=sub_res.topics,
+                            provenance_document_id=sub_res.provenance_document_id,
+                            metadata=s_m,
+                        )
+                    chk_saved = False
+                    if chk_store is not None and doc_fp and cfg_fp:
+                        try:
+                            chk_store.save_subchunk(
+                                document_id=parent_document_id or chunk.document_id,
+                                document_fingerprint=doc_fp,
+                                config_fingerprint=cfg_fp,
+                                parent_chunk_index=parent_chunk_index,
+                                subchunk_index=sub_idx_0based,
+                                total_subchunks=total_subs,
+                                result=sub_res,
+                                subchunk_id=sub.document_id,
+                                evidence_ids=sub_eids,
+                                total_planned_chunks=total_planned_chunks,
+                                analysis_type="discovery",
+                                model_id=resolved_model,
+                                prompt_version="discovery_operational",
+                            )
+                            chk_saved = True
+                        except Exception as s_save_err:
+                            logger.warning("Salvataggio sotto-blocco %s su SQLite non riuscito: %s", sub.document_id, s_save_err)
+
+                    if sub_outcome.diagnostic:
+                        sub_outcome.diagnostic.checkpoint_saved = chk_saved
+                    outcomes.append(sub_outcome)
+                    results.append(sub_res)
+                    tracker.microchunk_done()
+                else:
+                    outcomes.append(sub_outcome)
+                    tracker.microchunk_failed()
+
+        finally:
+            tracker.end_microchunks()
 
         if len(results) == total_subs and chk_store is not None and doc_fp and cfg_fp:
             try:
@@ -3088,7 +3091,7 @@ class LocalTopicAnalysisService:
                     if (substantive_count0 > 8 or existing_sub0) and len(chunks[0].bundles) > 1:
                         planned_subs = split_chunk_into_microchunks(chunks[0], max_substantive_messages=8)
                         total_planned_subs = len(planned_subs) if len(planned_subs) > 1 else 2
-                        tracker.split_chunk(1, subchunks_count=total_planned_subs, failed_prior_request=False)
+                        # I sotto-blocchi sono contati dai contatori microchunk_*: il totale dei blocchi principali non cresce.
                         is_live_lms = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
                         eff_origin_s = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms else AnalysisOrigin.MOCK_INSPECTION.value
                         sub_outs, sub_res = self._process_subchunks_discovery(
@@ -3125,14 +3128,23 @@ class LocalTopicAnalysisService:
                                 parent_document_id=document.document_id,
                                 max_topics=eff_max_topics,
                             )
-                            tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
-                            disc_status = "COMPLETE"
+                            tracker.chunk_success(1, record_request=False)
+                            if len(disc_res.topics) > 0:
+                                tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
+                                disc_status = "COMPLETE"
+                            elif total_evidence_count >= 10:
+                                tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi (sub-chunk).", thematic_unverified=True)
+                                disc_status = "COMPLETE_EMPTY_UNVERIFIED"
+                            else:
+                                tracker.complete("Topic Discovery completata: nessun argomento emerso.")
+                                disc_status = "COMPLETE_NO_TOPICS"
                         elif completed_count > 0:
                             disc_res = aggregate_topic_discovery(
                                 chunk_results=sub_res,
                                 parent_document_id=document.document_id,
                                 max_topics=eff_max_topics,
                             )
+                            tracker.chunk_failed(1, "micro-chunk non validati", record_request=False)
                             tracker.partial(f"Topic Discovery parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
                             disc_status = "PARTIAL"
                         else:
@@ -3153,7 +3165,7 @@ class LocalTopicAnalysisService:
                                 max_tokens=eff_max_tokens,
                                 operational_mode=True,
                                 context_length=self.context_length,
-                                on_retry_callback=lambda att, r: tracker.chunk_retry(1, r),
+                                on_retry_callback=lambda att, r: tracker.record_retry(r),
                             )
                             dur = round(time.perf_counter() - t_single_start, 3)
                             analyzed_evidence_ids.update(total_evidence_ids)
@@ -3165,7 +3177,7 @@ class LocalTopicAnalysisService:
                             else:
                                 is_substantial = total_evidence_count >= 10
                                 if is_substantial:
-                                    tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi.")
+                                    tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi.", thematic_unverified=True)
                                     disc_status = "COMPLETE_EMPTY_UNVERIFIED"
                                 else:
                                     tracker.complete("Topic Discovery completata: nessun argomento emerso.")
@@ -3201,7 +3213,7 @@ class LocalTopicAnalysisService:
                                     )
                                     chk_saved = True
                                 except Exception as chk_err:
-                                    tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({chk_err})"
+                                    tracker.phase = f"Avviso: Salvataggio checkpoint blocco 1 non riuscito ({type(chk_err).__name__})"
 
                             thematic_st = "TOPICS_EXTRACTED" if num_extracted > 0 else "EMPTY_TOPICS"
                             diag = ChunkDiagnosticRecord(
@@ -3253,7 +3265,7 @@ class LocalTopicAnalysisService:
                                     )
                                 except Exception as diag_err:
                                     logger.warning("Salvataggio diagnostica blocco 1 non riuscito: %s", diag_err)
-                                    tracker.phase = f"Avviso: Salvataggio diagnostica blocco 1 su SQLite non riuscito ({diag_err})"
+                                    tracker.phase = f"Avviso: Salvataggio diagnostica blocco 1 su SQLite non riuscito ({type(diag_err).__name__})"
                         except FATAL_BACKEND_ERRORS as fatal_err:
                             is_truncation = (
                                 isinstance(fatal_err, AiStructuredOutputError)
@@ -3307,8 +3319,15 @@ class LocalTopicAnalysisService:
                                         parent_document_id=document.document_id,
                                         max_topics=eff_max_topics,
                                     )
-                                    tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
-                                    disc_status = "COMPLETE"
+                                    if len(disc_res.topics) > 0:
+                                        tracker.complete("Topic Discovery completata tramite suddivisione sub-chunk.")
+                                        disc_status = "COMPLETE"
+                                    elif total_evidence_count >= 10:
+                                        tracker.complete("Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi (sub-chunk).", thematic_unverified=True)
+                                        disc_status = "COMPLETE_EMPTY_UNVERIFIED"
+                                    else:
+                                        tracker.complete("Topic Discovery completata: nessun argomento emerso.")
+                                        disc_status = "COMPLETE_NO_TOPICS"
                                 elif completed_count > 0:
                                     disc_res = aggregate_topic_discovery(
                                         chunk_results=sub_res,
@@ -3504,7 +3523,7 @@ class LocalTopicAnalysisService:
                 if (substantive_count > 8 or existing_subs) and len(chunk.bundles) > 1:
                     planned_subs = split_chunk_into_microchunks(chunk, max_substantive_messages=8)
                     total_planned_subs = len(planned_subs) if len(planned_subs) > 1 else 2
-                    tracker.split_chunk(current_tracker_idx, subchunks_count=total_planned_subs, failed_prior_request=False)
+                    # I sotto-blocchi sono contati dai contatori microchunk_*: il totale dei blocchi principali non cresce.
                     is_live_lms = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
                     eff_origin_s = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms else AnalysisOrigin.MOCK_INSPECTION.value
                     sub_outs, sub_res = self._process_subchunks_discovery(
@@ -3535,6 +3554,10 @@ class LocalTopicAnalysisService:
                             max_topics=chunk_target_topics,
                         )
                         successful_results.append(parent_agg)
+                        tracker.chunk_success(current_tracker_idx, record_request=False)
+                    else:
+                        # Un microchunk non validato: il blocco principale NON è SUCCESS
+                        tracker.chunk_failed(current_tracker_idx, "micro-chunk non validati", record_request=False)
                     for so in sub_outs:
                         if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT", "SUCCESS_WITH_TOPICS", "EMPTY_TOPICS", "RECOVERED_EMPTY"):
                             analyzed_evidence_ids.update(so.evidence_ids)
@@ -3554,7 +3577,7 @@ class LocalTopicAnalysisService:
                 def _on_chunk_retry(att: int, reason: str):
                     nonlocal chunk_attempts
                     chunk_attempts = att + 1
-                    tracker.chunk_retry(current_tracker_idx, reason)
+                    tracker.record_retry(reason)
 
                 try:
                     res = analyzer.discover_topics(
@@ -3658,7 +3681,7 @@ class LocalTopicAnalysisService:
                             )
                         except Exception as diag_err:
                             logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
-                            tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
+                            tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({type(diag_err).__name__})"
                 except FATAL_BACKEND_ERRORS as fatal_err:
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     cat, phase, safe_desc = classify_discovery_exception(fatal_err)
@@ -3678,7 +3701,7 @@ class LocalTopicAnalysisService:
                         and getattr(fatal_err, "error_category", None) in ("CONTEXT_OVERFLOW", "INFERENCE_BACKEND_ERROR")
                     )
                     if (is_context_overflow or is_truncation) and len(chunk.bundles) > 1:
-                        tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=str(fatal_err))
+                        tracker.split_chunk(current_tracker_idx, subchunks_count=2, failed_prior_request=True, prior_error_msg=type(fatal_err).__name__, grow_total=False)
                         is_live_lms_fb = isinstance(target_client, LmStudioClient) or isinstance(getattr(target_client, "inner", None), LmStudioClient)
                         eff_origin_fb = AnalysisOrigin.LIVE_LM_STUDIO.value if is_live_lms_fb else AnalysisOrigin.MOCK_INSPECTION.value
                         sub_outs, sub_res = self._process_subchunks_discovery(
@@ -3708,6 +3731,9 @@ class LocalTopicAnalysisService:
                                 max_topics=chunk_target_topics,
                             )
                             successful_results.append(parent_agg)
+                            tracker.chunk_success(current_tracker_idx, record_request=False)
+                        else:
+                            tracker.chunk_failed(current_tracker_idx, "micro-chunk non validati", record_request=False)
                         for so in sub_outs:
                             if so.status in ("SUCCESS", "RECOVERED_FROM_CHECKPOINT"):
                                 analyzed_evidence_ids.update(so.evidence_ids)
@@ -3771,7 +3797,7 @@ class LocalTopicAnalysisService:
                                 )
                             except Exception as diag_err:
                                 logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
-                                tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
+                                tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({type(diag_err).__name__})"
                 except Exception as exc:
                     if isinstance(exc, PROGRAMMING_ERRORS):
                         tracker.chunk_failed(current_tracker_idx, str(exc))
@@ -3849,7 +3875,7 @@ class LocalTopicAnalysisService:
                             )
                         except Exception as diag_err:
                             logger.warning("Salvataggio diagnostica blocco %d non riuscito: %s", idx + 1, diag_err)
-                            tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({diag_err})"
+                            tracker.phase = f"Avviso: Salvataggio diagnostica blocco {idx + 1} su SQLite non riuscito ({type(diag_err).__name__})"
 
             total_units = len(chunks)
             completed_count = len(successful_results)
@@ -3875,7 +3901,7 @@ class LocalTopicAnalysisService:
                 else:
                     is_substantial = total_evidence_count >= 10
                     if is_substantial:
-                        tracker.complete(f"Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi ({completed_count}/{total_units} blocchi completati).")
+                        tracker.complete(f"Topic Discovery completata tecnicamente ma tematicamente non verificata: 0 argomenti emersi ({completed_count}/{total_units} blocchi completati).", thematic_unverified=True)
                         disc_status = "COMPLETE_EMPTY_UNVERIFIED"
                     else:
                         tracker.complete(f"Topic Discovery completata: nessun argomento emerso su conversazione breve ({completed_count}/{total_units} blocchi completati).")
