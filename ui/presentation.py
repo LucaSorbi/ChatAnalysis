@@ -87,6 +87,7 @@ from ui.models import (
 from typing import Any
 from ai.chunking import profile_document_for_analysis
 from analysis.progress import AnalysisProgressEvent
+from ui.progress_view import build_progress_view
 
 
 def create_streamlit_progress_callback(container: Any, title: str = "ANALISI IN CORSO") -> Any:
@@ -100,56 +101,29 @@ def create_streamlit_progress_callback(container: Any, title: str = "ANALISI IN 
     (solo il nome della classe) e prosegue senza perdere lo stato dell'analisi.
     """
     def _callback(event: AnalysisProgressEvent) -> None:
+        view = build_progress_view(event, title)
         with container.container():
-            st.markdown(f"#### ⏳ {title}")
-            st.markdown(f"**Fase:** {event.phase}")
-            progress_val = max(0.0, min(1.0, event.percentage / 100.0))
-            st.progress(progress_val, text=f"Progresso fase corrente: {event.percentage:.1f}%")
-
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.metric("Blocchi completati", f"{event.completed_chunks} / {event.total_chunks}")
-                st.metric("Blocco attuale", f"{event.current_chunk_index} di {event.total_chunks}")
-            with c2:
-                st.metric("Blocchi rimanenti", f"{event.remaining_chunks}")
-                sent_txt = f"{event.requests_sent}"
-                if event.requests_in_flight > 0:
-                    sent_txt += f" ({event.requests_in_flight} in volo)"
-                st.metric("Richieste inviate", sent_txt)
-            with c3:
-                st.metric("Richieste riuscite", f"{event.requests_successful}")
-                st.metric("Retry / Fallite", f"{event.retries_count} / {event.requests_failed}")
-
-            diag_parts = []
-            if event.http_errors_count > 0:
-                diag_parts.append(f"HTTP Error: {event.http_errors_count}")
-            if event.timeouts_count > 0:
-                diag_parts.append(f"Timeout: {event.timeouts_count}")
-            if event.protocol_errors_count > 0:
-                diag_parts.append(f"Protocollo/JSON: {event.protocol_errors_count}")
-            if event.split_count > 0:
-                diag_parts.append(f"Suddivisioni dinamiche: {event.split_count}")
-
-            diag_str = f" | Contabilità: {', '.join(diag_parts)}" if diag_parts else ""
-            st.caption(
-                f"⏱️ **Tempo trascorso:** `{event.elapsed_formatted}` | "
-                f"**Stato:** {event.status_message}{diag_str}"
-            )
-            if event.microchunks_total > 0:
-                st.caption(
-                    f"🧩 **Micro-chunk:** {event.microchunks_completed} / {event.microchunks_total} completati "
-                    f"(da checkpoint: {event.microchunks_recovered}, falliti: {event.microchunks_failed}, "
-                    f"bisezioni: {event.bisections_count})"
+            st.markdown(f"#### ⏳ {view.title}")
+            st.markdown(f"**Fase:** {view.phase_label}  |  **Stato:** {view.badge}")
+            st.progress(view.parent_fraction, text=f"{view.parent_line}  ({view.parent_fraction * 100:.0f}% copertura blocchi principali)")
+            if view.current_line:
+                st.caption(f"📍 {view.current_line}")
+            if view.micro_line is not None:
+                st.progress(
+                    view.micro_fraction or 0.0,
+                    text=f"{view.micro_line}  (quota VALIDATA, separata dai blocchi principali)",
                 )
-            if event.callback_errors_count > 0:
-                st.caption(
-                    f"⚠️ Errori di aggiornamento interfaccia: {event.callback_errors_count} "
-                    f"(ultimo: {event.last_callback_error}). L'analisi prosegue regolarmente."
-                )
-            if "recuperati" in event.phase.casefold():
-                st.info(f"💾 **Stato Checkpoint:** {event.phase}")
-            elif "consolidamento" in event.phase.casefold():
-                st.info(f"🔄 **Fase:** {event.phase}")
+                if view.micro_processed_line:
+                    st.caption(f"📊 {view.micro_processed_line}")
+                if view.micro_current_line:
+                    st.caption(f"🧩 {view.micro_current_line}")
+                if view.micro_detail_line:
+                    st.caption(f"💾 {view.micro_detail_line}")
+            st.caption(f"🌐 {view.requests_line}")
+            st.caption(f"↩️ {view.requests_detail_line}")
+            st.caption(f"⏱️ {view.elapsed_line} | Stato: {view.message}")
+            for warn in view.warnings:
+                st.warning(f"⚠️ {warn}")
 
     return _callback
 

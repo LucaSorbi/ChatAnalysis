@@ -521,11 +521,11 @@ def test_tracker_counts_callback_errors_without_losing_state():
     t.microchunk_done(recovered=True)
     t.microchunk_bisected()
     t.microchunk_failed()
-    assert (t.microchunks_total, t.microchunks_completed, t.microchunks_recovered, t.microchunks_failed, t.bisections_count) == (5, 2, 1, 1, 1)
+    assert (t.microchunks_total, t.microchunks_completed, t.microchunks_recovered, t.microchunks_failed, t.bisections_count) == (4, 2, 1, 1, 1)  # la bisezione NON crea unità
     assert t.callback_errors_count == 5 and t.last_callback_error == "ValueError"  # 5 eventi emessi
     ev = t.start_consolidation()
     # l'evento riporta gli errori avvenuti PRIMA della propria consegna; il tracker conta anche il proprio
-    assert ev.callback_errors_count == 5 and ev.microchunks_total == 5
+    assert ev.callback_errors_count == 5 and ev.microchunks_total == 4
     assert t.callback_errors_count == 6
     assert "segreto" not in json.dumps(ev.to_dict())
 
