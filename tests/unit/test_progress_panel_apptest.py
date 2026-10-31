@@ -26,8 +26,24 @@ def _run(scenario: str) -> AppTest:
     return at
 
 
+def _progress_text(p) -> str:
+    """Didascalia di una barra st.progress (NON .value, che e' la percentuale 0-100)."""
+    t = getattr(p, "text", None)
+    return str(t if t is not None else p.proto.text)
+
+
 def _texts(at: AppTest) -> str:
-    return "\n".join(str(e.value) for e in list(at.markdown) + list(at.caption) + list(at.warning) + list(at.info) + list(at.success))
+    # Le righe "Blocchi principali" e "Microchunk completati" sono la didascalia delle barre st.progress.
+    parts = [str(e.value) for e in list(at.markdown) + list(at.caption) + list(at.warning) + list(at.info) + list(at.success)]
+    parts += [_progress_text(p) for p in at.progress]
+    return "\n".join(parts)
+
+
+def _bars(at: AppTest):
+    """(barra blocchi principali, barra microchunk) dell'ULTIMO rendering: le ultime due barre dell'albero."""
+    bars = list(at.progress)
+    assert len(bars) >= 2, f"attese due barre (parent + microchunk), trovate {len(bars)}"
+    return bars[-2], bars[-1]
 
 
 @pytest.mark.parametrize("scenario,needles,absent", [
@@ -44,3 +60,21 @@ def test_real_streamlit_panel_renders_truthful_state(scenario, needles, absent):
         assert n in text, n
     for a in absent:
         assert a not in text, a
+
+
+def test_success_scenario_both_bars_are_full_and_labelled():
+    at = _run("Successo (3 microchunk)")
+    parent, micro = _bars(at)
+    assert _progress_text(parent).startswith("Blocchi principali: 1 / 1")
+    assert _progress_text(micro).startswith("Microchunk completati: 3 / 3")
+    assert parent.value == 100 and micro.value == 100
+
+
+def test_partial_scenario_validated_micro_bar_and_parent_bar_stay_below_100():
+    at = _run("Parziale (un microchunk non validato)")
+    parent, micro = _bars(at)
+    assert _progress_text(micro).startswith("Microchunk completati: 2 / 3")
+    # le unita' processate sono 3/3 (2 validate + 1 fallita), ma la barra mostra solo le VALIDATE
+    assert micro.value < 100, "un microchunk fallito non deve portare la barra dei validati al 100%"
+    assert parent.value < 100, "il parent non e' validato: la copertura dei blocchi principali non e' completa"
+    assert "Unità processate: 3 / 3 (validate 2, fallite 1)" in _texts(at)
