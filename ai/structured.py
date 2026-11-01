@@ -26,7 +26,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Any, Mapping, Sequence
+from typing import Any, Mapping, NamedTuple, Sequence
 
 from ai.backend import (
     AiInvalidEvidenceCitationError,
@@ -120,6 +120,75 @@ TRANSLATION_SCHEMA: dict[str, Any] = {
 }
 
 
+# Tipi di innesco del controllo di degenerazione (enum chiuso, solo etichette: nessun testo del modello).
+DEGENERATION_TRIGGER_CHAR_RUN = "CHAR_RUN"
+DEGENERATION_TRIGGER_TAB_RUN = "TAB_RUN"
+DEGENERATION_TRIGGER_PATTERN_LOOP = "PATTERN_LOOP"
+
+
+class DegenerationScan(NamedTuple):
+    """
+    Esito del controllo di ripetizione sul testo grezzo: SOLO etichette e numeri.
+    `message` è la stringa storica (può contenere un frammento del testo del modello) e serve
+    esclusivamente a comporre il messaggio d'errore storico; NON va mai esportata né mostrata.
+    """
+
+    trigger_kind: str
+    message: str
+    pattern_length: int | None
+    repetition_count: int | None
+    run_length: int | None
+
+
+def scan_degenerate_repetition(text: str, threshold: int = 15) -> DegenerationScan | None:
+    """
+    Stesso predicato storico di `detect_degenerate_repetition` (stesse regex, stessa precedenza, stessi
+    messaggi), ma restituisce anche i numeri che lo descrivono, senza memorizzare il contenuto del pattern.
+    NON cambia nulla sulla scelta di accettare o rifiutare una risposta.
+    """
+    if not text:
+        return None
+    # 1. Carattere non-spazio singolo ripetuto
+    m_char = re.search(r'([^\s])\1{' + str(threshold - 1) + r',}', text)
+    if m_char:
+        char_repr = repr(m_char.group(1))
+        run = len(m_char.group(0))
+        return DegenerationScan(
+            DEGENERATION_TRIGGER_CHAR_RUN,
+            f"Ripetizione ciclica anomala del carattere {char_repr} ({run} volte consecutive)",
+            1,
+            run,
+            run,
+        )
+    # Tabulazioni ripetute anomale
+    m_tab = re.search(r'(\t)\1{11,}', text)
+    if m_tab:
+        run = len(m_tab.group(0))
+        return DegenerationScan(
+            DEGENERATION_TRIGGER_TAB_RUN,
+            f"Ripetizione ciclica di caratteri tabulari ({run} volte consecutive)",
+            1,
+            run,
+            run,
+        )
+    # Rimuove temporaneamente sequenze di alias JSON ("E001", "E002", ...) che vengono deduplicate semanticamente
+    text_no_aliases = re.sub(r'(?:["\']E\d{3,4}["\']\s*,\s*){2,}', "", text)
+    # 2. Pattern di 2-25 caratteri (con almeno un carattere non di spaziatura) ripetuto >= 6 volte consecutive
+    for m in re.finditer(r"(.{2,25})\1{5,}", text_no_aliases):
+        pat = m.group(1)
+        if pat.strip():
+            pat_repr = repr(pat)
+            reps = len(m.group(0)) // len(pat)
+            return DegenerationScan(
+                DEGENERATION_TRIGGER_PATTERN_LOOP,
+                f"Loop di attrattore su sequenza {pat_repr} ({reps} ripetizioni)",
+                len(pat),
+                reps,
+                len(m.group(0)),
+            )
+    return None
+
+
 def detect_degenerate_repetition(text: str, threshold: int = 15) -> str | None:
     """
     Rileva anomalie di degenerazione ciclica o loop di attrattore nei modelli LLM:
@@ -128,26 +197,8 @@ def detect_degenerate_repetition(text: str, threshold: int = 15) -> str | None:
     - Sequenze ripetitive cicliche di 2-25 caratteri ripetute >= 6 volte (esclusi array di alias JSON validi).
     Restituisce una stringa descrittiva se degenerato, altrimenti None.
     """
-    if not text:
-        return None
-    # 1. Carattere non-spazio singolo ripetuto
-    m_char = re.search(r'([^\s])\1{' + str(threshold - 1) + r',}', text)
-    if m_char:
-        char_repr = repr(m_char.group(1))
-        return f"Ripetizione ciclica anomala del carattere {char_repr} ({len(m_char.group(0))} volte consecutive)"
-    # Tabulazioni ripetute anomale
-    m_tab = re.search(r'(\t)\1{11,}', text)
-    if m_tab:
-        return f"Ripetizione ciclica di caratteri tabulari ({len(m_tab.group(0))} volte consecutive)"
-    # Rimuove temporaneamente sequenze di alias JSON ("E001", "E002", ...) che vengono deduplicate semanticamente
-    text_no_aliases = re.sub(r'(?:["\']E\d{3,4}["\']\s*,\s*){2,}', "", text)
-    # 2. Pattern di 2-25 caratteri (con almeno un carattere non di spaziatura) ripetuto >= 6 volte consecutive
-    for m in re.finditer(r"(.{2,25})\1{5,}", text_no_aliases):
-        pat = m.group(1)
-        if pat.strip():
-            pat_repr = repr(pat)
-            return f"Loop di attrattore su sequenza {pat_repr} ({len(m.group(0)) // len(pat)} ripetizioni)"
-    return None
+    scan = scan_degenerate_repetition(text, threshold)
+    return scan.message if scan is not None else None
 
 
 def parse_and_validate_json(raw_text: str) -> dict[str, Any]:
@@ -156,9 +207,20 @@ def parse_and_validate_json(raw_text: str) -> dict[str, Any]:
     Errori di tipo o bug programmatici propagano senza mascheramento.
     Rileva e rigetta preventivamente output ciclici degenerati.
     """
-    repetition = detect_degenerate_repetition(raw_text)
-    if repetition:
-        raise AiStructuredOutputError(f"Risposta del modello scartata per degenerazione ciclica: {repetition}")
+    scan = scan_degenerate_repetition(raw_text)
+    if scan is not None:
+        degenerate_exc = AiStructuredOutputError(
+            f"Risposta del modello scartata per degenerazione ciclica: {scan.message}"
+        )
+        # Metadati numerici per la diagnostica (nessun testo). Il messaggio resta IDENTICO: è quello usato dai retry.
+        degenerate_exc.degeneration = {  # type: ignore[attr-defined]
+            "trigger_kind": scan.trigger_kind,
+            "pattern_length": scan.pattern_length,
+            "repetition_count": scan.repetition_count,
+            "run_length": scan.run_length,
+            "response_length": len(raw_text),
+        }
+        raise degenerate_exc
 
     clean_text = raw_text.strip()
     # Supporto trasparente per eventuali markdown code blocks ```json ... ``` generati dal modello

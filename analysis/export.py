@@ -162,6 +162,12 @@ ALLOWED_DIAGNOSTIC_CATEGORIES = {
     "CHECKPOINT_SAVE_ERROR",
     "MODEL_MISMATCH",
     "INTERNAL_VALIDATION_ERROR",
+    # Categorie chiuse effettivamente emesse (enum `ChunkDiagnosticCategory` e budget di tempo del servizio):
+    # prima venivano collassate in UNKNOWN_ERROR nell'export safe. Sono etichette fisse, non testo libero.
+    "DEGENERATE_OUTPUT",
+    "GBNF_GRAMMAR_ERROR",
+    "RETRY_EXHAUSTED",
+    "TIME_BUDGET_EXHAUSTED",
 }
 
 ALLOWED_FAILURE_PHASES = {
@@ -175,6 +181,11 @@ ALLOWED_FAILURE_PHASES = {
     "response_parsing",
     "not_started",
     "unknown",
+    # Fasi di fallimento chiuse effettivamente emesse (prima collassate in "unknown").
+    "json_parsing",
+    "schema_validation",
+    "budget",
+    "checkpoint_save",
 }
 
 ALLOWED_FINISH_REASONS = {
@@ -219,8 +230,16 @@ ALLOWED_ERROR_TYPES = {
     "AnalysisNoEvidenceError",
     "TopicProvenanceError",
     "InsufficientContextHeadroomError",
+    "TimeBudgetExhausted",
+    "CheckpointSaveError",
     "None",
 }
+
+# Osservabilità additiva della Detection: enum chiusi (nessun testo libero).
+ALLOWED_DEGENERATION_TRIGGERS = {"CHAR_RUN", "TAB_RUN", "PATTERN_LOOP"}
+ALLOWED_RESULT_ORIGINS = {"CHECKPOINT_VALIDATED", "COMPUTED_THIS_RUN", "MIXED_CHECKPOINT_AND_COMPUTED"}
+ALLOWED_HTTP_BASES = {"REQUEST_LISTENER", "NOT_AVAILABLE"}
+ALLOWED_CHECKPOINT_PERSISTENCE = {"OK", "WRITE_FAILURES", "NOT_ATTEMPTED"}
 
 ALLOWED_MODEL_FAMILIES = {
     "qwen",
@@ -643,6 +662,113 @@ def sanitize_error_type(val: Any, redact: bool = True) -> str | None:
     return s
 
 
+def _safe_count_map(raw: Any, key_sanitizer: Any, redact: bool) -> dict[str, int]:
+    """Mappa categoria -> conteggio: chiavi riportate a enum chiusi, valori interi non negativi."""
+    out: dict[str, int] = {}
+    if not isinstance(raw, Mapping):
+        return out
+    for k, v in raw.items():
+        n = safe_int(v)
+        if n is None or n < 0:
+            continue
+        key = key_sanitizer(k)
+        if key is None:
+            continue
+        out[key] = out.get(key, 0) + n
+    return out
+
+
+def sanitize_diagnostic_metrics(raw: Any, redact: bool = True) -> dict[str, Any] | None:
+    """
+    Metriche diagnostiche NUMERICHE di un blocco Detection fallito (parent o nodo): solo interi, enum chiusi e
+    conteggi per categoria. Nessun testo, nessun frammento di risposta del modello. None = non disponibile.
+    """
+    if not isinstance(raw, Mapping):
+        return None
+
+    def _trigger(v: Any) -> str | None:
+        return str(v) if isinstance(v, str) and v in ALLOWED_DEGENERATION_TRIGGERS else None
+
+    out: dict[str, Any] = {}
+    if "failed_leaf_count" in raw:
+        out["failed_leaf_count"] = safe_int(raw.get("failed_leaf_count"))
+        out["failure_category_counts"] = _safe_count_map(
+            raw.get("failure_category_counts"), lambda k: sanitize_diagnostic_category(k, redact=redact), redact
+        )
+        out["degeneration_trigger_counts"] = _safe_count_map(
+            raw.get("degeneration_trigger_counts"), _trigger, redact
+        )
+        ff = raw.get("first_failure")
+        out["first_failure"] = None
+        if isinstance(ff, Mapping):
+            out["first_failure"] = {
+                "diagnostic_category": sanitize_diagnostic_category(ff.get("diagnostic_category"), redact=redact),
+                "failure_phase": sanitize_failure_phase(ff.get("failure_phase"), redact=redact),
+                "error_type": sanitize_error_type(ff.get("error_type"), redact=redact),
+                **(sanitize_diagnostic_metrics({k: v for k, v in ff.items() if k not in ("diagnostic_category", "failure_phase", "error_type")}, redact) or {}),
+            }
+        return out
+    for key in ("bundle_count", "pattern_length", "repetition_count", "run_length", "response_length", "completion_tokens_cumulative"):
+        out[key] = safe_int(raw.get(key))
+    out["trigger_kind"] = _trigger(raw.get("trigger_kind"))
+    out["finish_reason"] = sanitize_finish_reason(raw.get("finish_reason"), redact=redact)
+    return out
+
+
+def sanitize_resume_provenance(raw: Any) -> dict[str, Any] | None:
+    """Provenienza del risultato di un blocco (checkpoint o calcolo di questa esecuzione) e spesa corrente."""
+    if not isinstance(raw, Mapping):
+        return None
+    origin = raw.get("result_origin")
+    via = raw.get("via_microchunks")
+    return {
+        "result_origin": origin if isinstance(origin, str) and origin in ALLOWED_RESULT_ORIGINS else None,
+        "via_microchunks": via if isinstance(via, bool) else None,
+        "microchunks_recovered": safe_int(raw.get("microchunks_recovered")),
+        "microchunks_computed": safe_int(raw.get("microchunks_computed")),
+        "microchunks_failed": safe_int(raw.get("microchunks_failed")),
+        "current_run_http_requests": safe_int(raw.get("current_run_http_requests")),
+        "original_attempts": safe_int(raw.get("original_attempts")),
+    }
+
+
+_DETECTION_DIAGNOSTICS_INT_KEYS = (
+    "parent_chunks_total", "parent_chunks_completed", "parent_chunks_failed",
+    "parents_recovered_from_checkpoint", "parents_computed_this_run", "parents_mixed_checkpoint_and_computed",
+    "microchunks_total", "microchunks_completed", "microchunks_recovered_from_checkpoint",
+    "microchunks_computed_this_run", "microchunks_failed",
+    "leaf_attempts_total", "node_failures", "degenerate_failures",
+    "detect_topic_calls", "http_requests_sent", "http_requests_successful", "http_requests_failed",
+    "http_requests_in_flight", "retries", "bisections", "timeouts", "callback_errors",
+    "checkpoint_writes_ok", "checkpoint_write_failures",
+)
+
+
+def sanitize_detection_diagnostics(raw: Any) -> dict[str, Any] | None:
+    """
+    Contatori della Detection per l'export (additivo): solo interi, booleani ed enum chiusi.
+    Un valore None significa "non disponibile" ed è distinto da 0.
+    """
+    if not isinstance(raw, Mapping) or not raw:
+        return None
+    out: dict[str, Any] = {k: safe_int(raw.get(k)) for k in _DETECTION_DIAGNOSTICS_INT_KEYS if k in raw}
+    basis = raw.get("http_requests_basis")
+    out["http_requests_basis"] = basis if isinstance(basis, str) and basis in ALLOWED_HTTP_BASES else None
+    cons = raw.get("http_requests_accounting_consistent")
+    out["http_requests_accounting_consistent"] = cons if isinstance(cons, bool) else None
+    pers = raw.get("checkpoint_persistence")
+    out["checkpoint_persistence"] = pers if isinstance(pers, str) and pers in ALLOWED_CHECKPOINT_PERSISTENCE else None
+    rg = raw.get("resume_guaranteed")
+    out["resume_guaranteed"] = rg if isinstance(rg, bool) else None
+    out["degeneration_trigger_counts"] = {
+        "CHAR_RUN": safe_int(raw.get("degeneration_trigger_char_run")),
+        "TAB_RUN": safe_int(raw.get("degeneration_trigger_tab_run")),
+        "PATTERN_LOOP": safe_int(raw.get("degeneration_trigger_pattern_loop")),
+    }
+    out["duration_seconds"] = safe_float(raw.get("duration_seconds"))
+    return out
+
+
 def sanitize_document_fingerprint(fp: Any) -> str | None:
     """
     Restituisce l'impronta crittografica autentica registrata del documento (64 caratteri esadecimali SHA-256).
@@ -920,8 +1046,15 @@ def _normalize_chunks_diagnostics(
                 "error_detail": err_det,
                 "checkpoint_saved": chk_saved,
                 "valid_evidence_count": val_ev_c,
-                "subchunks_used": bool(d.get("subchunks_used", False)),
+                "subchunks_used": bool(
+                    d.get("subchunks_used", False) or (d.get("resume_provenance") or {}).get("via_microchunks") is True
+                ),
             }
+            # Campi additivi (assenti per i record che non li hanno: gli export storici restano identici).
+            if d.get("diagnostic_metrics") is not None:
+                rec["diagnostic_metrics"] = sanitize_diagnostic_metrics(d.get("diagnostic_metrics"), redact=redact_sensitive_topics)
+            if d.get("resume_provenance") is not None:
+                rec["resume_provenance"] = sanitize_resume_provenance(d.get("resume_provenance"))
         else:
             rec = {
                 "chunk_index": idx,
@@ -1092,6 +1225,7 @@ def build_topic_detection_export_report(
     Privacy Safe by Default: redact_sensitive_topics=True.
     """
     meta = dict(detection_result.metadata or {})
+    _det_diag = sanitize_detection_diagnostics(meta.get("detection_diagnostics"))
 
     # Run ID: non inventare 'run_' + id(obj). Usare NOT_RECORDED se non registrata.
     raw_run_id = meta.get("run_id")
@@ -1437,6 +1571,7 @@ def build_topic_detection_export_report(
             "error_count": max(safe_int(meta.get("error_count")) or 0, failed_chunks or 0) if (meta.get("error_count") is not None or failed_chunks is not None) else None,
             "retry_count": safe_int(meta.get("retry_count")) if meta.get("retry_count") is not None else None,
             "subchunks_used": bool(meta.get("subchunks_used", False)) if meta.get("subchunks_used") is not None else None,
+            **({"detection_diagnostics": _det_diag} if _det_diag is not None else {}),
         },
         "coverage": {
             "total_chunks_planned": planned_chunks,

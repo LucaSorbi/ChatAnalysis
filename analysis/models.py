@@ -427,6 +427,12 @@ class ChunkDiagnosticRecord:
     timestamp: str | None = None
     topics_count: int = 0
     thematic_status: str = "PENDING"
+    # Osservabilità additiva (Detection): SOLO enum e numeri, mai testo di chat/modello. None = non disponibile.
+    # `diagnostic_metrics`: tipo di innesco/lunghezza pattern/ripetizioni/bundle/finish_reason/token del nodo fallito,
+    #   oppure, sul parent, conteggio dei nodi falliti per categoria e metriche del primo fallimento reale.
+    # `resume_provenance`: origine del risultato (CHECKPOINT_VALIDATED / COMPUTED_THIS_RUN / MIXED_...) e spesa di QUESTA esecuzione.
+    diagnostic_metrics: dict[str, Any] | None = None
+    resume_provenance: dict[str, Any] | None = None
 
     def __post_init__(self) -> None:
         if not self.model and self.model_id:
@@ -497,6 +503,8 @@ class ChunkDiagnosticRecord:
             "timestamp": self.timestamp,
             "topics_count": int(self.topics_count),
             "thematic_status": self.thematic_status,
+            **({"diagnostic_metrics": dict(self.diagnostic_metrics)} if self.diagnostic_metrics is not None else {}),
+            **({"resume_provenance": dict(self.resume_provenance)} if self.resume_provenance is not None else {}),
         }
 
     @classmethod
@@ -526,6 +534,8 @@ class ChunkDiagnosticRecord:
             timestamp=data.get("timestamp"),
             topics_count=int(data.get("topics_count", 0)),
             thematic_status=str(data.get("thematic_status", "PENDING")),
+            diagnostic_metrics=dict(data["diagnostic_metrics"]) if isinstance(data.get("diagnostic_metrics"), dict) else None,
+            resume_provenance=dict(data["resume_provenance"]) if isinstance(data.get("resume_provenance"), dict) else None,
         )
 
 
@@ -740,6 +750,24 @@ def classify_discovery_exception(
         "inference",
         f"Errore non classificato ({type(exc).__name__})",
     )
+
+
+def safe_exception_text(exc: BaseException) -> str:
+    """
+    Testo SICURO di un'eccezione per messaggi di progresso, errori mostrati all'utente ed export.
+
+    Le eccezioni che derivano dall'esame dell'output del modello (`AiStructuredOutputError` e sottoclassi, quindi anche
+    le citazioni di evidenze non valide e la degenerazione ciclica) possono contenere frammenti della risposta del
+    modello, che a sua volta può riecheggiare il testo della conversazione: per queste si restituisce solo il nome della
+    classe e la descrizione statica della categoria. Per le altre eccezioni il comportamento storico (`str(exc)`) è
+    invariato. NON modifica l'eccezione né il suo messaggio (usato internamente dai retry).
+    """
+    from ai.backend import AiStructuredOutputError
+
+    if isinstance(exc, AiStructuredOutputError):
+        _cat, _phase, desc = classify_discovery_exception(exc)
+        return f"{type(exc).__name__}: {desc}"
+    return str(exc)
 
 
 @dataclass(frozen=True)

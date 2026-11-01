@@ -124,6 +124,7 @@ from analysis.models import (
     TopicProvenanceError,
     classify_discovery_exception,
     resolve_operational_profile,
+    safe_exception_text,
 )
 
 FATAL_BACKEND_ERRORS = (
@@ -185,7 +186,69 @@ def new_detection_stats() -> dict[str, int]:
         "failed": 0,
         "checkpoint_writes_ok": 0,
         "checkpoint_write_failures": 0,
+        # Osservabilità additiva (solo contatori): fallimenti di OGNI nodo (foglie e nodi poi bisecati),
+        # fallimenti per degenerazione, tipo di innesco, attempts delle sole foglie.
+        "node_failures": 0,
+        "degenerate_failures": 0,
+        "trigger_char_run": 0,
+        "trigger_tab_run": 0,
+        "trigger_pattern_loop": 0,
+        "leaf_attempts": 0,
     }
+
+
+RESUME_ORIGIN_CHECKPOINT = "CHECKPOINT_VALIDATED"
+RESUME_ORIGIN_COMPUTED = "COMPUTED_THIS_RUN"
+RESUME_ORIGIN_MIXED = "MIXED_CHECKPOINT_AND_COMPUTED"
+_DEGENERATION_TRIGGER_KINDS = frozenset({"CHAR_RUN", "TAB_RUN", "PATTERN_LOOP"})
+_TRIGGER_STAT_KEY = {
+    "CHAR_RUN": "trigger_char_run",
+    "TAB_RUN": "trigger_tab_run",
+    "PATTERN_LOOP": "trigger_pattern_loop",
+}
+
+
+def _bump(stats: dict[str, int], key: str, by: int = 1) -> None:
+    stats[key] = int(stats.get(key, 0)) + int(by)
+
+
+def _opt_int(value: Any) -> int | None:
+    """Intero oppure None (non disponibile): mai uno zero inventato; i booleani non sono numeri."""
+    if isinstance(value, bool) or not isinstance(value, int):
+        return None
+    return int(value)
+
+
+def detection_failure_metrics(exc: BaseException | None, bundle_count: int) -> dict[str, Any]:
+    """
+    Metriche NUMERICHE/ENUM di un nodo Detection fallito (nessun testo del modello né della conversazione).
+    I valori non disponibili restano None. Non legge né modifica il messaggio dell'eccezione.
+    """
+    deg = getattr(exc, "degeneration", None)
+    deg = deg if isinstance(deg, dict) else {}
+    kind = deg.get("trigger_kind")
+    fr = getattr(exc, "finish_reason", None)
+    return {
+        "bundle_count": int(bundle_count),
+        "trigger_kind": kind if kind in _DEGENERATION_TRIGGER_KINDS else None,
+        "pattern_length": _opt_int(deg.get("pattern_length")),
+        "repetition_count": _opt_int(deg.get("repetition_count")),
+        "run_length": _opt_int(deg.get("run_length")),
+        "response_length": _opt_int(deg.get("response_length")),
+        "finish_reason": fr if isinstance(fr, str) else None,
+        # cumulativo sui tentativi del nodo (come i token dei nodi riusciti)
+        "completion_tokens_cumulative": _opt_int(getattr(exc, "completion_tokens", None)),
+    }
+
+
+def note_detection_node_failure(stats: dict[str, int], category: str, metrics: Mapping[str, Any]) -> None:
+    """Contatori di un nodo Detection fallito (foglia o nodo poi bisecato): solo numeri."""
+    _bump(stats, "node_failures")
+    if category == ChunkDiagnosticCategory.DEGENERATE_OUTPUT.value:
+        _bump(stats, "degenerate_failures")
+        key = _TRIGGER_STAT_KEY.get(str(metrics.get("trigger_kind") or ""))
+        if key:
+            _bump(stats, key)
 
 
 class _DetectionSplitPartial(Exception):
@@ -945,6 +1008,7 @@ class LocalTopicAnalysisService:
                         failure_phase="budget",
                         error_detail="Budget di tempo del microchunk esaurito.",
                         checkpoint_saved=False,
+                        diagnostic_metrics=detection_failure_metrics(None, len(sub.bundles)),
                     )
                 ],
             )
@@ -974,6 +1038,9 @@ class LocalTopicAnalysisService:
             if isinstance(exc, (*PROGRAMMING_ERRORS, *SYSTEMIC_BACKEND_ERRORS)):
                 raise
             cat, phase, safe_desc = classify_discovery_exception(exc)
+            # Osservabilità (solo numeri/enum): vale per OGNI nodo fallito, anche quelli poi bisecati.
+            metrics = detection_failure_metrics(exc, len(sub.bundles))
+            note_detection_node_failure(stats, cat, metrics)
             if isinstance(exc, AiBackendTimeoutError):
                 stats["timeouts"] += 1
                 stats["consecutive_timeouts"] += 1
@@ -1014,11 +1081,13 @@ class LocalTopicAnalysisService:
                     )
                 return out_a + out_b, None, diag_a + diag_b
 
+            leaf_attempts = int(getattr(exc, "attempts", attempts_box["n"]))
+            _bump(stats, "leaf_attempts", leaf_attempts)
             diag = ChunkDiagnosticRecord(
                 chunk_index=parent_idx,
                 chunk_id=sub.document_id,
                 status=ChunkLifecycleStatus.FAILED.value,
-                attempts=int(getattr(exc, "attempts", attempts_box["n"])),
+                attempts=leaf_attempts,
                 duration_seconds=round(time.perf_counter() - t0, 3),
                 model_id=resolved_model,
                 http_status=getattr(exc, "status_code", None),
@@ -1027,6 +1096,9 @@ class LocalTopicAnalysisService:
                 failure_phase=phase,
                 error_detail=safe_desc,
                 checkpoint_saved=False,
+                # finish_reason/token restano NELLA struttura annidata: i campi di primo livello alimentano
+                # il controllo di "risposte verificabili registrate" dell'export e non vanno alterati.
+                diagnostic_metrics=metrics,
             )
             return (
                 [
@@ -1043,6 +1115,7 @@ class LocalTopicAnalysisService:
             )
 
         stats["consecutive_timeouts"] = 0
+        _bump(stats, "leaf_attempts", int(res.metadata.get("attempts", attempts_box["n"])))
         diag = ChunkDiagnosticRecord(
             chunk_index=parent_idx,
             chunk_id=sub.document_id,
@@ -1333,6 +1406,7 @@ class LocalTopicAnalysisService:
         resolved_model: str,
         prompt_version: str,
         legacy_chunk_accounting: bool = False,
+        requests_before: int | None = None,
         **core_kwargs: Any,
     ) -> tuple[list[ChunkAnalysisOutcome], bool]:
         """
@@ -1343,6 +1417,9 @@ class LocalTopicAnalysisService:
         t0 = time.perf_counter()
         _wf_stats = core_kwargs.get("stats") or {}
         _wf_before = int(_wf_stats.get("checkpoint_write_failures", 0))
+        # Istantanea per la provenienza del resume e la spesa di QUESTA esecuzione (solo contatori).
+        _req_before = int(requests_before) if requests_before is not None else int(tracker.requests_sent)
+        _snap_before = {k: int(_wf_stats.get(k, 0)) for k in ("recovered", "completed", "failed", "leaf_attempts")}
         try:
             sub_outcomes, parent_res, diag_sink = self._run_detection_split_core(
                 document=document,
@@ -1366,7 +1443,12 @@ class LocalTopicAnalysisService:
         all_chunk_diagnostics.extend(diag_sink)
         ok = parent_res is not None
         dur = round(time.perf_counter() - t0, 3)
-        first_failed = next((d for d in diag_sink if d.status == ChunkLifecycleStatus.FAILED.value), None)
+        first_failed = self._first_real_failure(diag_sink)
+        _rec = int(_wf_stats.get("recovered", 0)) - _snap_before["recovered"]
+        _comp = int(_wf_stats.get("completed", 0)) - _snap_before["completed"]
+        _fail = int(_wf_stats.get("failed", 0)) - _snap_before["failed"]
+        _computed_leaf_attempts = int(_wf_stats.get("leaf_attempts", 0)) - _snap_before["leaf_attempts"]
+        _delta_req = int(tracker.requests_sent) - _req_before
         parent_diag = ChunkDiagnosticRecord(
             chunk_index=parent_idx,
             chunk_id=chunk.document_id,
@@ -1380,6 +1462,17 @@ class LocalTopicAnalysisService:
             error_detail="" if ok else f"{sum(1 for o in sub_outcomes if o.status != 'SUCCESS')} micro-chunk non validati",
             # vero solo se TUTTE le scritture di questo parent (microchunk + parent) sono riuscite
             checkpoint_saved=ok and chk_store is not None and int(_wf_stats.get("checkpoint_write_failures", 0)) == _wf_before,
+            # Il tipo di errore del primo nodo realmente fallito (nessun valore inventato se non c'è).
+            error_type=(first_failed.error_type if (not ok and first_failed is not None) else None),
+            diagnostic_metrics=(None if ok else self._parent_failure_metrics(diag_sink, first_failed)),
+            resume_provenance=self._parent_resume_provenance(
+                recovered=_rec,
+                computed=_comp,
+                failed=_fail,
+                http_delta=_delta_req,
+                computed_leaf_attempts=_computed_leaf_attempts,
+                via_microchunks=True,
+            ),
         )
         all_chunk_diagnostics.append(parent_diag)
         if chk_store is not None and doc_fp and cfg_fp:
@@ -1405,24 +1498,123 @@ class LocalTopicAnalysisService:
         return sub_outcomes, False
 
     @staticmethod
+    def _first_real_failure(diag_sink: Sequence[ChunkDiagnosticRecord]) -> ChunkDiagnosticRecord | None:
+        """
+        Primo nodo realmente fallito, in ordine di esecuzione. I nodi chiusi dal budget di tempo sono una CONSEGUENZA
+        di un fallimento precedente: valgono come causa solo se non esiste altro fallimento.
+        """
+        failed = [d for d in diag_sink if d.status == ChunkLifecycleStatus.FAILED.value]
+        for d in failed:
+            if d.diagnostic_category != "TIME_BUDGET_EXHAUSTED":
+                return d
+        return failed[0] if failed else None
+
+    @staticmethod
+    def _parent_failure_metrics(
+        diag_sink: Sequence[ChunkDiagnosticRecord], first_failed: ChunkDiagnosticRecord | None
+    ) -> dict[str, Any]:
+        """Aggregato NUMERICO dei nodi foglia falliti di un parent (categorie e tipi di innesco: solo conteggi)."""
+        failed = [d for d in diag_sink if d.status == ChunkLifecycleStatus.FAILED.value]
+        by_category: dict[str, int] = {}
+        by_trigger: dict[str, int] = {}
+        for d in failed:
+            by_category[d.diagnostic_category] = by_category.get(d.diagnostic_category, 0) + 1
+            kind = (d.diagnostic_metrics or {}).get("trigger_kind")
+            if kind in _DEGENERATION_TRIGGER_KINDS:
+                by_trigger[kind] = by_trigger.get(kind, 0) + 1
+        first: dict[str, Any] | None = None
+        if first_failed is not None:
+            first = {
+                "diagnostic_category": first_failed.diagnostic_category,
+                "failure_phase": first_failed.failure_phase,
+                "error_type": first_failed.error_type,
+                **dict(first_failed.diagnostic_metrics or {}),
+            }
+        return {
+            "failed_leaf_count": len(failed),
+            "failure_category_counts": by_category,
+            "degeneration_trigger_counts": by_trigger,
+            "first_failure": first,
+        }
+
+    @staticmethod
+    def _parent_resume_provenance(
+        *,
+        recovered: int,
+        computed: int,
+        failed: int,
+        http_delta: int,
+        computed_leaf_attempts: int,
+        via_microchunks: bool,
+    ) -> dict[str, Any]:
+        """
+        Origine del risultato del parent e spesa di QUESTA esecuzione. Gli attempts storici dei checkpoint non vengono
+        riscritti: `original_attempts` è None (non disponibile) finché non è registrato esplicitamente.
+        `current_run_http_requests` è None se sono stati eseguiti nodi ma il client non ha riportato richieste.
+        """
+        if recovered > 0 and computed == 0 and failed == 0:
+            origin = RESUME_ORIGIN_CHECKPOINT
+        elif recovered == 0:
+            origin = RESUME_ORIGIN_COMPUTED
+        else:
+            origin = RESUME_ORIGIN_MIXED
+        executed = computed_leaf_attempts > 0
+        http: int | None = int(http_delta) if (http_delta > 0 or not executed) else None
+        return {
+            "result_origin": origin,
+            "via_microchunks": bool(via_microchunks),
+            # Contatori di microchunk: None quando il parent è stato elaborato in una sola chiamata (nessun microchunk).
+            "microchunks_recovered": int(recovered) if via_microchunks else None,
+            "microchunks_computed": int(computed) if via_microchunks else None,
+            "microchunks_failed": int(failed) if via_microchunks else None,
+            "current_run_http_requests": http,
+            "original_attempts": None,
+        }
+
+    @staticmethod
     def _detection_diagnostics_summary(
         tracker: AnalysisProgressTracker,
         det_stats: Mapping[str, int],
         parent_total: int,
         parent_completed: int,
         start_time: float,
+        diagnostics: Sequence[ChunkDiagnosticRecord] | None = None,
     ) -> dict[str, Any]:
         """Diagnostica numerica sanificata della Detection (nessun testo di conversazione né output del modello)."""
+        # Disponibilità del trasporto: se sono stati eseguiti nodi ma il client non ha riportato richieste,
+        # il conteggio HTTP è "non disponibile" (None), NON zero.
+        transport_available = not (int(tracker.requests_sent) == 0 and int(det_stats.get("leaf_attempts", 0)) > 0)
+        prov = [d.resume_provenance for d in (diagnostics or ()) if d.resume_provenance is not None]
+
+        def _tally(origin: str) -> int | None:
+            return sum(1 for p in prov if p.get("result_origin") == origin) if prov else None
+
         return {
             "parent_chunks_total": int(parent_total),
             "parent_chunks_completed": int(parent_completed),
+            "parent_chunks_failed": int(parent_total) - int(parent_completed),
+            "parents_recovered_from_checkpoint": _tally(RESUME_ORIGIN_CHECKPOINT),
+            "parents_computed_this_run": _tally(RESUME_ORIGIN_COMPUTED),
+            "parents_mixed_checkpoint_and_computed": _tally(RESUME_ORIGIN_MIXED),
             "microchunks_total": int(tracker.microchunks_total),
             "microchunks_completed": int(tracker.microchunks_completed),
             "microchunks_recovered_from_checkpoint": int(tracker.microchunks_recovered),
+            "microchunks_computed_this_run": max(0, int(tracker.microchunks_completed) - int(tracker.microchunks_recovered)),
             "microchunks_failed": int(tracker.microchunks_failed),
+            "leaf_attempts_total": int(det_stats.get("leaf_attempts", 0)),
+            "node_failures": int(det_stats.get("node_failures", 0)),
+            "degenerate_failures": int(det_stats.get("degenerate_failures", 0)),
+            # Chiavi piatte (il consumatore storico serializza `dict(summary)` con json.dumps: niente mappe annidate).
+            "degeneration_trigger_char_run": int(det_stats.get("trigger_char_run", 0)),
+            "degeneration_trigger_tab_run": int(det_stats.get("trigger_tab_run", 0)),
+            "degeneration_trigger_pattern_loop": int(det_stats.get("trigger_pattern_loop", 0)),
+            "http_requests_basis": "REQUEST_LISTENER" if transport_available else "NOT_AVAILABLE",
+            "http_requests_successful": int(tracker.requests_successful) if transport_available else None,
+            "http_requests_in_flight": int(tracker.requests_in_flight) if transport_available else None,
+            "http_requests_accounting_consistent": bool(tracker.check_requests_invariant()) if transport_available else None,
             "detect_topic_calls": int(det_stats.get("detect_calls", 0)),
-            "http_requests_sent": int(tracker.requests_sent),
-            "http_requests_failed": int(tracker.requests_failed),
+            "http_requests_sent": int(tracker.requests_sent) if transport_available else None,
+            "http_requests_failed": int(tracker.requests_failed) if transport_available else None,
             "retries": int(tracker.retries_count),
             "bisections": int(det_stats.get("bisections", 0)),
             "timeouts": int(det_stats.get("timeouts", 0)),
@@ -2304,8 +2496,8 @@ class LocalTopicAnalysisService:
                                 tracker.partial(f"Topic Detection parziale tramite suddivisione sub-chunk ({completed_count}/{total_units} sotto-blocchi completati).")
                                 det_status = "PARTIAL"
                             else:
-                                tracker.chunk_failed(1, str(fatal_err))
-                                tracker.fail(str(fatal_err))
+                                tracker.chunk_failed(1, safe_exception_text(fatal_err))
+                                tracker.fail(safe_exception_text(fatal_err))
                                 raise
                         else:
                             diag = ChunkDiagnosticRecord(
@@ -2337,8 +2529,8 @@ class LocalTopicAnalysisService:
                                     )
                                 except Exception:
                                     pass
-                            tracker.chunk_failed(1, str(fatal_err))
-                            tracker.fail(str(fatal_err))
+                            tracker.chunk_failed(1, safe_exception_text(fatal_err))
+                            tracker.fail(safe_exception_text(fatal_err))
                             raise
                     except Exception as exc:
                         dur = round(time.perf_counter() - t_chunk_start, 3)
@@ -2372,10 +2564,10 @@ class LocalTopicAnalysisService:
                                 )
                             except Exception:
                                 pass
-                        tracker.chunk_failed(1, str(exc))
-                        tracker.fail(str(exc))
+                        tracker.chunk_failed(1, safe_exception_text(exc))
+                        tracker.fail(safe_exception_text(exc))
                         raise OperationalAnalysisFailedError(
-                            f"Inferenza di Topic Detection fallita sul documento: {exc}"
+                            f"Inferenza di Topic Detection fallita sul documento: {safe_exception_text(exc)}"
                         ) from exc
 
                 latency = round(time.perf_counter() - start_time, 3)
@@ -2433,7 +2625,7 @@ class LocalTopicAnalysisService:
                 meta["microchunk_completed_count"] = int(tracker.microchunks_completed)
                 meta["microchunk_failed_count"] = int(tracker.microchunks_failed)
                 meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
-                meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, 1, 1 if det_status == "SUCCESS" else 0, start_time)
+                meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, 1, 1 if det_status == "SUCCESS" else 0, start_time, all_chunk_diagnostics)
                 is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
                 meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
                 meta["is_label_only"] = is_label_only
@@ -2455,9 +2647,11 @@ class LocalTopicAnalysisService:
             # Multi-chunk: esecuzione chunk-by-chunk con tracking dei fallimenti e progress
             outcomes: list[ChunkAnalysisOutcome] = []
             parent_starts: list[int] = []  # indice in `outcomes` da cui iniziano gli esiti di ciascun parent
+            recovered_parent_count = 0  # parent il cui risultato proviene INTERAMENTE da checkpoint validati
             for idx, chunk in enumerate(chunks):
                 parent_starts.append(len(outcomes))
                 current_tracker_idx = tracker.completed_chunks + tracker.failed_chunks + 1
+                chunk_req_before = int(tracker.requests_sent)
                 if idx in cached_results:
                     res = cached_results[idx]
                     outcomes.append(
@@ -2484,8 +2678,19 @@ class LocalTopicAnalysisService:
                             schema_valid=True,
                             evidence_valid=True,
                             checkpoint_saved=True,
+                            # `attempts=1` è il valore storico (segnaposto): la provenienza vera è qui, esplicita.
+                            resume_provenance={
+                                "result_origin": RESUME_ORIGIN_CHECKPOINT,
+                                "via_microchunks": None,
+                                "microchunks_recovered": None,
+                                "microchunks_computed": None,
+                                "microchunks_failed": None,
+                                "current_run_http_requests": 0,
+                                "original_attempts": None,
+                            },
                         )
                     )
+                    recovered_parent_count += 1
                     continue
 
                 tracker.start_chunk(current_tracker_idx, phase="Analisi dei messaggi", record_request=False)
@@ -2521,8 +2726,11 @@ class LocalTopicAnalysisService:
                         origin=det_origin,
                         run_id=run_id,
                         stats=det_stats,
+                        requests_before=chunk_req_before,
                     )
                     outcomes.extend(split_outcomes)
+                    if (all_chunk_diagnostics[-1].resume_provenance or {}).get("result_origin") == RESUME_ORIGIN_CHECKPOINT:
+                        recovered_parent_count += 1
                     continue
 
                 try:
@@ -2548,6 +2756,8 @@ class LocalTopicAnalysisService:
                         )
                     )
                     tracker.chunk_success(current_tracker_idx, record_request=False)
+                    _ok_attempts = int(res.metadata.get("attempts", chunk_attempts))
+                    _bump(det_stats, "leaf_attempts", _ok_attempts)
                     diag = ChunkDiagnosticRecord(
                         chunk_index=idx,
                         chunk_id=chunk.document_id,
@@ -2567,6 +2777,11 @@ class LocalTopicAnalysisService:
                         schema_valid=True,
                         evidence_valid=True,
                         checkpoint_saved=(chk_store is not None),
+                        resume_provenance=self._parent_resume_provenance(
+                            recovered=0, computed=1, failed=0,
+                            http_delta=int(tracker.requests_sent) - chunk_req_before,
+                            computed_leaf_attempts=_ok_attempts, via_microchunks=False,
+                        ),
                     )
                     all_chunk_diagnostics.append(diag)
                     if chk_store is not None:
@@ -2662,9 +2877,13 @@ class LocalTopicAnalysisService:
                             run_id=run_id,
                             stats=det_stats,
                             legacy_chunk_accounting=True,
+                            requests_before=chunk_req_before,
                         )
                         outcomes.extend(split_outcomes)
                     else:
+                        _fail_metrics = detection_failure_metrics(fatal_err, len(chunk.bundles))
+                        note_detection_node_failure(det_stats, cat, _fail_metrics)
+                        _bump(det_stats, "leaf_attempts", int(chunk_attempts))
                         diag = ChunkDiagnosticRecord(
                             chunk_index=idx,
                             chunk_id=chunk.document_id,
@@ -2678,6 +2897,12 @@ class LocalTopicAnalysisService:
                             failure_phase=phase,
                             error_detail=safe_desc,
                             checkpoint_saved=False,
+                            diagnostic_metrics=_fail_metrics,
+                            resume_provenance=self._parent_resume_provenance(
+                                recovered=0, computed=0, failed=1,
+                                http_delta=int(tracker.requests_sent) - chunk_req_before,
+                                computed_leaf_attempts=int(chunk_attempts), via_microchunks=False,
+                            ),
                         )
                         all_chunk_diagnostics.append(diag)
                         if chk_store is not None:
@@ -2694,14 +2919,14 @@ class LocalTopicAnalysisService:
                                 )
                             except Exception:
                                 pass
-                        tracker.chunk_failed(current_tracker_idx, str(fatal_err))
+                        tracker.chunk_failed(current_tracker_idx, safe_exception_text(fatal_err))
                         should_abort = (
                             isinstance(fatal_err, SYSTEMIC_BACKEND_ERRORS)
                             or not operational_mode
                             or (isinstance(fatal_err, AiBackendTimeoutError) and self.enable_checkpointing)
                         )
                         if should_abort:
-                            tracker.fail(str(fatal_err))
+                            tracker.fail(safe_exception_text(fatal_err))
                             raise
                         outcomes.append(
                             ChunkAnalysisOutcome(
@@ -2709,16 +2934,20 @@ class LocalTopicAnalysisService:
                                 result=None,
                                 status="FAILED",
                                 error_type=type(fatal_err).__name__,
-                                error_message=str(fatal_err),
+                                error_message=safe_exception_text(fatal_err),
                             )
                         )
                 except Exception as exc:
                     if not operational_mode or isinstance(exc, PROGRAMMING_ERRORS):
-                        tracker.chunk_failed(current_tracker_idx, str(exc))
-                        tracker.fail(str(exc))
+                        tracker.chunk_failed(current_tracker_idx, safe_exception_text(exc))
+                        tracker.fail(safe_exception_text(exc))
                         raise
                     dur = round(time.perf_counter() - t_chunk_start, 3)
                     cat, phase, safe_desc = classify_discovery_exception(exc)
+                    _fail_metrics = detection_failure_metrics(exc, len(chunk.bundles))
+                    note_detection_node_failure(det_stats, cat, _fail_metrics)
+                    _gen_attempts = int(getattr(exc, "attempts", chunk_attempts))
+                    _bump(det_stats, "leaf_attempts", _gen_attempts)
                     diag = ChunkDiagnosticRecord(
                         chunk_index=idx,
                         chunk_id=chunk.document_id,
@@ -2732,6 +2961,12 @@ class LocalTopicAnalysisService:
                         failure_phase=phase,
                         error_detail=safe_desc,
                         checkpoint_saved=False,
+                        diagnostic_metrics=_fail_metrics,
+                        resume_provenance=self._parent_resume_provenance(
+                            recovered=0, computed=0, failed=1,
+                            http_delta=int(tracker.requests_sent) - chunk_req_before,
+                            computed_leaf_attempts=_gen_attempts, via_microchunks=False,
+                        ),
                     )
                     all_chunk_diagnostics.append(diag)
                     if chk_store is not None:
@@ -2748,14 +2983,14 @@ class LocalTopicAnalysisService:
                             )
                         except Exception:
                             pass
-                    tracker.chunk_failed(current_tracker_idx, str(exc))
+                    tracker.chunk_failed(current_tracker_idx, safe_exception_text(exc))
                     outcomes.append(
                         ChunkAnalysisOutcome(
                             chunk_id=chunk.document_id,
                             result=None,
                             status="FAILED",
                             error_type=type(exc).__name__,
-                            error_message=str(exc),
+                            error_message=safe_exception_text(exc),
                         )
                     )
         finally:
@@ -2849,14 +3084,17 @@ class LocalTopicAnalysisService:
         meta["chunk_count"] = int(parent_total)
         meta["completed_chunk_count"] = int(parent_completed)
         meta["failed_chunk_count"] = int(parent_total - parent_completed)
+        # Parent il cui risultato proviene interamente da checkpoint validati (prima era sempre assente => 0).
+        meta["recovered_chunk_count"] = int(recovered_parent_count)
         meta["microchunk_count"] = int(tracker.microchunks_total)
         meta["microchunk_completed_count"] = int(tracker.microchunks_completed)
         meta["microchunk_failed_count"] = int(tracker.microchunks_failed)
+        meta["subchunks_used"] = bool(tracker.microchunks_total > 0)
         if det_status == "PARTIAL":
             meta["is_partial_detection"] = True
             meta["coverage_status"] = "PARTIAL"
         meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
-        meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, parent_total, parent_completed, start_time)
+        meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, parent_total, parent_completed, start_time, all_chunk_diagnostics)
         is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
         meta["query_mode"] = "LABEL_ONLY" if is_label_only else "LABEL_AND_DESCRIPTION"
         meta["is_label_only"] = is_label_only
