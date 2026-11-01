@@ -1167,7 +1167,13 @@ def render_topics() -> None:
                         render_backend_error_details(b_err)
                     except Exception as exc:
                         progress_placeholder.empty()
-                        st.error(f"Errore durante l'esecuzione della Topic Detection: {type(exc).__name__}: {exc}")
+                        # Privacy: per gli errori di output strutturato il messaggio storico può contenere un frammento
+                        # del testo del modello; si mostra solo classe + descrizione statica. Altre eccezioni: invariato.
+                        from analysis.models import safe_exception_text
+                        _detail = safe_exception_text(exc)
+                        if not _detail.startswith(f"{type(exc).__name__}:"):
+                            _detail = f"{type(exc).__name__}: {_detail}"
+                        st.error(f"Errore durante l'esecuzione della Topic Detection: {_detail}")
 
         # Visualizzazione del risultato per la verifica
         last_det = state.get_last_manual_detection()
