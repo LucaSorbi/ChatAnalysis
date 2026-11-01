@@ -577,12 +577,17 @@ class MediaAssetAccessService:
                                     new_transcription = res
                                     failed_media_count += 1
                     except Exception as exc:
+                        # Motivo strutturato (solo etichetta): errore GLOBALE del motore (non installato / modello non
+                        # caricabile) vs errore sul singolo file. Non cambia il testo di error_message.
+                        from multimodal.transcriber import AudioBackendError
+                        _reason = "STT_UNAVAILABLE" if isinstance(exc, AudioBackendError) else "TRANSCRIPTION_FAILED"
                         new_transcription = AudioTranscriptionResult(
                             message_id=msg.message_id,
                             source_name=msg.source_name,
                             source_record_id=msg.source_record_id,
                             status=TranscriptionStatus.FAILED,
                             error_message=f"Errore durante la trascrizione audio: {exc}",
+                            metadata={"stt_reason": _reason},
                         )
                         failed_media_count += 1
                 else:
@@ -592,6 +597,7 @@ class MediaAssetAccessService:
                         source_record_id=msg.source_record_id,
                         status=TranscriptionStatus.FAILED,
                         error_message="STT backend locale non configurato o non disponibile.",
+                        metadata={"stt_reason": "STT_UNAVAILABLE"},
                     )
                     failed_media_count += 1
 
@@ -626,12 +632,17 @@ class MediaAssetAccessService:
                                     new_ocr = res_ocr
                                     failed_media_count += 1
                     except Exception as exc:
+                        # Motivo strutturato (solo etichetta): motore non disponibile (pytesseract/binario) vs errore
+                        # sul singolo file. Non cambia il testo di error_message.
+                        from multimodal.ocr import OcrBackendUnavailableError
+                        _ocr_reason = "OCR_UNAVAILABLE" if isinstance(exc, OcrBackendUnavailableError) else "OCR_FAILED"
                         new_ocr = ImageOcrResult(
                             message_id=msg.message_id,
                             source_name=msg.source_name,
                             source_record_id=msg.source_record_id,
                             status=OcrStatus.FAILED,
                             error_message=f"Errore durante l'estrazione OCR: {exc}",
+                            metadata={"ocr_reason": _ocr_reason},
                         )
                         failed_media_count += 1
                 else:
@@ -641,11 +652,12 @@ class MediaAssetAccessService:
                         source_record_id=msg.source_record_id,
                         status=OcrStatus.FAILED,
                         error_message="OCR backend locale non configurato o non disponibile.",
+                        metadata={"ocr_reason": "OCR_UNAVAILABLE"},
                     )
                     failed_media_count += 1
 
                 # 3. Vision locale: solo se backend reale fornito
-                if bundle.image_vision and bundle.image_vision.status == VisionStatus.COMPLETED:
+                if bundle.image_vision and bundle.image_vision.status == VisionStatus.SUCCESS:
                     new_vision = bundle.image_vision
                 elif vision_backend is not None:
                     try:

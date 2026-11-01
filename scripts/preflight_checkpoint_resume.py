@@ -70,6 +70,7 @@ from ai.models import (
     ConversationEvidenceDocument,
     TopicDiscoveryResult,
 )
+from ai.structured import DEGENERATION_POLICY_STRUCTURAL
 from ai.token_budget import DEFAULT_SAFETY_MARGIN_TOKENS
 from analysis.checkpoint import (
     AnalysisCheckpoint,
@@ -3541,6 +3542,9 @@ class PreflightResumeAuditor:
 
                 extra_params = {
                     "max_topics": self.max_topics,
+                    # Stessa identità del servizio: la policy di accettazione è parte della configurazione della run.
+                    # Un checkpoint creato con la policy storica risulta quindi NON compatibile (CONFIG_MISMATCH).
+                    "acceptance_policy": DEGENERATION_POLICY_STRUCTURAL,
                     "resolved_model_key": self.resolved_model_key,
                     "quantization": self.quantization,
                 }

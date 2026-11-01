@@ -53,6 +53,7 @@ from ai.chunking import (
     split_document_into_chunks,
 )
 from ai.structured import (
+    DEGENERATION_POLICY_STRUCTURAL,
     TOPIC_DETECTION_SCHEMA,
     TOPIC_DISCOVERY_SCHEMA,
 )
@@ -249,6 +250,24 @@ def note_detection_node_failure(stats: dict[str, int], category: str, metrics: M
         key = _TRIGGER_STAT_KEY.get(str(metrics.get("trigger_kind") or ""))
         if key:
             _bump(stats, key)
+
+
+def discovery_citation_metrics(exc: BaseException | None, bundle_count: int) -> dict[str, Any] | None:
+    """
+    Metriche NUMERICHE di una citazione rifiutata in Topic Discovery: solo interi ed etichette di forma (enum chiuso).
+    None se l'errore non è una citazione invalida o il riepilogo non è disponibile (non si falsifica 0).
+    """
+    summary = getattr(exc, "citation_summary", None)
+    if not isinstance(exc, AiInvalidEvidenceCitationError) or not isinstance(summary, Mapping):
+        return None
+    return {
+        "bundle_count": int(bundle_count),
+        "citations_total_count": _opt_int(summary.get("citations_total_count")),
+        "citations_invalid_count": _opt_int(summary.get("citations_invalid_count")),
+        "invalid_citation_shapes": dict(summary.get("invalid_citation_shapes") or {}),
+        "aliases_presented_count": _opt_int(getattr(exc, "aliases_presented_count", None)),
+        "aliases_accepted_count": _opt_int(getattr(exc, "aliases_accepted_count", None)),
+    }
 
 
 class _DetectionSplitPartial(Exception):
@@ -1850,10 +1869,13 @@ class LocalTopicAnalysisService:
                 failure_phase=phase,
                 error_detail=safe_desc,
                 json_valid=(cat not in (ChunkDiagnosticCategory.JSON_DECODE_ERROR.value, ChunkDiagnosticCategory.OUTPUT_TRUNCATED.value)),
-                schema_valid=False,
+                # JSON e schema sono strutturalmente validi quando a fallire è SOLO la verifica delle citazioni
+                # (coerente con il ramo dei blocchi principali); prima era sempre False (imprecisione diagnostica).
+                schema_valid=isinstance(s_exc, AiInvalidEvidenceCitationError),
                 evidence_valid=False,
                 checkpoint_saved=False,
                 topics_count=0,
+                diagnostic_metrics=discovery_citation_metrics(s_exc, len(sub.bundles)),
             )
             outcome = DiscoveryChunkOutcome(
                 chunk_id=sub.document_id,
@@ -3209,6 +3231,9 @@ class LocalTopicAnalysisService:
                 chunks=chunks,
                 extra_params={
                     "max_topics": eff_max_topics,
+                    # Policy di accettazione (comportamentale): fa parte dell'identità della run, quindi i checkpoint
+                    # creati con la policy storica (v1) NON vengono riusati con la v2.
+                    "acceptance_policy": DEGENERATION_POLICY_STRUCTURAL,
                     "resolved_model_key": (
                         getattr(target_client, "_active_binding", None).resolved_model_key
                         if getattr(target_client, "_active_binding", None)
@@ -3674,6 +3699,7 @@ class LocalTopicAnalysisService:
                 meta["analyzed_evidence_count"] = int(len(analyzed_evidence_ids))
                 meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
                 meta["evidence_citation_protocol"] = "deterministic_alias_v1"
+                meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
                 if is_verified_live_single:
                     meta["provenance_verified"] = True
                     meta["authoritative_execution_certified"] = True
@@ -4011,6 +4037,7 @@ class LocalTopicAnalysisService:
                             schema_valid=is_inv_ev,
                             evidence_valid=False,
                             checkpoint_saved=False,
+                            diagnostic_metrics=discovery_citation_metrics(fatal_err, len(chunk.bundles)),
                         )
                         all_chunk_diagnostics.append(diag)
                         chunk_outcomes.append(
@@ -4051,12 +4078,15 @@ class LocalTopicAnalysisService:
                     is_val_err = isinstance(exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
                     tracker.chunk_failed(current_tracker_idx, str(exc), is_protocol_or_validation=is_val_err)
                     if isinstance(exc, AiInvalidEvidenceCitationError):
+                        # Solo conteggi e forme: i valori citati dal modello non vanno nei log (potrebbero contenere testo).
+                        _inv_metrics = discovery_citation_metrics(exc, len(chunk.bundles)) or {}
                         logger.warning(
-                            "Chunk %d (indice %d) validazione fallita: INVALID_EVIDENCE_ID dopo %d tentativi. Citazioni non valide: %s",
+                            "Chunk %d (indice %d) validazione fallita: INVALID_EVIDENCE_ID dopo %d tentativi. Citazioni non valide: %s (forme: %s)",
                             current_tracker_idx,
                             idx,
                             chunk_attempts,
-                            getattr(exc, "invalid_evidence_ids", ()),
+                            _inv_metrics.get("citations_invalid_count", len(getattr(exc, "invalid_evidence_ids", ()))),
+                            _inv_metrics.get("invalid_citation_shapes"),
                         )
                     http_st = getattr(exc, "status_code", None)
                     if isinstance(exc, (AiInvalidEvidenceCitationError, AiStructuredOutputError)):
@@ -4090,6 +4120,7 @@ class LocalTopicAnalysisService:
                         )),
                         evidence_valid=False,
                         checkpoint_saved=False,
+                        diagnostic_metrics=discovery_citation_metrics(exc, len(chunk.bundles)),
                     )
                     all_chunk_diagnostics.append(diag)
                     chunk_outcomes.append(
@@ -4243,6 +4274,7 @@ class LocalTopicAnalysisService:
         meta["analyzed_evidence_count"] = int(len(analyzed_evidence_ids))
         meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
         meta["evidence_citation_protocol"] = "deterministic_alias_v1"
+        meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
         meta["status"] = disc_status
         if doc_fp:
             meta["document_fingerprint"] = doc_fp

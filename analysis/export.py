@@ -237,6 +237,8 @@ ALLOWED_ERROR_TYPES = {
 
 # Osservabilità additiva della Detection: enum chiusi (nessun testo libero).
 ALLOWED_DEGENERATION_TRIGGERS = {"CHAR_RUN", "TAB_RUN", "PATTERN_LOOP"}
+ALLOWED_CITATION_SHAPES = {"ALIAS_FORMAT_NOT_IN_BLOCK", "NUMERIC_ONLY", "FORENSIC_ID_NOT_IN_BLOCK", "OTHER"}
+ALLOWED_ACCEPTANCE_POLICIES = {"degeneration_v1_raw", "degeneration_v2_structural"}
 ALLOWED_RESULT_ORIGINS = {"CHECKPOINT_VALIDATED", "COMPUTED_THIS_RUN", "MIXED_CHECKPOINT_AND_COMPUTED"}
 ALLOWED_HTTP_BASES = {"REQUEST_LISTENER", "NOT_AVAILABLE"}
 ALLOWED_CHECKPOINT_PERSISTENCE = {"OK", "WRITE_FAILURES", "NOT_ATTEMPTED"}
@@ -712,6 +714,14 @@ def sanitize_diagnostic_metrics(raw: Any, redact: bool = True) -> dict[str, Any]
         out[key] = safe_int(raw.get(key))
     out["trigger_kind"] = _trigger(raw.get("trigger_kind"))
     out["finish_reason"] = sanitize_finish_reason(raw.get("finish_reason"), redact=redact)
+    # Additivi (solo se presenti): citazioni rifiutate in Topic Discovery. Interi e forme in enum chiuso, mai il valore citato.
+    if "citations_invalid_count" in raw:
+        for key in ("citations_total_count", "citations_invalid_count", "aliases_presented_count", "aliases_accepted_count"):
+            out[key] = safe_int(raw.get(key))
+        shapes = raw.get("invalid_citation_shapes")
+        out["invalid_citation_shapes"] = _safe_count_map(
+            shapes, lambda k: str(k) if isinstance(k, str) and k in ALLOWED_CITATION_SHAPES else "OTHER", redact
+        )
     return out
 
 
@@ -767,6 +777,23 @@ def sanitize_detection_diagnostics(raw: Any) -> dict[str, Any] | None:
     }
     out["duration_seconds"] = safe_float(raw.get("duration_seconds"))
     return out
+
+
+def _audio_evidence_block(document: Any) -> dict[str, Any]:
+    """
+    Stato dei messaggi vocali del documento (additivo, SOLO conteggi interi): distingue AUDIO_NOT_FOUND,
+    STT_NOT_RUN, STT_UNAVAILABLE, TRANSCRIPTION_FAILED, TRANSCRIBED_EMPTY, TRANSCRIBED. Nessun nome file, testo o
+    trascrizione. Assente se il documento non contiene vocali (gli export senza vocali restano invariati).
+    """
+    try:
+        from multimodal.audio_status import summarize_audio_evidence
+
+        summary = summarize_audio_evidence(document)
+    except Exception:
+        return {}
+    if not summary.get("voice_messages_total"):
+        return {}
+    return {"audio_evidence": {k: int(v) for k, v in summary.items()}}
 
 
 def sanitize_document_fingerprint(fp: Any) -> str | None:
@@ -1538,6 +1565,7 @@ def build_topic_detection_export_report(
             "analyzed_evidence_count": analyzed_ev,
             "unanalyzed_evidence_count": unanalyzed_ev,
             "source_name": sanitize_source_name(document.source_name, redact=redact_sensitive_topics),
+            **_audio_evidence_block(document),
         },
         "model": {
             "requested_model_id": req_model,
@@ -1959,7 +1987,14 @@ def build_topic_discovery_export_report(
             "analyzed_evidence_count": analyzed_ev,
             "unanalyzed_evidence_count": unanalyzed_ev,
             "source_name": sanitize_source_name(document.source_name, redact=redact_sensitive_topics),
+            **_audio_evidence_block(document),
         },
+        # Additivo: versione della policy di accettazione usata (assente nelle run storiche → nessun campo inventato).
+        **(
+            {"analysis_policy": {"acceptance_policy": meta.get("acceptance_policy")}}
+            if meta.get("acceptance_policy") in ALLOWED_ACCEPTANCE_POLICIES
+            else {}
+        ),
         "model": {
             "requested_model_id": req_model,
             "effective_model_id": eff_model,
