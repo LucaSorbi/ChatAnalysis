@@ -49,6 +49,8 @@ from ai.serializer import (
     serialize_document_for_llm,
 )
 from ai.structured import (
+    DEGENERATION_POLICY_HISTORICAL,
+    DEGENERATION_POLICY_STRUCTURAL,
     TOPIC_DETECTION_SCHEMA,
     TOPIC_DISCOVERY_SCHEMA,
     validate_topic_detection_payload,
@@ -689,6 +691,9 @@ class TopicDiscoveryAnalyzer:
         )
 
         use_aliases = is_op if use_evidence_aliases is None else use_evidence_aliases
+        # Policy di accettazione della degenerazione: v2 (strutturale) SOLO in modalità operativa; la modalità
+        # scientifica e Topic Detection restano sulla regola storica (identità delle run storiche invariata).
+        acceptance_policy = DEGENERATION_POLICY_STRUCTURAL if is_op else DEGENERATION_POLICY_HISTORICAL
         id_to_alias: dict[str, str] = {}
         alias_to_id: dict[str, str] = {}
         if use_aliases:
@@ -707,6 +712,7 @@ class TopicDiscoveryAnalyzer:
                 topics=(),
                 provenance_document_id=document.document_id,
                 metadata={
+                    "acceptance_policy": acceptance_policy,
                     "empty_document": True,
                     "prompt_version": PROMPT_VERSION_DISCOVERY,
                     "strategy": strategy.value,
@@ -873,6 +879,7 @@ Instructions:
                     valid_evidence_ids=valid_evidence_ids,
                     max_topics=current_topics,
                     alias_map=alias_to_id if use_aliases else None,
+                    degeneration_policy=acceptance_policy,
                 )
 
                 substantive_sec_count = sum(
@@ -912,6 +919,11 @@ Instructions:
                     setattr(exc, "prompt_tokens", response.prompt_tokens)
                 if getattr(response, "completion_tokens", None) is not None and not getattr(exc, "completion_tokens", None):
                     setattr(exc, "completion_tokens", response.completion_tokens)
+
+                if isinstance(exc, AiInvalidEvidenceCitationError):
+                    # Solo interi: quanti alias sono mostrati nel prompt e quanti il validatore accetta per questo blocco.
+                    setattr(exc, "aliases_presented_count", len(set(id_to_alias.values())) if use_aliases else len(valid_evidence_ids))
+                    setattr(exc, "aliases_accepted_count", len(alias_to_id) if use_aliases else len(valid_evidence_ids))
 
                 if attempt + 1 >= max_attempts or not is_op:
                     try:
@@ -1197,6 +1209,7 @@ Instructions:
             "serialization_format": SERIALIZATION_VERSION_COMPACT_JSONL if is_op else "json_verbose_v1",
             "evidence_citation_protocol": "deterministic_alias_v1" if use_aliases else "direct_evidence_id",
             "evidence_aliases_used": bool(use_aliases),
+            "acceptance_policy": acceptance_policy,
         }
 
         return TopicDiscoveryResult(

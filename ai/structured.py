@@ -201,12 +201,150 @@ def detect_degenerate_repetition(text: str, threshold: int = 15) -> str | None:
     return scan.message if scan is not None else None
 
 
-def parse_and_validate_json(raw_text: str) -> dict[str, Any]:
+# ---------------------------------------------------------------------------------------------------------
+# Policy di accettazione per la degenerazione (VERSIONATA: cambia l'esito scientifico, quindi l'identità della run).
+#   degeneration_v1_raw        storica: regex di ripetizione sul testo GREZZO prima di json.loads (default invariato).
+#   degeneration_v2_structural nuova: se la risposta è JSON STRETTO (json.loads senza riparazioni) ed è un oggetto,
+#                              la ripetizione è giudicata sulla struttura (chiavi/ID/enum) con la regola storica e
+#                              sui soli campi di testo libero con una soglia di estensione (vedi sotto).
+#                              Se il JSON NON è strettamente valido si applica la regola storica sul testo grezzo.
+# ---------------------------------------------------------------------------------------------------------
+DEGENERATION_POLICY_HISTORICAL = "degeneration_v1_raw"
+DEGENERATION_POLICY_STRUCTURAL = "degeneration_v2_structural"
+ALLOWED_DEGENERATION_POLICIES = (DEGENERATION_POLICY_HISTORICAL, DEGENERATION_POLICY_STRUCTURAL)
+
+# Campi di testo libero (descrittivi, non portano identificativi né struttura).
+FREE_TEXT_KEYS = frozenset({"label", "short_description", "rationale"})
+# In un campo di testo libero una ripetizione è innocua se copre meno di questi caratteri consecutivi.
+# Un vero attrattore consuma il budget di token (centinaia di caratteri) e di norma lascia la stringa non chiusa
+# (JSON non valido → regola storica); 64 è ben sotto qualunque ciclo reale e sopra le risate/punteggiatura umane.
+FREE_TEXT_MAX_BENIGN_REPETITION_SPAN = 64
+
+
+def _blank_free_text(node: Any) -> Any:
+    """Copia della struttura con i valori stringa dei campi di testo libero sostituiti da '' (chiavi e ID restano)."""
+    if isinstance(node, dict):
+        return {k: ("" if (k in FREE_TEXT_KEYS and isinstance(v, str)) else _blank_free_text(v)) for k, v in node.items()}
+    if isinstance(node, list):
+        return [_blank_free_text(v) for v in node]
+    return node
+
+
+def _collect_free_text(node: Any, out: list[str]) -> None:
+    if isinstance(node, dict):
+        for k, v in node.items():
+            if k in FREE_TEXT_KEYS and isinstance(v, str):
+                out.append(v)
+            else:
+                _collect_free_text(v, out)
+    elif isinstance(node, list):
+        for v in node:
+            _collect_free_text(v, out)
+
+
+def _max_repetition_span(text: str) -> tuple[str, int, int | None, int | None] | None:
+    """
+    Estensione MASSIMA (in caratteri) tra TUTTE le ripetizioni dello stesso tipo di quelle storiche.
+    Restituisce (tipo_innesco, estensione, lunghezza_pattern, ripetizioni) oppure None. Nessun testo conservato.
+    """
+    # Le tabulazioni ripetute non sono mai testo umano: hanno la precedenza assoluta (come nella regola storica).
+    tab = re.search(r"(\t)\1{11,}", text)
+    if tab:
+        return (DEGENERATION_TRIGGER_TAB_RUN, len(tab.group(0)), 1, len(tab.group(0)))
+    best: tuple[str, int, int | None, int | None] | None = None
+    for m in re.finditer(r"([^\s])\1{14,}", text):
+        span = len(m.group(0))
+        if best is None or span > best[1]:
+            best = (DEGENERATION_TRIGGER_CHAR_RUN, span, 1, span)
+    for m in re.finditer(r"(.{2,25})\1{5,}", text):
+        pat = m.group(1)
+        if pat.strip():
+            span = len(m.group(0))
+            if best is None or span > best[1]:
+                best = (DEGENERATION_TRIGGER_PATTERN_LOOP, span, len(pat), span // len(pat))
+    return best
+
+
+def _raise_degenerate(
+    message: str,
+    trigger_kind: str,
+    pattern_length: int | None,
+    repetition_count: int | None,
+    run_length: int | None,
+    response_length: int,
+) -> None:
+    exc = AiStructuredOutputError(f"Risposta del modello scartata per degenerazione ciclica: {message}")
+    # Metadati numerici per la diagnostica (nessun testo). Il messaggio resta quello storico usato dai retry.
+    exc.degeneration = {  # type: ignore[attr-defined]
+        "trigger_kind": trigger_kind,
+        "pattern_length": pattern_length,
+        "repetition_count": repetition_count,
+        "run_length": run_length,
+        "response_length": response_length,
+    }
+    raise exc
+
+
+def _strict_json_object(raw_text: str) -> dict[str, Any] | None:
+    """Oggetto JSON ottenuto con json.loads STRETTO (solo rimozione del recinto markdown); None se non valido/non oggetto."""
+    clean_text = raw_text.strip()
+    if clean_text.startswith("```"):
+        lines = clean_text.splitlines()
+        if lines and lines[0].startswith("```"):
+            lines = lines[1:]
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        clean_text = "\n".join(lines).strip()
+    try:
+        data = json.loads(clean_text)
+    except (json.JSONDecodeError, RecursionError):
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _enforce_structural_degeneration_policy(data: dict[str, Any], response_length: int) -> None:
+    """
+    1) STRUTTURA (chiavi, evidence_ids, enum, campi sconosciuti): regola storica invariata sulla proiezione compatta.
+    2) TESTO LIBERO (label/short_description/rationale, già decodificato): rifiuto se una ripetizione copre
+       >= FREE_TEXT_MAX_BENIGN_REPETITION_SPAN caratteri consecutivi, o se contiene tabulazioni ripetute.
+    Solleva la stessa eccezione storica (stesso prefisso di messaggio, stessa categoria) quando rifiuta.
+    """
+    projection = json.dumps(_blank_free_text(data), ensure_ascii=False)
+    scan = scan_degenerate_repetition(projection)
+    if scan is not None:
+        _raise_degenerate(scan.message, scan.trigger_kind, scan.pattern_length, scan.repetition_count, scan.run_length, response_length)
+    texts: list[str] = []
+    _collect_free_text(data, texts)
+    for value in texts:
+        found = _max_repetition_span(value)
+        if found is None:
+            continue
+        kind, span, plen, reps = found
+        if kind == DEGENERATION_TRIGGER_TAB_RUN or span >= FREE_TEXT_MAX_BENIGN_REPETITION_SPAN:
+            msg = (
+                f"Ripetizione ciclica di caratteri tabulari ({span} volte consecutive)"
+                if kind == DEGENERATION_TRIGGER_TAB_RUN
+                else f"Ripetizione ciclica anomala in campo di testo libero ({span} caratteri consecutivi)"
+            )
+            _raise_degenerate(msg, kind, plen, reps, span, response_length)
+
+
+def parse_and_validate_json(
+    raw_text: str,
+    degeneration_policy: str = DEGENERATION_POLICY_HISTORICAL,
+) -> dict[str, Any]:
     """
     Esegue il parsing JSON del testo grezzo. Cattura esclusivamente json.JSONDecodeError.
     Errori di tipo o bug programmatici propagano senza mascheramento.
-    Rileva e rigetta preventivamente output ciclici degenerati.
+    Rileva e rigetta output ciclici degenerati secondo `degeneration_policy` (default: regola storica, invariata).
     """
+    if degeneration_policy not in ALLOWED_DEGENERATION_POLICIES:
+        raise ValueError(f"degeneration_policy non riconosciuta: {degeneration_policy!r}")
+    if degeneration_policy == DEGENERATION_POLICY_STRUCTURAL:
+        strict = _strict_json_object(raw_text)
+        if strict is not None:
+            _enforce_structural_degeneration_policy(strict, len(raw_text))
+            return strict
     scan = scan_degenerate_repetition(raw_text)
     if scan is not None:
         degenerate_exc = AiStructuredOutputError(
@@ -251,17 +389,56 @@ def parse_and_validate_json(raw_text: str) -> dict[str, Any]:
     return data
 
 
+# Forme (enum chiuso) di una citazione rifiutata: SOLO etichette, mai il valore citato.
+CITATION_SHAPE_ALIAS_NOT_IN_BLOCK = "ALIAS_FORMAT_NOT_IN_BLOCK"   # es. forma 'E###' ma non tra gli alias ammessi del blocco
+CITATION_SHAPE_NUMERIC_ONLY = "NUMERIC_ONLY"                      # solo cifre
+CITATION_SHAPE_FORENSIC_ID_NOT_IN_BLOCK = "FORENSIC_ID_NOT_IN_BLOCK"  # identificativo forense ('::' o 'unified:') non del blocco
+CITATION_SHAPE_OTHER = "OTHER"
+ALLOWED_CITATION_SHAPES = (
+    CITATION_SHAPE_ALIAS_NOT_IN_BLOCK,
+    CITATION_SHAPE_NUMERIC_ONLY,
+    CITATION_SHAPE_FORENSIC_ID_NOT_IN_BLOCK,
+    CITATION_SHAPE_OTHER,
+)
+
+
+def classify_citation_shape(value: Any) -> str:
+    """Forma di una citazione rifiutata (enum chiuso). Non conserva né restituisce il testo citato."""
+    v = str(value).strip()
+    if re.fullmatch(r"[A-Za-z]\d{3,4}", v):
+        return CITATION_SHAPE_ALIAS_NOT_IN_BLOCK
+    if re.fullmatch(r"\d+", v):
+        return CITATION_SHAPE_NUMERIC_ONLY
+    if "::" in v or v.startswith("unified:"):
+        return CITATION_SHAPE_FORENSIC_ID_NOT_IN_BLOCK
+    return CITATION_SHAPE_OTHER
+
+
+def citation_failure_summary(cited_count: int, invalid: Sequence[Any]) -> dict[str, Any]:
+    """Conteggi (solo interi/etichette) di una risposta con citazioni rifiutate."""
+    shapes: dict[str, int] = {}
+    for item in invalid:
+        key = classify_citation_shape(item)
+        shapes[key] = shapes.get(key, 0) + 1
+    return {
+        "citations_total_count": int(cited_count),
+        "citations_invalid_count": int(len(invalid)),
+        "invalid_citation_shapes": shapes,
+    }
+
+
 def validate_topic_detection_payload(
     raw_text: str,
     valid_evidence_ids: set[str],
     alias_map: Mapping[str, str] | None = None,
+    degeneration_policy: str = DEGENERATION_POLICY_HISTORICAL,
 ) -> tuple[TopicDecision, tuple[str, ...], str]:
     """
     Valida la risposta per Topic Detection.
     Verifica chiavi esatte, tipi rigidi, enum e che le citazioni appartengano a valid_evidence_ids
     (o alias_map se in modalità operativa con alias).
     """
-    data = parse_and_validate_json(raw_text)
+    data = parse_and_validate_json(raw_text, degeneration_policy)
 
     # D2: Verifica chiavi esatte (nessuna chiave extra ammessa)
     expected_keys = {"decision", "evidence_ids", "rationale"}
@@ -360,6 +537,7 @@ def validate_topic_discovery_payload(
     valid_evidence_ids: set[str],
     max_topics: int = 10,
     alias_map: Mapping[str, str] | None = None,
+    degeneration_policy: str = DEGENERATION_POLICY_HISTORICAL,
 ) -> tuple[DiscoveredTopic, ...]:
     """
     Valida la risposta per Open Topic Discovery.
@@ -369,7 +547,7 @@ def validate_topic_discovery_payload(
     deterministicamente negli identificativi forensi reali.
     Citazioni inesistenti, allucinate o appartenenti ad altri blocchi vengono rigorosamente rifiutate.
     """
-    data = parse_and_validate_json(raw_text)
+    data = parse_and_validate_json(raw_text, degeneration_policy)
 
     expected_keys = {"topics"}
     actual_keys = set(data.keys())
@@ -489,18 +667,22 @@ def validate_topic_discovery_payload(
                     hallucinated.append(eid_val)
 
             if hallucinated:
-                raise AiInvalidEvidenceCitationError(
+                _inv_exc = AiInvalidEvidenceCitationError(
                     f"topic[{idx}] ('{item['label']}') cita evidence_id o alias inesistenti o non appartenenti al blocco: {sorted(hallucinated)}",
                     invalid_evidence_ids=tuple(sorted(hallucinated)),
                 )
+                _inv_exc.citation_summary = citation_failure_summary(len(eids_raw), hallucinated)  # type: ignore[attr-defined]
+                raise _inv_exc
             final_eids = tuple(dict.fromkeys(remapped_eids_list))
         else:
             hallucinated = set(eids_raw) - valid_evidence_ids
             if hallucinated:
-                raise AiInvalidEvidenceCitationError(
+                _inv_exc = AiInvalidEvidenceCitationError(
                     f"topic[{idx}] ('{item['label']}') cita evidence_id inesistenti: {sorted(hallucinated)}",
                     invalid_evidence_ids=tuple(sorted(hallucinated)),
                 )
+                _inv_exc.citation_summary = citation_failure_summary(len(eids_raw), list(hallucinated))  # type: ignore[attr-defined]
+                raise _inv_exc
             final_eids = tuple(eids_raw)
 
         clean_lbl = item["label"].strip()

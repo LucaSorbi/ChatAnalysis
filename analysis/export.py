@@ -237,6 +237,8 @@ ALLOWED_ERROR_TYPES = {
 
 # Osservabilità additiva della Detection: enum chiusi (nessun testo libero).
 ALLOWED_DEGENERATION_TRIGGERS = {"CHAR_RUN", "TAB_RUN", "PATTERN_LOOP"}
+ALLOWED_CITATION_SHAPES = {"ALIAS_FORMAT_NOT_IN_BLOCK", "NUMERIC_ONLY", "FORENSIC_ID_NOT_IN_BLOCK", "OTHER"}
+ALLOWED_ACCEPTANCE_POLICIES = {"degeneration_v1_raw", "degeneration_v2_structural"}
 ALLOWED_RESULT_ORIGINS = {"CHECKPOINT_VALIDATED", "COMPUTED_THIS_RUN", "MIXED_CHECKPOINT_AND_COMPUTED"}
 ALLOWED_HTTP_BASES = {"REQUEST_LISTENER", "NOT_AVAILABLE"}
 ALLOWED_CHECKPOINT_PERSISTENCE = {"OK", "WRITE_FAILURES", "NOT_ATTEMPTED"}
@@ -712,6 +714,14 @@ def sanitize_diagnostic_metrics(raw: Any, redact: bool = True) -> dict[str, Any]
         out[key] = safe_int(raw.get(key))
     out["trigger_kind"] = _trigger(raw.get("trigger_kind"))
     out["finish_reason"] = sanitize_finish_reason(raw.get("finish_reason"), redact=redact)
+    # Additivi (solo se presenti): citazioni rifiutate in Topic Discovery. Interi e forme in enum chiuso, mai il valore citato.
+    if "citations_invalid_count" in raw:
+        for key in ("citations_total_count", "citations_invalid_count", "aliases_presented_count", "aliases_accepted_count"):
+            out[key] = safe_int(raw.get(key))
+        shapes = raw.get("invalid_citation_shapes")
+        out["invalid_citation_shapes"] = _safe_count_map(
+            shapes, lambda k: str(k) if isinstance(k, str) and k in ALLOWED_CITATION_SHAPES else "OTHER", redact
+        )
     return out
 
 
@@ -1979,6 +1989,12 @@ def build_topic_discovery_export_report(
             "source_name": sanitize_source_name(document.source_name, redact=redact_sensitive_topics),
             **_audio_evidence_block(document),
         },
+        # Additivo: versione della policy di accettazione usata (assente nelle run storiche → nessun campo inventato).
+        **(
+            {"analysis_policy": {"acceptance_policy": meta.get("acceptance_policy")}}
+            if meta.get("acceptance_policy") in ALLOWED_ACCEPTANCE_POLICIES
+            else {}
+        ),
         "model": {
             "requested_model_id": req_model,
             "effective_model_id": eff_model,
