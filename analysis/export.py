@@ -769,6 +769,23 @@ def sanitize_detection_diagnostics(raw: Any) -> dict[str, Any] | None:
     return out
 
 
+def _audio_evidence_block(document: Any) -> dict[str, Any]:
+    """
+    Stato dei messaggi vocali del documento (additivo, SOLO conteggi interi): distingue AUDIO_NOT_FOUND,
+    STT_NOT_RUN, STT_UNAVAILABLE, TRANSCRIPTION_FAILED, TRANSCRIBED_EMPTY, TRANSCRIBED. Nessun nome file, testo o
+    trascrizione. Assente se il documento non contiene vocali (gli export senza vocali restano invariati).
+    """
+    try:
+        from multimodal.audio_status import summarize_audio_evidence
+
+        summary = summarize_audio_evidence(document)
+    except Exception:
+        return {}
+    if not summary.get("voice_messages_total"):
+        return {}
+    return {"audio_evidence": {k: int(v) for k, v in summary.items()}}
+
+
 def sanitize_document_fingerprint(fp: Any) -> str | None:
     """
     Restituisce l'impronta crittografica autentica registrata del documento (64 caratteri esadecimali SHA-256).
@@ -1538,6 +1555,7 @@ def build_topic_detection_export_report(
             "analyzed_evidence_count": analyzed_ev,
             "unanalyzed_evidence_count": unanalyzed_ev,
             "source_name": sanitize_source_name(document.source_name, redact=redact_sensitive_topics),
+            **_audio_evidence_block(document),
         },
         "model": {
             "requested_model_id": req_model,
@@ -1959,6 +1977,7 @@ def build_topic_discovery_export_report(
             "analyzed_evidence_count": analyzed_ev,
             "unanalyzed_evidence_count": unanalyzed_ev,
             "source_name": sanitize_source_name(document.source_name, redact=redact_sensitive_topics),
+            **_audio_evidence_block(document),
         },
         "model": {
             "requested_model_id": req_model,

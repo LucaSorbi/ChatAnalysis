@@ -383,6 +383,7 @@ def render_overview() -> None:
             st.write("Nessuna informazione linguistica esplicita.")
 
     # Sezione Elaborazione Media Locale (On-Demand)
+    _render_audio_evidence_status(doc)
     has_media_references = any(bool(b.message.media_reference) for b in doc.bundles)
     if has_media_references:
         st.divider()
@@ -449,6 +450,26 @@ def render_overview() -> None:
     if st.button("🔄 Reimposta Sessione / Scarica Dataset"):
         state.reset_dataset()
         st.rerun()
+
+
+def _render_audio_evidence_status(doc: Any) -> None:
+    """
+    Stato veritiero dei messaggi vocali (solo conteggi, nessun nome file né testo). Non avvia alcuna STT:
+    l'elaborazione resta opt-in tramite il pulsante dedicato.
+    """
+    try:
+        from multimodal.audio_status import format_audio_status_message, summarize_audio_evidence
+
+        summary = summarize_audio_evidence(doc)
+        message = format_audio_status_message(summary)
+    except Exception:
+        return
+    if message is None:
+        return
+    if summary.get("voice_messages_total", 0) == summary.get("TRANSCRIBED", 0):
+        st.success(f"🎙️ {message}")
+    else:
+        st.warning(f"🎙️ {message}")
 
 
 def render_import() -> None:
@@ -631,6 +652,7 @@ def render_explore() -> None:
             st.info("Nessuna conversazione selezionabile per il dataset corrente (es. archivio solo ausiliario o contatti).")
         return
 
+    _render_audio_evidence_status(doc)
     has_media_references = any(bool(b.message.media_reference) for b in doc.bundles)
     if has_media_references:
         m_status = doc.metadata.get("multimodal_status", "NOT_PROCESSED")
