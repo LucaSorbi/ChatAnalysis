@@ -498,6 +498,8 @@ def test_checkpoint_with_missing_origin_never_becomes_live_without_proof(tmp_pat
         chunks=chunks,
         extra_params={
             "max_topics": 10,
+            # Identità della run Discovery: policy di accettazione corrente (assert del test invariati).
+            "acceptance_policy": "degeneration_v2_structural",
             "resolved_model_key": "qwen2.5-7b-instruct",
             "quantization": None,
         },

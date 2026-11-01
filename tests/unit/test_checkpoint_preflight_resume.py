@@ -279,6 +279,9 @@ def _populate_test_checkpoint_db(
         chunks=chunks,
         extra_params={
             "max_topics": max_topics,
+            # La policy di accettazione fa parte dell'identità di una run Discovery: il fixture simula un
+            # checkpoint creato dal codice CORRENTE (gli assert del test sono invariati).
+            "acceptance_policy": "degeneration_v2_structural",
             "resolved_model_key": model_id,
             "quantization": quantization,
         },
