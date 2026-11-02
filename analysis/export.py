@@ -52,6 +52,12 @@ from ai.models import (
     TopicDiscoveryResult,
     TopicQuery,
 )
+from analysis.consistency import ConsistencyService
+from analysis.verification import (
+    VERIFICATION_EXPORT_CONTRACT_VERSION,
+    SnapshotStatus,
+    compute_discovered_topic_uid,
+)
 from analysis.models import (
     AnalysisOrigin,
     AttestationLevel,
@@ -1047,7 +1053,7 @@ def generate_export_filename(
         s = re.sub(r"[^a-zA-Z0-9_\.-]+", "_", str(val).strip()).strip("_")
         return s[:max_len] if s else "unknown"
 
-    type_prefix = "detection" if "detect" in analysis_type.lower() else "discovery"
+    type_prefix = "verification" if "verif" in analysis_type.lower() else ("detection" if "detect" in analysis_type.lower() else "discovery")
 
     # Dataset: se non è già nel formato anonimo standard chat_<hash> o syn_<num>, genera pseudonimo
     raw_ds = str(dataset_id).strip() if dataset_id else ""
@@ -2223,4 +2229,330 @@ def build_topic_discovery_export_report(
             ),
         },
     }
+    return report
+
+
+# ---------------------------------------------------------------------------
+# Rapporto unificato: verifica di consistenza semantica indipendente (Discovery -> Detection associata)
+# ---------------------------------------------------------------------------
+
+class SemanticVerificationExportError(ValueError):
+    """Il rapporto di verifica non è esportabile: l'associazione o un invariante non è dimostrabile (fail-closed)."""
+
+
+_INTERPRETATION_BY_STATUS = {
+    "CONSISTENT": "DISCOVERY_AND_DETECTION_AGREE_WITH_SHARED_EVIDENCE",
+    "PARTIALLY_CONSISTENT": "DETECTION_PRESENT_ON_DISTINCT_EVIDENCE",
+    "DISCREPANCY_ABSENT": "DISCOVERY_IDENTIFIED_TOPIC_INDEPENDENT_DETECTION_DID_NOT_DETECT_IT",
+    "DISCREPANCY_UNCERTAIN": "DISCOVERY_IDENTIFIED_TOPIC_INDEPENDENT_DETECTION_UNCERTAIN",
+}
+
+
+def _evidence_source_type_counts(document: ConversationEvidenceDocument, evidence_ids: Sequence[str]) -> dict[str, int]:
+    """Conteggio per tipo di sezione (ORIGINAL_TEXT, STT_TRANSCRIPTION, OCR_TEXT, ...): SOLO numeri, nessun testo."""
+    by_id = {sec.evidence_id: sec.source_type.value for sec in document.all_evidence_sections}
+    counts: dict[str, int] = {}
+    for eid in evidence_ids:
+        kind = by_id.get(eid, "NOT_IN_DOCUMENT")
+        counts[kind] = counts.get(kind, 0) + 1
+    return dict(sorted(counts.items()))
+
+
+def validate_semantic_verification_report(report: Mapping[str, Any]) -> list[str]:
+    """
+    Validatore strutturale del rapporto di verifica. Restituisce l'elenco dei problemi (vuoto = valido).
+    Non confronta contenuti: verifica schema, enum chiusi, legami e assenza di segnaposto fabbricati.
+    """
+    problems: list[str] = []
+    for key in ("schema_version", "report_type", "verification_contract_version", "software", "experiment", "document",
+                "discovery_source", "detection", "comparison", "audit", "privacy"):
+        if key not in report:
+            problems.append(f"missing:{key}")
+    if problems:
+        return problems
+    if report["report_type"] != "SEMANTIC_CONSISTENCY_VERIFICATION":
+        problems.append("report_type")
+    if report["verification_contract_version"] != VERIFICATION_EXPORT_CONTRACT_VERSION:
+        problems.append("verification_contract_version")
+    if report["experiment"].get("origin_flow") != "DISCOVERY_VERIFICATION":
+        problems.append("origin_flow")
+    cmp_ = report["comparison"]
+    if cmp_.get("consistency_status") not in {s.value for s in ConsistencyStatus}:
+        problems.append("consistency_status")
+    assoc = cmp_.get("association", {})
+    if assoc.get("status") != "EXACT_UNIQUE_MATCH":
+        problems.append("association.status")
+    for rid in (assoc.get("discovery_run_id"), assoc.get("detection_run_id")):
+        if not rid or rid == "NOT_RECORDED":
+            problems.append("association.run_id")
+    if report["discovery_source"].get("run_id") != assoc.get("discovery_run_id"):
+        problems.append("discovery_source.run_id")
+    if report["detection"].get("run_id") != assoc.get("detection_run_id"):
+        problems.append("detection.run_id")
+    if report["detection"].get("decision") not in {d.value for d in TopicDecision}:
+        problems.append("detection.decision")
+    q = report["detection"].get("query", {})
+    if q.get("query_mode") != "LABEL_AND_DESCRIPTION" or q.get("is_label_only") is not False or q.get("description_present") is not True:
+        problems.append("detection.query")
+    if q.get("discovery_evidence_ids_supplied_to_model") is not False:
+        problems.append("detection.query.independence")
+    if report["document"].get("snapshot", {}).get("status") not in {s.value for s in SnapshotStatus}:
+        problems.append("document.snapshot.status")
+    if report["detection"]["execution"].get("execution_origin") not in {
+        "COMPUTED_THIS_RUN", "RESTORED_FROM_CHECKPOINT", "MIXED", "UNDETERMINED"
+    }:
+        problems.append("detection.execution.execution_origin")
+    for key in ("discovery_evidence_ids", "detection_evidence_ids", "overlap_evidence_ids"):
+        v = cmp_.get(key)
+        if not isinstance(v, list) or not all(isinstance(x, str) for x in v):
+            problems.append(f"comparison.{key}")
+    if cmp_.get("overlap_count") != len(cmp_.get("overlap_evidence_ids", [])):
+        problems.append("comparison.overlap_count")
+    if report["detection"]["decision"] == "ABSENT" and cmp_.get("detection_evidence_ids"):
+        problems.append("absent_with_evidence")
+    return problems
+
+
+def build_semantic_verification_export_report(
+    *,
+    consistency_result: ConsistencyResult,
+    detection_result: TopicDetectionResult,
+    discovery_result: TopicDiscoveryResult,
+    document: ConversationEvidenceDocument,
+    dataset_mode: Any = None,
+    authoritative_live_run_ids: Sequence[str] | set[str] | None = None,
+    redact_sensitive_topics: bool = True,
+) -> dict[str, Any]:
+    """
+    Rapporto AUTONOMO della verifica di consistenza semantica indipendente, derivato SOLO dagli oggetti autorevoli
+    della run (ConsistencyResult + Detection + Discovery + documento). Nessun calcolo di consistenza qui: l'esito del
+    confronto è quello di ConsistencyService (ricalcolato come controllo d'integrità, mai riscritto).
+
+    Fail-closed: se l'associazione non è dimostrabile da identificativi espliciti, solleva SemanticVerificationExportError.
+    Non contiene testo di messaggi, trascrizioni STT, testo OCR, risposte LLM o prompt; in SAFE_REDACTED non contiene
+    nemmeno label/descrizione/rationale (restano presenza e lunghezza zero-informazione: solo booleani).
+    """
+    cons, det, disc = consistency_result, detection_result, discovery_result
+    det_meta = dict(det.metadata or {})
+    disc_meta = dict(disc.metadata or {})
+    cmeta = dict(cons.metadata or {})
+
+    # --- 1. Associazione per identificativi ESPLICITI (mai per label, ordine o posizione) ---
+    det_run_id = str(det_meta.get("run_id") or "").strip()
+    disc_run_id = str(disc_meta.get("run_id") or "").strip()
+    linked = str(det_meta.get("verified_discovery_run_id") or "").strip()
+    if not det_run_id or not disc_run_id:
+        raise SemanticVerificationExportError("RUN_ID_MISSING")
+    doc_ids = {cons.document_id, det.provenance_document_id, disc.provenance_document_id, document.document_id}
+    if len(doc_ids) != 1:
+        raise SemanticVerificationExportError("DOCUMENT_ID_MISMATCH")
+    if cons.detection_run_id != det_run_id or cons.discovery_run_id != disc_run_id or linked != disc_run_id:
+        raise SemanticVerificationExportError("RUN_LINK_MISMATCH")
+    if det_meta.get("origin_flow") != "DISCOVERY_VERIFICATION":
+        raise SemanticVerificationExportError("NOT_A_VERIFICATION_RUN")
+
+    topic_uid = cmeta.get("discovery_topic_uid")
+    disc_topic = next((t for t in disc.topics if compute_discovered_topic_uid(disc_run_id, t) == topic_uid), None)
+    if disc_topic is None:
+        raise SemanticVerificationExportError("TOPIC_NOT_IN_DISCOVERY_RUN")
+    if (det.topic.label.strip(), det.topic.description.strip()) != (disc_topic.label.strip(), disc_topic.short_description.strip()):
+        raise SemanticVerificationExportError("QUERY_NOT_FROM_DISCOVERY_TOPIC")
+    if getattr(det.topic, "is_label_only", False) or det_meta.get("query_mode") != "LABEL_AND_DESCRIPTION":
+        raise SemanticVerificationExportError("QUERY_IS_LABEL_ONLY")
+
+    # Controllo d'integrità: l'esito registrato coincide con quello del comparatore unico.
+    try:
+        recomputed = ConsistencyService.evaluate(document.document_id, disc_topic, det, disc_run_id, det_run_id)
+    except Exception as exc:  # pragma: no cover - difesa
+        raise SemanticVerificationExportError("COMPARATOR_RECHECK_FAILED") from exc
+    if recomputed.status != cons.status or recomputed.overlap_evidence_ids != cons.overlap_evidence_ids:
+        raise SemanticVerificationExportError("CONSISTENCY_RESULT_STALE")
+
+    # --- 2. Riuso dei costruttori esistenti per i blocchi già sanificati (nessuna logica duplicata) ---
+    det_rep = build_topic_detection_export_report(
+        detection_result=det, document=document, dataset_mode=dataset_mode, consistency_result=cons,
+        redact_sensitive_topics=redact_sensitive_topics,
+    )
+    disc_rep = build_topic_discovery_export_report(
+        discovery_result=disc, document=document, dataset_mode=dataset_mode,
+        redact_sensitive_topics=redact_sensitive_topics, authoritative_live_run_ids=authoritative_live_run_ids,
+    )
+    red = redact_sensitive_topics
+    san_eid = lambda e: sanitize_evidence_id(e, redact=red)  # noqa: E731
+
+    snapshot_status = cmeta.get("snapshot_status", SnapshotStatus.UNVERIFIABLE.value)
+    fp_disc = sanitize_document_fingerprint(cmeta.get("discovery_document_fingerprint"))
+    fp_det = sanitize_document_fingerprint(cmeta.get("detection_document_fingerprint"))
+    exec_origin = cmeta.get("detection_execution_origin", "UNDETERMINED")
+    det_diag = (det_rep.get("execution") or {}).get("detection_diagnostics") or {}
+    det_cov = det_rep["coverage"]
+    disc_cov = disc_rep["coverage"]
+    disc_doc = disc_rep["document"]
+    status_str = cons.status.value
+
+    limits = ["SINGLE_MODEL_AGREEMENT_IS_NOT_GROUND_TRUTH"]
+    if status_str == "DISCREPANCY_ABSENT":
+        limits.append("ABSENT_IS_NOT_PROOF_OF_ABSENCE")
+    if str(cmeta.get("discovery_status")) != "COMPLETE":
+        limits.append("DISCOVERY_SOURCE_NOT_COMPLETE")
+    if cmeta.get("is_partial_detection") or det_cov.get("coverage_status") != "COMPLETE":
+        limits.append("DETECTION_NOT_COMPLETE")
+    if snapshot_status != SnapshotStatus.MATCH.value:
+        limits.append("DOCUMENT_SNAPSHOT_EQUIVALENCE_NOT_PROVEN")
+    if exec_origin in ("RESTORED_FROM_CHECKPOINT", "MIXED"):
+        limits.append("DETECTION_NOT_FULLY_COMPUTED_THIS_RUN")
+    if exec_origin == "UNDETERMINED":
+        limits.append("DETECTION_EXECUTION_ORIGIN_UNDETERMINED")
+    if det_rep["experiment"]["attestation_level"] != "LIVE_AUTHORITATIVE":
+        limits.append("DETECTION_NOT_AUTHORITATIVELY_ATTESTED")
+
+    report: dict[str, Any] = {
+        "schema_version": SCHEMA_VERSION,
+        "report_type": "SEMANTIC_CONSISTENCY_VERIFICATION",
+        "verification_contract_version": VERIFICATION_EXPORT_CONTRACT_VERSION,
+        "software": det_rep["software"],
+        "experiment": {
+            "origin_flow": "DISCOVERY_VERIFICATION",
+            "export_id": get_pseudonymous_id(
+                f"exp_ver_{disc_run_id}_{det_run_id}_{datetime.now(timezone.utc).timestamp()}", prefix="exp"
+            ),
+            "generated_at": format_iso_timestamp(datetime.now(timezone.utc)),
+            "mode": det_rep["experiment"]["mode"],
+            "conversation_pseudonym": det_rep["experiment"]["conversation_pseudonym"],
+        },
+        "document": {
+            "document_pseudonym": det_rep["document"]["document_pseudonym"],
+            "message_count": disc_doc.get("message_count"),
+            "evidence_count": disc_doc.get("total_evidence_count"),
+            "evidence_by_source_type": _evidence_source_type_counts(
+                document, [sec.evidence_id for sec in document.all_evidence_sections]
+            ),
+            "snapshot": {
+                "status": snapshot_status,
+                "discovery_document_fingerprint": fp_disc,
+                "detection_document_fingerprint": fp_det,
+                "fingerprints_equal": bool(fp_disc and fp_det and fp_disc == fp_det),
+                "fingerprint_scope": (
+                    "document_id, chat_id, source, message order/timestamp/sender, evidence_id and text of ALL evidence "
+                    "sections (original and derived STT/OCR/Vision). Engine versions are not part of the fingerprint."
+                ),
+            },
+        },
+        "discovery_source": {
+            "run_id": sanitize_run_id(disc_run_id, redact=red),
+            "origin": disc_rep["execution"]["origin"],
+            "attestation_level": disc_rep["experiment"]["attestation_level"],
+            "execution_status": disc_rep["execution"]["verified_execution_status"],
+            "model": disc_rep["model"]["effective_model_id"],
+            "coverage": {
+                "chunks_planned": disc_cov["total_chunks_planned"],
+                "chunks_completed": disc_cov["chunks_completed"],
+                "chunks_failed": disc_cov["chunks_failed"],
+                "coverage_status": disc_cov["coverage_status"],
+                "analyzed_evidence_count": disc_doc.get("analyzed_evidence_count"),
+                "total_evidence_count": disc_doc.get("total_evidence_count"),
+                "evidence_coverage_percentage": disc_cov["evidence_coverage_percentage"],
+                "is_complete": disc_cov["is_complete"],
+            },
+            "topic": {
+                "topic_uid": topic_uid,
+                "label_present": bool(disc_topic.label.strip()),
+                "description_present": bool(disc_topic.short_description.strip()),
+                "label": sanitize_topic_text(disc_topic.label, redact=red),
+                "description": sanitize_topic_text(disc_topic.short_description, redact=red),
+                "evidence_ids": [san_eid(e) for e in disc_topic.evidence_ids],
+                "evidence_count": len(disc_topic.evidence_ids),
+                "evidence_by_source_type": _evidence_source_type_counts(document, disc_topic.evidence_ids),
+            },
+        },
+        "detection": {
+            "run_id": sanitize_run_id(det_run_id, redact=red),
+            "origin_flow": "DISCOVERY_VERIFICATION",
+            "query": {
+                "query_mode": "LABEL_AND_DESCRIPTION",
+                "is_label_only": False,
+                "label_present": bool(det.topic.label.strip()),
+                "description_present": bool(det.topic.description.strip()),
+                "label": sanitize_topic_text(det.topic.label, redact=red),
+                "description": sanitize_topic_text(det.topic.description, redact=red),
+                "discovery_evidence_ids_supplied_to_model": False,
+            },
+            "decision": det.decision.value,
+            "decision_status": det_rep["result"]["decision_status"],
+            "execution_status": det_rep["execution"]["verified_execution_status"],
+            "attestation_level": det_rep["experiment"]["attestation_level"],
+            "model": det_rep["model"]["effective_model_id"],
+            "evidence_ids": [san_eid(e) for e in det.evidence_ids],
+            "evidence_count": len(det.evidence_ids),
+            "evidence_by_source_type": _evidence_source_type_counts(document, det.evidence_ids),
+            "rationale": sanitize_topic_text(det.rationale, redact=red),
+            "execution": {
+                "execution_origin": exec_origin,
+                "loading_mode": det_rep["experiment"]["loading_mode"],
+                "chunks_planned": det_cov["total_chunks_planned"],
+                "chunks_completed": det_cov["chunks_completed"],
+                "chunks_failed": det_cov["chunks_failed"],
+                "chunks_recovered": det_cov["chunks_recovered"],
+                "coverage_status": det_cov["coverage_status"],
+                "microchunks_total": det_diag.get("microchunks_total"),
+                "microchunks_recovered_from_checkpoint": det_diag.get("microchunks_recovered_from_checkpoint"),
+                "http_requests_sent": det_diag.get("http_requests_sent"),
+            },
+        },
+        "comparison": {
+            "association": {
+                "status": "EXACT_UNIQUE_MATCH",
+                "basis": "EXPLICIT_RUN_IDS_AND_DOCUMENT_ID",
+                "discovery_run_id": sanitize_run_id(disc_run_id, redact=red),
+                "detection_run_id": sanitize_run_id(det_run_id, redact=red),
+            },
+            "consistency_status": status_str,
+            "interpretation_code": _INTERPRETATION_BY_STATUS[status_str],
+            "consistency_completeness": cmeta.get("consistency_completeness", "NOT_RECORDED"),
+            "is_partial_detection": bool(cmeta.get("is_partial_detection", False)),
+            "discovery_evidence_ids": [san_eid(e) for e in cons.discovery_evidence_ids],
+            "detection_evidence_ids": [san_eid(e) for e in cons.detection_evidence_ids],
+            "overlap_evidence_ids": [san_eid(e) for e in cons.overlap_evidence_ids],
+            "overlap_count": len(cons.overlap_evidence_ids),
+            "rationale": sanitize_topic_text(cons.rationale, redact=red),
+            "limits": limits,
+        },
+        "audit": {
+            "checks": {
+                "association_by_explicit_ids": True,
+                "document_ids_consistent": True,
+                "query_has_description": True,
+                "query_without_discovery_evidence_ids": True,
+                "comparator_recomputed_matches": True,
+                "snapshot_equivalence_proven": snapshot_status == SnapshotStatus.MATCH.value,
+            },
+            "attestation_note": (
+                "Detection attestation is reported as computed by the export rules; UNATTESTED does not mean that the "
+                "model did not run. No attestation level is inferred by this report."
+            ),
+        },
+        "privacy": det_rep["privacy"],
+    }
+
+    problems = validate_semantic_verification_report(report)
+    if problems:
+        raise SemanticVerificationExportError("INVALID_REPORT:" + ",".join(problems))
+    if red:
+        # Controllo sui VALORI (non sulle chiavi): nessun valore del rapporto coincide con testo libero originale.
+        values: set[str] = set()
+
+        def _collect(obj: Any) -> None:
+            if isinstance(obj, Mapping):
+                for v in obj.values():
+                    _collect(v)
+            elif isinstance(obj, (list, tuple)):
+                for v in obj:
+                    _collect(v)
+            elif isinstance(obj, str):
+                values.add(obj.strip().casefold())
+
+        _collect(report)
+        for raw in (disc_topic.label, disc_topic.short_description, det.rationale, cons.rationale):
+            if (raw or "").strip().casefold() in values and (raw or "").strip():
+                raise SemanticVerificationExportError("PRIVACY_CHECK_FAILED")
     return report
