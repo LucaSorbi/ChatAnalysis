@@ -892,4 +892,11 @@ class DocumentAnalysisState:
     def add_consistency_result(self, result: ConsistencyResult) -> None:
         if self.consistency_runs and self.consistency_runs[-1] == result:
             return
+        # Idempotenza per coppia di run: una stessa verifica (Discovery run + Detection run) non si duplica mai,
+        # anche se un rerun dell'interfaccia la riaggiunge dopo altre verifiche (sequenza A/B/A).
+        if result.discovery_run_id and result.detection_run_id and any(
+            c.discovery_run_id == result.discovery_run_id and c.detection_run_id == result.detection_run_id
+            for c in self.consistency_runs
+        ):
+            return
         self.consistency_runs = self.consistency_runs + (result,)
