@@ -45,6 +45,7 @@ from ai.backend import (
     LlmCompletionResponse,
     LmStudioUnavailableError,
 )
+from ai.json_failure import describe_json_failure
 
 _ALLOWED_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "[::1]"}
 _NETWORK_ERRORS = (urllib.error.URLError, TimeoutError, ConnectionRefusedError, OSError)
@@ -2150,6 +2151,7 @@ class LmStudioClient(BaseLocalLlmClient):
                 )
                 setattr(trunc_exc, "finish_reason", "length")
                 setattr(trunc_exc, "raw_content", content)
+                setattr(trunc_exc, "json_failure", describe_json_failure(content, j_trunc_err))
                 setattr(trunc_exc, "prompt_tokens", prompt_tokens)
                 setattr(trunc_exc, "completion_tokens", completion_tokens)
                 setattr(trunc_exc, "total_tokens", total_tokens)

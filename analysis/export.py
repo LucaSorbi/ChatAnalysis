@@ -239,6 +239,16 @@ ALLOWED_ERROR_TYPES = {
 ALLOWED_DEGENERATION_TRIGGERS = {"CHAR_RUN", "TAB_RUN", "PATTERN_LOOP"}
 ALLOWED_CITATION_SHAPES = {"ALIAS_FORMAT_NOT_IN_BLOCK", "NUMERIC_ONLY", "FORENSIC_ID_NOT_IN_BLOCK", "OTHER"}
 ALLOWED_ACCEPTANCE_POLICIES = {"degeneration_v1_raw", "degeneration_v2_structural"}
+ALLOWED_TELEMETRY_PROVENANCE = {"MEASURED", "NOT_AVAILABLE"}
+ALLOWED_ATTEMPT_OUTCOMES = {
+    "OK", "EMPTY_TOPICS", "INVALID_CITATION", "JSON_SYNTAX", "TRUNCATED_LENGTH", "DEGENERATE",
+    "OTHER_STRUCTURED", "BACKEND_ERROR", "OTHER",
+}
+ALLOWED_FINISH_REASON_KINDS = {"STOP", "LENGTH", "OTHER", "MISSING"}
+ALLOWED_JSON_FAILURE_KINDS = {
+    "EMPTY_RESPONSE", "UNTERMINATED_STRING", "EXPECTING_VALUE", "EXPECTING_DELIMITER", "EXTRA_DATA",
+    "INVALID_ESCAPE", "INVALID_CONTROL_CHAR", "NOT_AN_OBJECT", "OTHER_SYNTAX",
+}
 ALLOWED_RESULT_ORIGINS = {"CHECKPOINT_VALIDATED", "COMPUTED_THIS_RUN", "MIXED_CHECKPOINT_AND_COMPUTED"}
 ALLOWED_HTTP_BASES = {"REQUEST_LISTENER", "NOT_AVAILABLE"}
 ALLOWED_CHECKPOINT_PERSISTENCE = {"OK", "WRITE_FAILURES", "NOT_ATTEMPTED"}
@@ -722,7 +732,46 @@ def sanitize_diagnostic_metrics(raw: Any, redact: bool = True) -> dict[str, Any]
         out["invalid_citation_shapes"] = _safe_count_map(
             shapes, lambda k: str(k) if isinstance(k, str) and k in ALLOWED_CITATION_SHAPES else "OTHER", redact
         )
+    # Additivi (solo se presenti): telemetria dei tentativi LLM di Topic Discovery. Interi, booleani ed enum chiusi.
+    if "telemetry_provenance" in raw:
+        prov = raw.get("telemetry_provenance")
+        out["telemetry_provenance"] = prov if isinstance(prov, str) and prov in ALLOWED_TELEMETRY_PROVENANCE else "NOT_AVAILABLE"
+        for key in ("llm_calls_own", "llm_calls_bisection", "llm_calls_total", "bisection_depth_max", "discarded_success_evidence_count"):
+            out[key] = safe_int(raw.get(key))
+        detail: list[dict[str, Any]] = []
+        raw_detail = raw.get("attempts_detail")
+        for a in (raw_detail if isinstance(raw_detail, (list, tuple)) else ())[:8]:
+            if not isinstance(a, Mapping):
+                continue
+            jk = a.get("json_failure_kind")
+            at_end = a.get("json_error_at_end")
+            detail.append({
+                "attempt": safe_int(a.get("attempt")),
+                "outcome": a.get("outcome") if a.get("outcome") in ALLOWED_ATTEMPT_OUTCOMES else "OTHER",
+                "response_received": a.get("response_received") if isinstance(a.get("response_received"), bool) else None,
+                "max_tokens_requested": safe_int(a.get("max_tokens_requested")),
+                "finish_reason_kind": a.get("finish_reason_kind") if a.get("finish_reason_kind") in ALLOWED_FINISH_REASON_KINDS else "OTHER",
+                "completion_tokens": safe_int(a.get("completion_tokens")),
+                "response_chars": safe_int(a.get("response_chars")),
+                "json_failure_kind": (jk if jk in ALLOWED_JSON_FAILURE_KINDS else "OTHER_SYNTAX") if jk is not None else None,
+                "json_error_offset": safe_int(a.get("json_error_offset")),
+                "json_error_line": safe_int(a.get("json_error_line")),
+                "json_error_col": safe_int(a.get("json_error_col")),
+                "json_error_at_end": at_end if isinstance(at_end, bool) else None,
+            })
+        out["attempts_detail"] = detail
     return out
+
+
+def _diagnostics_export_counts(raw_diag: Any, norm_chunks: Sequence[Mapping[str, Any]]) -> dict[str, int]:
+    """Conteggi interi: record di diagnostica registrati vs slot effettivamente esportati con dati."""
+    recorded = sum(1 for d in (raw_diag or []) if isinstance(d, Mapping) and isinstance(d.get("chunk_index"), int))
+    exported = sum(1 for c in norm_chunks if c.get("status") != "UNATTEMPTED")
+    return {
+        "records_recorded": int(recorded),
+        "records_exported": int(exported),
+        "records_not_exported": int(max(0, recorded - exported)),
+    }
 
 
 def sanitize_resume_provenance(raw: Any) -> dict[str, Any] | None:
@@ -1992,6 +2041,14 @@ def build_topic_discovery_export_report(
         # Additivo: versione della policy di accettazione usata (assente nelle run storiche → nessun campo inventato).
         **(
             {"analysis_policy": {"acceptance_policy": meta.get("acceptance_policy")}}
+            if meta.get("acceptance_policy") in ALLOWED_ACCEPTANCE_POLICIES
+            else {}
+        ),
+        # Additivo: quanti record di diagnostica sono stati registrati e quanti compaiono davvero nell'export.
+        # I record sono indicizzati per `chunk_index` (ultimo vince, indici oltre il totale scartati): con microchunk
+        # di parent diversi gli indici possono coincidere. Solo interi.
+        **(
+            {"diagnostics_export": _diagnostics_export_counts(raw_diag, norm_chunks)}
             if meta.get("acceptance_policy") in ALLOWED_ACCEPTANCE_POLICIES
             else {}
         ),
