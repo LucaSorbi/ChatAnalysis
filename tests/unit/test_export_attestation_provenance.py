@@ -500,6 +500,8 @@ def test_checkpoint_with_missing_origin_never_becomes_live_without_proof(tmp_pat
             "max_topics": 10,
             # Identità della run Discovery: policy di accettazione corrente (assert del test invariati).
             "acceptance_policy": "degeneration_v2_structural",
+            # Regola del budget d'uscita dei microchunk (parte dell'identità della run corrente; assert invariati).
+            "micro_output_budget_policy": "micro_budget_formula_v2",
             "resolved_model_key": "qwen2.5-7b-instruct",
             "quantization": None,
         },

@@ -86,6 +86,7 @@ from analysis.models import (
     resolve_operational_profile,
 )
 from analysis.service import (
+    MICRO_OUTPUT_BUDGET_POLICY,
     LocalTopicAnalysisService,
     calculate_discovery_max_tokens,
 )
@@ -3545,6 +3546,8 @@ class PreflightResumeAuditor:
                     # Stessa identità del servizio: la policy di accettazione è parte della configurazione della run.
                     # Un checkpoint creato con la policy storica risulta quindi NON compatibile (CONFIG_MISMATCH).
                     "acceptance_policy": DEGENERATION_POLICY_STRUCTURAL,
+                    # Stessa identità del servizio: la regola del budget d'uscita dei microchunk è parte della run.
+                    "micro_output_budget_policy": MICRO_OUTPUT_BUDGET_POLICY,
                     "resolved_model_key": self.resolved_model_key,
                     "quantization": self.quantization,
                 }

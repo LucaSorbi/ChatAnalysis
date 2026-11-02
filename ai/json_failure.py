@@ -45,6 +45,23 @@ ATTEMPT_OUTCOMES = (
     "UNKNOWN",
 )
 
+# Causa di un rifiuto di VALIDAZIONE del payload Topic Discovery (JSON sintatticamente valido ma non conforme).
+# Sottodivide l'esito OTHER_STRUCTURED; nessun testo, solo enum chiuso.
+VALIDATION_KINDS = (
+    "TOP_KEYS_MISMATCH",
+    "TOPICS_NOT_LIST",
+    "TOPIC_COUNT_EXCEEDS_LIMIT",
+    "TOPIC_NOT_OBJECT",
+    "TOPIC_KEYS_MISMATCH",
+    "LABEL_INVALID",
+    "DESCRIPTION_INVALID",
+    "EVIDENCE_IDS_NOT_LIST",
+    "EVIDENCE_IDS_DUPLICATED",
+    "EVIDENCE_ID_NOT_STRING",
+    "EVIDENCE_IDS_EMPTY",
+    "OTHER_VALIDATION",
+)
+
 TELEMETRY_PROVENANCE = ("MEASURED", "NOT_AVAILABLE")
 
 # Prefissi dei messaggi di json.JSONDecodeError (costanti CPython) → enum chiuso.

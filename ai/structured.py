@@ -538,6 +538,19 @@ def validate_topic_detection_payload(
     return decision, final_eids, rationale
 
 
+def _discovery_validation_error(message: str, kind: str, *, topics_returned: int | None = None) -> AiStructuredOutputError:
+    """
+    Errore di validazione del payload Topic Discovery con la CAUSA in enum chiuso (`ai.json_failure.VALIDATION_KINDS`).
+    Il messaggio (e quindi la classificazione storica) resta identico; `validation_kind` e `topics_returned` sono solo
+    telemetria numerica/enum e non influenzano alcuna decisione di accettazione.
+    """
+    exc = AiStructuredOutputError(message)
+    setattr(exc, "validation_kind", kind)
+    if topics_returned is not None:
+        setattr(exc, "topics_returned", int(topics_returned))
+    return exc
+
+
 def validate_topic_discovery_payload(
     raw_text: str,
     valid_evidence_ids: set[str],
@@ -558,17 +571,19 @@ def validate_topic_discovery_payload(
     expected_keys = {"topics"}
     actual_keys = set(data.keys())
     if actual_keys != expected_keys:
-        raise AiStructuredOutputError(f"Schema Topic Discovery violato: attese chiavi {expected_keys}, ricevute {actual_keys}")
+        raise _discovery_validation_error(f"Schema Topic Discovery violato: attese chiavi {expected_keys}, ricevute {actual_keys}", "TOP_KEYS_MISMATCH")
 
     raw_topics = data["topics"]
     if not isinstance(raw_topics, list):
-        raise AiStructuredOutputError(f"'topics' deve essere una lista JSON, ricevuto {type(raw_topics).__name__}")
+        raise _discovery_validation_error(f"'topics' deve essere una lista JSON, ricevuto {type(raw_topics).__name__}", "TOPICS_NOT_LIST")
 
     # D5: Divieto di silent truncation: se eccede max_topics, solleva errore!
     if len(raw_topics) > max_topics:
-        raise AiStructuredOutputError(
+        raise _discovery_validation_error(
             f"Il modello ha restituito {len(raw_topics)} argomenti, superando il limite consentito di {max_topics}. "
-            f"Nessun troncamento silente consentito."
+            f"Nessun troncamento silente consentito.",
+            "TOPIC_COUNT_EXCEEDS_LIMIT",
+            topics_returned=len(raw_topics),
         )
 
     discovered: list[DiscoveredTopic] = []
@@ -576,14 +591,14 @@ def validate_topic_discovery_payload(
 
     for idx, item in enumerate(raw_topics):
         if not isinstance(item, dict):
-            raise AiStructuredOutputError(f"Elemento topic[{idx}] deve essere un oggetto JSON")
+            raise _discovery_validation_error(f"Elemento topic[{idx}] deve essere un oggetto JSON", "TOPIC_NOT_OBJECT")
 
         item_keys = set(item.keys())
         if item_keys != expected_topic_keys:
             # In modalita operativa ignora record dummy completamente privi di valore a fine array
             if alias_map is not None and not any(item.values()):
                 continue
-            raise AiStructuredOutputError(f"topic[{idx}] presenta chiavi non conformi: {item_keys} != {expected_topic_keys}")
+            raise _discovery_validation_error(f"topic[{idx}] presenta chiavi non conformi: {item_keys} != {expected_topic_keys}", "TOPIC_KEYS_MISMATCH")
 
         raw_label = item.get("label")
         raw_desc = item.get("short_description")
@@ -595,12 +610,12 @@ def validate_topic_discovery_payload(
                 continue
 
         if not isinstance(raw_label, str) or not raw_label.strip():
-            raise AiStructuredOutputError(f"topic[{idx}].label deve essere una stringa non vuota")
+            raise _discovery_validation_error(f"topic[{idx}].label deve essere una stringa non vuota", "LABEL_INVALID")
         if not isinstance(raw_desc, str) or not raw_desc.strip():
-            raise AiStructuredOutputError(f"topic[{idx}].short_description deve essere una stringa non vuota")
+            raise _discovery_validation_error(f"topic[{idx}].short_description deve essere una stringa non vuota", "DESCRIPTION_INVALID")
 
         if not isinstance(eids_raw, list):
-            raise AiStructuredOutputError(f"topic[{idx}] ('{raw_label}') deve contenere una lista per evidence_ids")
+            raise _discovery_validation_error(f"topic[{idx}] ('{raw_label}') deve contenere una lista per evidence_ids", "EVIDENCE_IDS_NOT_LIST")
 
         had_duplicate_loop = False
         if alias_map is not None:
@@ -609,21 +624,21 @@ def validate_topic_discovery_payload(
             clean_eids = list(dict.fromkeys(raw_non_empty))
             had_duplicate_loop = len(raw_non_empty) > len(clean_eids)
             if had_duplicate_loop and any("::" in e for e in raw_non_empty):
-                raise AiStructuredOutputError(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}")
+                raise _discovery_validation_error(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}", "EVIDENCE_IDS_DUPLICATED")
             if len(clean_eids) == 0:
                 if len(raw_topics) == 1:
-                    raise AiStructuredOutputError(f"topic[{idx}] ('{item['label']}') deve contenere almeno un evidence_id")
+                    raise _discovery_validation_error(f"topic[{idx}] ('{item['label']}') deve contenere almeno un evidence_id", "EVIDENCE_IDS_EMPTY")
                 # Argomento candidato terminale privo di evidenze: viene scartato se vi sono altri topic validi
                 continue
             eids_raw = clean_eids
         else:
             if len(eids_raw) == 0:
-                raise AiStructuredOutputError(f"topic[{idx}] ('{item['label']}') deve contenere almeno un evidence_id")
+                raise _discovery_validation_error(f"topic[{idx}] ('{item['label']}') deve contenere almeno un evidence_id", "EVIDENCE_IDS_EMPTY")
             for e_idx, eid_val in enumerate(eids_raw):
                 if not isinstance(eid_val, str) or not eid_val.strip():
-                    raise AiStructuredOutputError(f"topic[{idx}].evidence_ids[{e_idx}] non è una stringa valida")
+                    raise _discovery_validation_error(f"topic[{idx}].evidence_ids[{e_idx}] non è una stringa valida", "EVIDENCE_ID_NOT_STRING")
             if len(eids_raw) != len(set(eids_raw)):
-                raise AiStructuredOutputError(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}")
+                raise _discovery_validation_error(f"topic[{idx}] contiene evidence_ids duplicati: {eids_raw}", "EVIDENCE_IDS_DUPLICATED")
 
 
         if alias_map is not None:

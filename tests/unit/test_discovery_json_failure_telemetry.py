@@ -497,11 +497,12 @@ def test_two_parents_three_microchunks_every_error_cause_is_readable_in_the_safe
     # la collisione dell'array legacy esiste ancora (è invariato) ma NON toglie informazione al registro nuovo
     assert (de["records_recorded"], de["records_exported"], de["records_not_exported"]) == (6, 2, 4)
     assert de["attempt_rows_exported"] == len(rows) == len(client.log) and de["attempt_rows_dropped"] == 0
-    # P0/m1: radice troncata due volte (length a metà stringa, 640 poi 960), poi figli
+    # P0/m1: radice troncata due volte (length a metà stringa), poi figli. Budget: 5 topic*120+256 = 856, retry ×1,5 = 1284
+    # (prima della correzione mirata del 02/11/2026 erano i tetti fissi 640/960: aggiornati con la nuova policy di budget).
     root = _node(rows, 0, 1, "")
     assert [(r["attempt"], r["outcome"], r["finish_reason_kind"], r["json_failure_kind"], r["max_tokens_requested"]) for r in root] == [
-        (1, "TRUNCATED_LENGTH", "LENGTH", "UNTERMINATED_STRING", 640),
-        (2, "TRUNCATED_LENGTH", "LENGTH", "UNTERMINATED_STRING", 960),
+        (1, "TRUNCATED_LENGTH", "LENGTH", "UNTERMINATED_STRING", 856),
+        (2, "TRUNCATED_LENGTH", "LENGTH", "UNTERMINATED_STRING", 1284),
     ]
     assert [(r["attempt"], r["outcome"], r["finish_reason_kind"], r["json_failure_kind"]) for r in _node(rows, 0, 1, "a")] == [
         (1, "JSON_SYNTAX", "STOP", "EXPECTING_DELIMITER"), (2, "OK", "STOP", None)]
