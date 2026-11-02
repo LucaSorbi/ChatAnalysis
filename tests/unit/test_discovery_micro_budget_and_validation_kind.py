@@ -22,7 +22,7 @@ import ai.lmstudio as lms
 import analysis.service as service_mod
 from ai.backend import AiInvalidEvidenceCitationError, AiStructuredOutputError, AnalysisInputTooLargeError
 from ai.json_failure import VALIDATION_KINDS
-from ai.structured import TOPIC_DISCOVERY_SCHEMA
+from ai.structured import TOPIC_DISCOVERY_SCHEMA_OPERATIONAL  # schema realmente inviato in modalità operativa
 from ai.token_budget import DEFAULT_SAFETY_MARGIN_TOKENS, estimate_request_input_tokens
 from ai.topics import TopicDiscoveryAnalyzer
 from analysis.checkpoint import AnalysisCheckpointStore
@@ -216,7 +216,7 @@ def test_every_request_fits_the_context_window_for_several_window_sizes(monkeypa
     res, client = _run(doc, resp, monkeypatch, context_length=ctx)
     assert client.log
     for c in client.log:
-        est = estimate_request_input_tokens(c["messages"], schema=TOPIC_DISCOVERY_SCHEMA)
+        est = estimate_request_input_tokens(c["messages"], schema=TOPIC_DISCOVERY_SCHEMA_OPERATIONAL)
         assert est + c["max_tokens"] + DEFAULT_SAFETY_MARGIN_TOKENS <= ctx, (ctx, est, c["max_tokens"])
         assert c["max_tokens"] <= UI_MAX_TOKENS * 2
 
@@ -250,7 +250,7 @@ def test_analyzer_clamps_output_to_real_headroom_or_fails_explicitly(monkeypatch
     seen = _capture_messages(monkeypatch, lambda u: _stop_body(_topics(u, 1)))
     an = TopicDiscoveryAnalyzer(client=lms.LmStudioClient(model_id=MODEL), default_model_id=MODEL, operational_mode=True)
     an.discover_topics(document=doc, model_id=MODEL, max_topics=5, max_tokens=856, operational_mode=True, context_length=8192)
-    est = estimate_request_input_tokens(seen[0]["messages"], schema=TOPIC_DISCOVERY_SCHEMA)
+    est = estimate_request_input_tokens(seen[0]["messages"], schema=TOPIC_DISCOVERY_SCHEMA_OPERATIONAL)
     assert seen[0]["max_tokens"] == 856
 
     # headroom = 300 (>=128, < 856): richiesta emessa con max_tokens ridotto a 300

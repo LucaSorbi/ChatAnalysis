@@ -94,6 +94,25 @@ TOPIC_DISCOVERY_SCHEMA: dict[str, Any] = {
     "additionalProperties": False,
 }
 
+# Contratto di output OPERATIVO di Topic Discovery (versione registrata nel config fingerprint e nell'export).
+# Allinea lo schema strict al validatore: `validate_topic_discovery_payload` rifiuta una `short_description` vuota o
+# di soli spazi (DESCRIPTION_INVALID), ma lo schema storico la ammette (tipo "string" senza lunghezza minima), quindi la
+# grammatica NON impediva al modello di emetterla. Questa variante aggiunge SOLO `minLength: 1` a `short_description`:
+# è più restrittiva, non accetta nulla che prima fosse rifiutato e non inventa testo. Le stringhe di soli spazi restano
+# rifiutate dal validatore (non esprimibili in modo portabile nello schema). La modalità scientifica usa lo schema storico.
+DISCOVERY_OUTPUT_CONTRACT_VERSION = "discovery_contract_v2_nonempty_description"
+
+
+def _build_operational_discovery_schema() -> dict[str, Any]:
+    import copy
+
+    schema = copy.deepcopy(TOPIC_DISCOVERY_SCHEMA)
+    schema["properties"]["topics"]["items"]["properties"]["short_description"]["minLength"] = 1
+    return schema
+
+
+TOPIC_DISCOVERY_SCHEMA_OPERATIONAL: dict[str, Any] = _build_operational_discovery_schema()
+
 TRANSLATION_SCHEMA: dict[str, Any] = {
     "type": "object",
     "properties": {

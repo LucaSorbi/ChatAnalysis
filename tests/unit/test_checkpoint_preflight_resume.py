@@ -284,6 +284,8 @@ def _populate_test_checkpoint_db(
             "acceptance_policy": "degeneration_v2_structural",
             # Regola del budget d'uscita dei microchunk (parte dell'identità della run corrente; assert invariati).
             "micro_output_budget_policy": "micro_budget_formula_v2",
+            # Contratto di output (schema strict con short_description non vuota); assert invariati.
+            "output_contract_version": "discovery_contract_v2_nonempty_description",
             "resolved_model_key": model_id,
             "quantization": quantization,
         },
