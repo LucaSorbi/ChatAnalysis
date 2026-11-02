@@ -32,6 +32,7 @@ from ai.backend import (
     AiInvalidEvidenceCitationError,
     AiStructuredOutputError,
 )
+from ai.json_failure import describe_json_failure
 from ai.models import (
     DiscoveredTopic,
     EvidenceTranslationItem,
@@ -382,10 +383,15 @@ def parse_and_validate_json(
             repaired = re.sub(r',\s*([\]}])', r'\1', repaired)
             data = json.loads(repaired)
         except json.JSONDecodeError:
-            raise AiStructuredOutputError(f"Risposta del modello non conforme a JSON valido: {e}") from e
+            parse_exc = AiStructuredOutputError(f"Risposta del modello non conforme a JSON valido: {e}")
+            # Telemetria numerica additiva (nessun testo, nessuna finestra attorno alla posizione); messaggio IDENTICO.
+            parse_exc.json_failure = describe_json_failure(clean_text, e)  # type: ignore[attr-defined]
+            raise parse_exc from e
 
     if not isinstance(data, dict):
-        raise AiStructuredOutputError(f"L'output deve essere un oggetto JSON, ricevuto {type(data).__name__}")
+        shape_exc = AiStructuredOutputError(f"L'output deve essere un oggetto JSON, ricevuto {type(data).__name__}")
+        shape_exc.json_failure = describe_json_failure(clean_text, None, not_an_object=True)  # type: ignore[attr-defined]
+        raise shape_exc
     return data
 
 

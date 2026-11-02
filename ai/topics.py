@@ -48,6 +48,7 @@ from ai.serializer import (
     serialize_document_compact_jsonl,
     serialize_document_for_llm,
 )
+from ai.json_failure import finish_reason_kind
 from ai.structured import (
     DEGENERATION_POLICY_HISTORICAL,
     DEGENERATION_POLICY_STRUCTURAL,
@@ -646,6 +647,52 @@ OUTPUT RULES:
         )
 
 
+_JSON_FAILURE_KEYS = ("json_failure_kind", "json_error_offset", "json_error_line", "json_error_col", "json_error_at_end")
+
+
+def _attempt_outcome(exc: BaseException) -> str:
+    """Esito di un tentativo (enum chiuso, ai.json_failure.ATTEMPT_OUTCOMES). Non è la categoria diagnostica pubblica."""
+    if isinstance(exc, AiInvalidEvidenceCitationError):
+        return "INVALID_CITATION"
+    if isinstance(exc, AiStructuredOutputError):
+        if getattr(exc, "degeneration", None) is not None:
+            return "DEGENERATE"
+        if getattr(exc, "finish_reason", None) == "length":
+            return "TRUNCATED_LENGTH"
+        if isinstance(getattr(exc, "json_failure", None), Mapping):
+            return "JSON_SYNTAX"
+        return "OTHER_STRUCTURED"
+    if isinstance(exc, (AiBackendRequestError, AiBackendTimeoutError)):
+        return "BACKEND_ERROR"
+    return "OTHER"
+
+
+def _attempt_entry(outcome: str, attempt_no: int, max_tokens_requested: int | None, resp: Any, exc: BaseException | None) -> dict[str, Any]:
+    """Voce di telemetria per UN tentativo: interi ed enum chiusi. Mai testo, hash o finestre di risposta."""
+    fr = getattr(exc, "finish_reason", None) if exc is not None else None
+    raw = getattr(resp, "raw_response", None) if resp is not None else None
+    if fr is None and isinstance(raw, Mapping):
+        fr = raw.get("finish_reason")
+    tokens = getattr(exc, "completion_tokens", None) if exc is not None else None
+    if tokens is None and resp is not None:
+        tokens = getattr(resp, "completion_tokens", None)
+    jf = getattr(exc, "json_failure", None) if exc is not None else None
+    content = getattr(resp, "content", None) if resp is not None else None
+    chars = len(content) if isinstance(content, str) else (jf.get("response_chars") if isinstance(jf, Mapping) else None)
+    entry: dict[str, Any] = {
+        "attempt": int(attempt_no),
+        "outcome": outcome,
+        "response_received": bool(resp is not None or fr is not None),
+        "max_tokens_requested": int(max_tokens_requested) if isinstance(max_tokens_requested, int) else None,
+        "finish_reason_kind": finish_reason_kind(fr) if (resp is not None or fr is not None) else "MISSING",
+        "completion_tokens": int(tokens) if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and tokens >= 0 else None,
+        "response_chars": int(chars) if isinstance(chars, int) else None,
+    }
+    for k in _JSON_FAILURE_KEYS:
+        entry[k] = jf.get(k) if isinstance(jf, Mapping) else None
+    return entry
+
+
 class TopicDiscoveryAnalyzer:
     """
     Analizzatore per l'Open Topic Discovery su un ConversationEvidenceDocument.
@@ -680,6 +727,8 @@ class TopicDiscoveryAnalyzer:
         """
         Esegue la scoperta non supervisionata di temi emergenti nel documento.
         """
+        # Telemetria dell'ULTIMA chiamata (interi/enum chiusi): azzerata a ogni invocazione, mai riusata tra chiamate.
+        self.last_attempt_telemetry: tuple[dict[str, Any], ...] = ()
         target_model = model_id or self.default_model_id
         valid_evidence_ids = {s.evidence_id for s in document.all_evidence_sections}
 
@@ -823,9 +872,14 @@ Instructions:
         cum_completion_tokens: int | None = None
         cum_total_tokens: int | None = None
         cum_latency_seconds: float = 0.0
+        # Telemetria additiva per tentativo (solo interi/enum chiusi, mai testo). Non influenza nessuna decisione.
+        attempt_log: list[dict[str, Any]] = []
+        calls_issued = 0
 
         for attempt in range(max_attempts):
             attempt_used = attempt
+            resp_this_attempt = None
+            used_max_tokens = current_max_tokens
             try:
                 call_kwargs = {
                     "messages": messages,
@@ -841,7 +895,9 @@ Instructions:
                     sig = inspect.signature(self.client.chat_completion)
                     if "schema_strict" in sig.parameters or any(p.kind == inspect.Parameter.VAR_KEYWORD for p in sig.parameters.values()):
                         call_kwargs["schema_strict"] = current_schema_strict
+                calls_issued += 1
                 response = self.client.chat_completion(**call_kwargs)
+                resp_this_attempt = response
                 if response:
                     if getattr(response, "prompt_tokens", None) is not None:
                         cum_prompt_tokens = (cum_prompt_tokens or 0) + response.prompt_tokens
@@ -887,6 +943,7 @@ Instructions:
                     if s.text and s.text.strip() and s.text.strip() != "<Media omessi>" and "crittografati end-to-end" not in s.text
                 )
                 if len(discovered) == 0 and is_op and substantive_sec_count >= 3 and attempt + 1 < max_attempts:
+                    attempt_log.append(_attempt_entry("EMPTY_TOPICS", attempt + 1, used_max_tokens, resp_this_attempt, None))
                     if on_retry_callback:
                         try:
                             on_retry_callback("empty_topic_outcome", attempt + 1)
@@ -907,11 +964,18 @@ Instructions:
                     ]
                     continue
 
+                attempt_log.append(_attempt_entry("OK", attempt + 1, used_max_tokens, resp_this_attempt, None))
                 last_error = None
                 break
 
             except Exception as exc:
                 last_error = exc
+                try:
+                    attempt_log.append(_attempt_entry(_attempt_outcome(exc), attempt + 1, used_max_tokens, resp_this_attempt, exc))
+                    setattr(exc, "attempt_telemetry", tuple(attempt_log))
+                    setattr(exc, "llm_calls", int(calls_issued))
+                except Exception:
+                    pass
                 if response is not None and getattr(response, "raw_response", None) and isinstance(response.raw_response, Mapping):
                     if not getattr(exc, "finish_reason", None):
                         setattr(exc, "finish_reason", response.raw_response.get("finish_reason"))
@@ -1188,6 +1252,7 @@ Instructions:
                 pass
             raise last_error
 
+        self.last_attempt_telemetry = tuple(attempt_log)
         metadata: dict[str, Any] = {
             "prompt_version": prompt_version,
             "strategy": strategy.value,

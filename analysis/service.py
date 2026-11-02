@@ -52,6 +52,7 @@ from ai.chunking import (
     split_chunk_into_microchunks,
     split_document_into_chunks,
 )
+from ai.json_failure import finish_reason_from_kind
 from ai.structured import (
     DEGENERATION_POLICY_STRUCTURAL,
     TOPIC_DETECTION_SCHEMA,
@@ -268,6 +269,66 @@ def discovery_citation_metrics(exc: BaseException | None, bundle_count: int) -> 
         "aliases_presented_count": _opt_int(getattr(exc, "aliases_presented_count", None)),
         "aliases_accepted_count": _opt_int(getattr(exc, "aliases_accepted_count", None)),
     }
+
+
+def _merge_diag_metrics(*parts: Mapping[str, Any] | None) -> dict[str, Any] | None:
+    """Unione di dizionari di metriche numeriche (None se tutti assenti). Le chiavi non si sovrappongono."""
+    merged: dict[str, Any] = {}
+    for part in parts:
+        if isinstance(part, Mapping):
+            merged.update(part)
+    return merged or None
+
+
+def discovery_failure_metrics(
+    exc: BaseException | None,
+    *,
+    bisection_calls: int | None = 0,
+    bisection_depth_max: int = 0,
+    discarded_success_evidence_count: int = 0,
+) -> dict[str, Any] | None:
+    """
+    Telemetria NUMERICA additiva di un blocco Discovery fallito (o riuscito dopo bisezione): chiamate HTTP effettive,
+    profondità di bisezione, evidenze validate ma non accreditate, dettaglio per tentativo (enum chiusi/interi).
+    Nessun testo, nessun hash, nessuna finestra di risposta. `telemetry_provenance`: MEASURED solo se l'eccezione porta
+    la telemetria dei tentativi; altrimenti NOT_AVAILABLE e i conteggi di chiamate restano None (mai 0 inventato).
+    """
+    tel = getattr(exc, "attempt_telemetry", None)
+    own = getattr(exc, "llm_calls", None)
+    measured = isinstance(tel, tuple) and isinstance(own, int) and not isinstance(own, bool)
+    total: int | None = None
+    if measured and bisection_calls is not None:
+        total = int(own) + int(bisection_calls)
+    return {
+        "telemetry_provenance": "MEASURED" if measured else "NOT_AVAILABLE",
+        "llm_calls_own": int(own) if measured else None,
+        "llm_calls_bisection": int(bisection_calls) if (measured and bisection_calls is not None) else None,
+        "llm_calls_total": total,
+        "bisection_depth_max": int(bisection_depth_max),
+        "discarded_success_evidence_count": int(discarded_success_evidence_count),
+        "attempts_detail": [dict(a) for a in tel] if measured else [],
+    }
+
+
+def _outcome_discarded_evidence(outcome: Any) -> int:
+    """Evidenze validate da chiamate riuscite dentro un nodo fallito, ma non accreditate (0 se non disponibile)."""
+    dm = getattr(getattr(outcome, "diagnostic", None), "diagnostic_metrics", None)
+    val = dm.get("discarded_success_evidence_count") if isinstance(dm, Mapping) else None
+    return int(val) if isinstance(val, int) and not isinstance(val, bool) else 0
+
+
+def _outcome_llm_calls(outcome: Any) -> tuple[int | None, int]:
+    """(chiamate HTTP, profondità di bisezione) di un esito di microchunk; chiamate None se non misurabili."""
+    diag = getattr(outcome, "diagnostic", None)
+    dm = getattr(diag, "diagnostic_metrics", None)
+    if isinstance(dm, Mapping) and "llm_calls_total" in dm:
+        total = dm.get("llm_calls_total")
+        return (int(total) if isinstance(total, int) else None), int(dm.get("bisection_depth_max") or 0)
+    att = getattr(outcome, "attempts", None)
+    return (int(att) if isinstance(att, int) else None), 0
+
+
+ATTEMPT_LOG_CAP = 256  # righe di telemetria per run (interi/enum): oltre il tetto si conta soltanto
 
 
 class _DetectionSplitPartial(Exception):
@@ -1648,6 +1709,72 @@ class LocalTopicAnalysisService:
             "duration_seconds": round(time.perf_counter() - start_time, 3),
         }
 
+    def _log_discovery_calls(
+        self,
+        telemetry: Any,
+        *,
+        level: str,
+        parent_index: int | None,
+        micro_index: int | None,
+        node_path: str,
+        depth: int,
+        legacy_chunk_index: int | None,
+        document: ConversationEvidenceDocument,
+    ) -> None:
+        """
+        Accoda al registro della run UNA riga per tentativo LLM del nodo (parent o microchunk/figlio di bisezione).
+        Solo interi, booleani ed enum chiusi + identificatori tecnici (indici, percorso a/b): mai testo, alias, nomi file.
+        Telemetria assente → una riga con attempt=None/outcome=UNKNOWN (dato non disponibile, non 0).
+        """
+        sink = getattr(self, "_discovery_attempt_sink", None)
+        if sink is None:
+            return
+        rows = list(telemetry) if isinstance(telemetry, (tuple, list)) and telemetry else [None]
+        base = {
+            "level": level,
+            "parent_index": parent_index,
+            "micro_index": micro_index,
+            "node_path": node_path,
+            "depth": int(depth),
+            "legacy_chunk_index": legacy_chunk_index,
+            "bundle_count": len(document.bundles),
+            "evidence_count": len(document.all_evidence_sections),
+        }
+        for att in rows:
+            seq = int(getattr(self, "_discovery_attempt_seq", 0))
+            self._discovery_attempt_seq = seq + 1
+            if len(sink) >= ATTEMPT_LOG_CAP:
+                self._discovery_attempt_dropped = int(getattr(self, "_discovery_attempt_dropped", 0)) + 1
+                continue
+            row = {"seq": seq, **base}
+            fields = (
+                "attempt", "outcome", "response_received", "max_tokens_requested", "finish_reason_kind",
+                "completion_tokens", "response_chars", "json_failure_kind", "json_error_offset",
+                "json_error_line", "json_error_col", "json_error_at_end",
+            )
+            if isinstance(att, Mapping):
+                row.update({k: att.get(k) for k in fields})
+            else:
+                row.update({k: None for k in fields})
+                row["outcome"] = "UNKNOWN"
+            sink.append(row)
+
+    def _discover_logged(self, analyzer: Any, document: ConversationEvidenceDocument, node: Mapping[str, Any], **kwargs: Any) -> Any:
+        """discover_topics + registrazione dei tentativi del nodo (successo o errore). Non altera risultato né eccezioni."""
+        try:
+            res = analyzer.discover_topics(document=document, **kwargs)
+        except Exception as exc:
+            self._log_discovery_calls(getattr(exc, "attempt_telemetry", None), document=document, **node)
+            raise
+        self._log_discovery_calls(getattr(analyzer, "last_attempt_telemetry", None), document=document, **node)
+        return res
+
+    def _attach_attempt_log(self, meta: dict[str, Any]) -> None:
+        sink = getattr(self, "_discovery_attempt_sink", None)
+        if sink is not None:
+            meta["discovery_attempt_log"] = [dict(r) for r in sink]
+            meta["discovery_attempt_log_dropped"] = int(getattr(self, "_discovery_attempt_dropped", 0))
+
     def _execute_microchunk_with_adaptive_fallback(
         self,
         sub: ConversationEvidenceDocument,
@@ -1662,6 +1789,9 @@ class LocalTopicAnalysisService:
         depth: int = 0,
         max_depth: int = 3,
         parent_document_id: str = "",
+        parent_index: int | None = None,
+        micro_index: int | None = None,
+        node_path: str = "",
     ) -> tuple[DiscoveryChunkOutcome, TopicDiscoveryResult | None]:
         """
         Esegue un singolo microchunk con fallback adattivo per bisezione (divide-and-conquer)
@@ -1679,8 +1809,10 @@ class LocalTopicAnalysisService:
         micro_target_topics = min(chunk_target_topics, max(2, min(5, len(sub.bundles))))
         micro_max_tokens = min(eff_max_tokens or self.default_max_tokens or 640, 640 if depth == 0 else 448)
         try:
-            res = analyzer.discover_topics(
-                document=sub,
+            res = self._discover_logged(
+                analyzer, sub,
+                {"level": "MICROCHUNK", "parent_index": parent_index, "micro_index": micro_index, "node_path": node_path,
+                 "depth": depth, "legacy_chunk_index": sub_display_idx - 1},
                 model_id=resolved_model,
                 temperature=eff_temp,
                 seed=eff_seed,
@@ -1756,6 +1888,9 @@ class LocalTopicAnalysisService:
                 and depth < max_depth
             )
 
+            bis_calls: int | None = 0
+            bis_depth = 0
+            discarded_ev = 0
             if can_bisect:
                 tracker.microchunk_bisected()
                 mid = len(sub.bundles) // 2
@@ -1789,8 +1924,17 @@ class LocalTopicAnalysisService:
                     depth=depth + 1,
                     max_depth=max_depth,
                     parent_document_id=parent_document_id,
+                    parent_index=parent_index,
+                    micro_index=micro_index,
+                    node_path=node_path + "a",
                 )
+                _ca, _da = _outcome_llm_calls(out_a)
+                bis_calls = (bis_calls + _ca) if (bis_calls is not None and _ca is not None) else None
+                bis_depth = max(bis_depth, _da + 1)
+                if res_a is None:
+                    discarded_ev += _outcome_discarded_evidence(out_a)
                 if res_a is not None:
+                    discarded_ev += len(out_a.evidence_ids)
                     out_b, res_b = self._execute_microchunk_with_adaptive_fallback(
                         sub=half_b,
                         analyzer=analyzer,
@@ -1804,8 +1948,17 @@ class LocalTopicAnalysisService:
                         depth=depth + 1,
                         max_depth=max_depth,
                         parent_document_id=parent_document_id,
+                        parent_index=parent_index,
+                        micro_index=micro_index,
+                        node_path=node_path + "b",
                     )
+                    _cb, _db = _outcome_llm_calls(out_b)
+                    bis_calls = (bis_calls + _cb) if (bis_calls is not None and _cb is not None) else None
+                    bis_depth = max(bis_depth, _db + 1)
+                    if res_b is None:
+                        discarded_ev += _outcome_discarded_evidence(out_b)
                     if res_b is not None:
+                        discarded_ev = 0  # entrambe riuscite: nulla va perso
                         # Entrambe le metà riuscite: consolidamento delle due parti
                         agg_sub = aggregate_topic_discovery(
                             chunk_results=[res_a, res_b],
@@ -1835,6 +1988,9 @@ class LocalTopicAnalysisService:
                             evidence_valid=True,
                             checkpoint_saved=False,
                             topics_count=len(agg_sub.topics),
+                            diagnostic_metrics=discovery_failure_metrics(
+                                s_exc, bisection_calls=bis_calls, bisection_depth_max=bis_depth,
+                            ),
                         )
                         outcome = DiscoveryChunkOutcome(
                             chunk_id=sub.document_id,
@@ -1852,6 +2008,15 @@ class LocalTopicAnalysisService:
             dur = round(time.perf_counter() - t_sub_start, 3)
             is_val_err = isinstance(s_exc, (AiStructuredOutputError, AiInvalidEvidenceCitationError, ValueError))
             eff_sub_att = int(getattr(s_exc, "attempts", sub_attempts))
+            fail_metrics = discovery_failure_metrics(
+                s_exc, bisection_calls=bis_calls, bisection_depth_max=bis_depth,
+                discarded_success_evidence_count=discarded_ev,
+            )
+            att_tel = getattr(s_exc, "attempt_telemetry", None)
+            last_att = att_tel[-1] if isinstance(att_tel, tuple) and att_tel else None
+            sum_tokens = None
+            if last_att is not None and all(isinstance(a.get("completion_tokens"), int) for a in att_tel):
+                sum_tokens = sum(int(a["completion_tokens"]) for a in att_tel)
             sub_diag = ChunkDiagnosticRecord(
                 chunk_index=sub_display_idx - 1,
                 chunk_id=sub.document_id,
@@ -1860,10 +2025,12 @@ class LocalTopicAnalysisService:
                 attempts=eff_sub_att,
                 duration_seconds=dur,
                 model_id=resolved_model,
-                http_status=getattr(s_exc, "status_code", None),
-                finish_reason=None,
+                # Prima questi campi erano fissi a None anche se l'ultimo tentativo li aveva restituiti: ora solo valori
+                # MISURATI dall'ultimo tentativo (None se la telemetria non è disponibile).
+                http_status=getattr(s_exc, "status_code", None) or (200 if (last_att and last_att.get("response_received")) else None),
+                finish_reason=finish_reason_from_kind(last_att.get("finish_reason_kind")) if last_att else None,
                 prompt_tokens=None,
-                completion_tokens=None,
+                completion_tokens=sum_tokens,
                 error_type=type(s_exc).__name__,
                 diagnostic_category=cat,
                 failure_phase=phase,
@@ -1875,7 +2042,7 @@ class LocalTopicAnalysisService:
                 evidence_valid=False,
                 checkpoint_saved=False,
                 topics_count=0,
-                diagnostic_metrics=discovery_citation_metrics(s_exc, len(sub.bundles)),
+                diagnostic_metrics=_merge_diag_metrics(discovery_citation_metrics(s_exc, len(sub.bundles)), fail_metrics),
             )
             outcome = DiscoveryChunkOutcome(
                 chunk_id=sub.document_id,
@@ -2031,6 +2198,9 @@ class LocalTopicAnalysisService:
                     depth=0,
                     max_depth=3,
                     parent_document_id=parent_document_id or chunk.document_id,
+                    parent_index=parent_chunk_index,
+                    micro_index=sub_idx_0based,
+                    node_path="",
                 )
 
                 if sub_res is not None:
@@ -3166,6 +3336,10 @@ class LocalTopicAnalysisService:
         eff_seed = seed if seed is not None else self.config.seed
 
         run_id = f"run_disc_{uuid.uuid4().hex[:10]}"
+        # Registro per-tentativo della run (telemetria additiva; vuoto a ogni run, mai condiviso tra run).
+        self._discovery_attempt_sink = []
+        self._discovery_attempt_dropped = 0
+        self._discovery_attempt_seq = 0
         start_time = time.perf_counter()
         start_iso = datetime.now(timezone.utc).isoformat()
         current_git_commit = get_git_commit()
@@ -3418,8 +3592,10 @@ class LocalTopicAnalysisService:
                         tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
                         t_single_start = time.perf_counter()
                         try:
-                            disc_res = analyzer.discover_topics(
-                                document=chunks[0],
+                            disc_res = self._discover_logged(
+                                analyzer, chunks[0],
+                                {"level": "PARENT", "parent_index": 0, "micro_index": None, "node_path": "", "depth": 0,
+                                 "legacy_chunk_index": 0},
                                 model_id=resolved_model,
                                 temperature=eff_temp,
                                 seed=eff_seed,
@@ -3700,6 +3876,7 @@ class LocalTopicAnalysisService:
                 meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
                 meta["evidence_citation_protocol"] = "deterministic_alias_v1"
                 meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
+                self._attach_attempt_log(meta)
                 if is_verified_live_single:
                     meta["provenance_verified"] = True
                     meta["authoritative_execution_certified"] = True
@@ -3849,8 +4026,10 @@ class LocalTopicAnalysisService:
                     tracker.record_retry(reason)
 
                 try:
-                    res = analyzer.discover_topics(
-                        document=chunk,
+                    res = self._discover_logged(
+                        analyzer, chunk,
+                        {"level": "PARENT", "parent_index": idx, "micro_index": None, "node_path": "", "depth": 0,
+                         "legacy_chunk_index": idx},
                         model_id=resolved_model,
                         temperature=eff_temp,
                         seed=eff_seed,
@@ -4037,7 +4216,7 @@ class LocalTopicAnalysisService:
                             schema_valid=is_inv_ev,
                             evidence_valid=False,
                             checkpoint_saved=False,
-                            diagnostic_metrics=discovery_citation_metrics(fatal_err, len(chunk.bundles)),
+                            diagnostic_metrics=_merge_diag_metrics(discovery_citation_metrics(fatal_err, len(chunk.bundles)), discovery_failure_metrics(fatal_err)),
                         )
                         all_chunk_diagnostics.append(diag)
                         chunk_outcomes.append(
@@ -4120,7 +4299,7 @@ class LocalTopicAnalysisService:
                         )),
                         evidence_valid=False,
                         checkpoint_saved=False,
-                        diagnostic_metrics=discovery_citation_metrics(exc, len(chunk.bundles)),
+                        diagnostic_metrics=_merge_diag_metrics(discovery_citation_metrics(exc, len(chunk.bundles)), discovery_failure_metrics(exc)),
                     )
                     all_chunk_diagnostics.append(diag)
                     chunk_outcomes.append(
@@ -4275,6 +4454,7 @@ class LocalTopicAnalysisService:
         meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
         meta["evidence_citation_protocol"] = "deterministic_alias_v1"
         meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
+        self._attach_attempt_log(meta)
         meta["status"] = disc_status
         if doc_fp:
             meta["document_fingerprint"] = doc_fp
