@@ -589,8 +589,113 @@ def test_no_match_in_manual_export_is_not_a_discrepancy_and_unaffected(monkeypat
 
 
 # ---------------------------------------------------------------------------------------------
-# 14. Interfaccia Streamlit reale (AppTest): saltati se il framework di test non e' installato
+# 14. Percorso della card Discovery sul dataset demo sintetico
+#     (a) senza Streamlit: stesse chiamate che la card esegue al click, eseguibile ovunque;
+#     (b) Streamlit AppTest reale con click reale: eseguito solo se `streamlit.testing` e' installato.
 # ---------------------------------------------------------------------------------------------
+
+DEMO_LABEL = "Logistica Depositi"
+DEMO_DESC = "Ispezione casse e magazzini"
+DEMO_RATIONALE = "Nessuna evidenza."
+
+
+class _DeterministicClient:
+    """Client finto con risposte in coda (Discovery poi Detection ABSENT); registra i prompt. Nessun dato reale."""
+
+    model_id = "qwen2.5-7b-instruct"
+
+    def __init__(self, responses):
+        self.responses = list(responses)
+        self.call_count = 0
+        self.prompts: list[str] = []
+
+    def is_available(self) -> bool:
+        return True
+
+    def chat_completion(self, messages, model_id=None, temperature=0.0, seed=42, timeout_seconds=30.0,
+                        max_tokens=None, **kwargs):
+        from ai.backend import LlmCompletionResponse
+        self.call_count += 1
+        self.prompts.append(json.dumps(messages, ensure_ascii=False))
+        data = self.responses.pop(0) if self.responses else {"decision": "ABSENT", "evidence_ids": [], "rationale": "x"}
+        return LlmCompletionResponse(content=json.dumps(data), model=model_id or self.model_id, prompt_tokens=15,
+                                     completion_tokens=15, total_tokens=30, latency_seconds=0.1)
+
+
+def _demo_responses():
+    from ui.demo import build_synthetic_demo_dataset
+    doc, _, _ = build_synthetic_demo_dataset()
+    eid = doc.all_evidence_sections[0].evidence_id
+    return doc, [
+        {"topics": [{"label": DEMO_LABEL, "short_description": DEMO_DESC, "evidence_ids": [eid]}]},
+        {"decision": "ABSENT", "evidence_ids": [], "rationale": DEMO_RATIONALE},
+    ]
+
+
+def _assert_demo_report(rep: dict[str, Any], raw: str) -> None:
+    assert rep["report_type"] == "SEMANTIC_CONSISTENCY_VERIFICATION"
+    assert validate_semantic_verification_report(rep) == []
+    assert rep["experiment"]["origin_flow"] == "DISCOVERY_VERIFICATION"
+    assert rep["comparison"]["association"]["status"] == "EXACT_UNIQUE_MATCH"
+    assert rep["comparison"]["consistency_status"] == "DISCREPANCY_ABSENT"
+    assert rep["comparison"]["overlap_count"] == 0 and rep["comparison"]["detection_evidence_ids"] == []
+    assert rep["detection"]["query"]["query_mode"] == "LABEL_AND_DESCRIPTION"
+    assert rep["detection"]["query"]["discovery_evidence_ids_supplied_to_model"] is False
+    assert rep["document"]["snapshot"]["status"] == "MATCH"
+    assert rep["discovery_source"]["coverage"]["is_complete"] is True
+    for secret in (DEMO_LABEL, DEMO_DESC, DEMO_RATIONALE):
+        assert secret not in raw, secret
+
+
+def test_card_click_path_on_demo_dataset_creates_stores_selects_and_exports_absent(monkeypatch, tmp_path):
+    """
+    Riproduce SENZA Streamlit la sequenza della card (ui/presentation.py): Discovery -> hit -> precondizioni ->
+    execute_discovery_verification -> salvataggio in sessione -> selezione per UID -> export SAFE. Nessun
+    ConsistencyResult inserito a mano: lo produce il vero percorso applicativo con il vero comparatore.
+    """
+    from search.topics import TopicSearchEngine
+    from ui.application import execute_discovery_verification
+
+    monkeypatch.setenv("CHATANALYSIS_CHECKPOINT_DIR", str(tmp_path / "chk"))
+    doc, responses = _demo_responses()
+    client = _DeterministicClient(responses)
+    sess: dict[str, Any] = {
+        "dataset_loaded": True, "conversation_document": doc,
+        "available_documents": {doc.document_id: doc}, "selected_document_id": doc.document_id,
+    }
+    state.get_document_analysis_state(doc.document_id, sess)
+
+    res = execute_topic_discovery(document=doc, client=client, model_id=client.model_id, max_topics=5, session_state=sess)
+    assert res.metadata["status"] == "COMPLETE" and len(res.topics) == 1 and client.call_count == 1
+    hits = TopicSearchEngine(evidence_index=None, discovery_results=state.get_discovery_results(state=sess)).search_discoveries().hits
+    assert len(hits) == 1
+    hit = hits[0]
+    pre = evaluate_verification_preconditions(doc, res, topic_provenance_document_id=hit.metadata.get("provenance_document_id"))
+    assert pre.can_verify is True and pre.snapshot_status == "MATCH" and pre.warnings == ()
+
+    det, cons = execute_discovery_verification(
+        document=doc, discovered_topic=hit.raw_result, discovery_run_id=hit.metadata.get("run_id"),
+        client=client, model_id=client.model_id, session_state=sess)
+    assert client.call_count == 2, "una sola inferenza indipendente"
+    assert DEMO_LABEL in client.prompts[1] and DEMO_DESC in client.prompts[1], "la Detection riceve label e descrizione"
+    assert det.metadata["origin_flow"] == "DISCOVERY_VERIFICATION" and det.metadata["query_mode"] == "LABEL_AND_DESCRIPTION"
+    assert cons.status == ConsistencyStatus.DISCREPANCY_ABSENT and cons.overlap_evidence_ids == ()
+
+    stored = state.get_consistency_results(doc.document_id, state=sess)
+    assert [c.status for c in stored] == [ConsistencyStatus.DISCREPANCY_ABSENT]
+    assert stored[0].detection_run_id == det.metadata["run_id"] and stored[0].discovery_run_id == res.metadata["run_id"]
+    # ripetere il salvataggio (come fa la card dopo la funzione applicativa) non duplica
+    state.add_consistency_result(cons, state=sess)
+    assert len(state.get_consistency_results(doc.document_id, state=sess)) == 1
+    selected = select_verification_results(stored, doc.document_id, hit.metadata.get("run_id"), hit.raw_result)
+    assert selected == (stored[0],)
+
+    n = client.call_count
+    raw, name = export_semantic_verification_json(selected[-1], doc, session_state=sess)
+    assert client.call_count == n, "l'export non invoca il modello"
+    assert name.startswith("verification") and name.endswith(".json")
+    _assert_demo_report(json.loads(raw), raw)
+
 
 def _apptest_available() -> bool:
     try:
@@ -600,37 +705,63 @@ def _apptest_available() -> bool:
         return False
 
 
-@pytest.mark.skipif(not _apptest_available(), reason="streamlit.testing non installato: test UI NON eseguito (nessun PASS finto)")
-def test_apptest_absent_verification_shows_direct_export_button_without_manual_detection():
-    from tests.unit.test_apptest_flows import APP_PATH, MockAppLlmClient, _setup_app_with_doc
-    from ui.demo import build_synthetic_demo_dataset
-    from streamlit.testing.v1 import AppTest  # noqa: F401
-    from ui.state import DatasetMode
+def _download_labels(at: Any) -> list[str]:
+    labels: list[str] = []
+    for d in at.get("download_button"):
+        proto = getattr(d, "proto", None)
+        label = getattr(proto, "label", None)
+        labels.append(label if isinstance(label, str) else str(proto))
+    return labels
 
-    doc, _, _ = build_synthetic_demo_dataset()
-    eid = doc.all_evidence_sections[0].evidence_id
-    client = MockAppLlmClient(responses=[
-        {"topics": [{"label": "Logistica Depositi", "short_description": "Ispezione casse e magazzini", "evidence_ids": [eid]}]},
-        {"decision": "ABSENT", "evidence_ids": [], "rationale": "Nessuna evidenza."},
-    ])
+
+@pytest.mark.skipif(not _apptest_available(), reason="streamlit.testing non installato: test UI NON eseguito (nessun PASS finto)")
+def test_apptest_absent_verification_shows_direct_export_button_without_manual_detection(monkeypatch, tmp_path):
+    from tests.unit.test_apptest_flows import _setup_app_with_doc
+    from ui.models import DatasetMode
+
+    monkeypatch.setenv("CHATANALYSIS_CHECKPOINT_DIR", str(tmp_path / "chk"))  # nessun .checkpoints/ nel repository
+    doc, responses = _demo_responses()
+    client = _DeterministicClient(responses)
     at = _setup_app_with_doc(doc, mode=DatasetMode.FILE)
     at.session_state["lm_studio_client"] = client
     at.sidebar.radio[0].set_value("5. Analisi topic")
     at.run()
+    assert not at.exception
+
+    # 1. Discovery reale (click reale)
     [b for b in at.button if b.key == "btn_run_live_discovery"][0].click()
     at.run()
+    assert not at.exception and client.call_count == 1
+    assert len(state.get_discovery_results(at.session_state)) == 1
+
+    # 2. «Verifica con Topic Detection»: pulsante abilitato per un topic validato
     verify = [b for b in at.button if "verify_disc_topic" in (b.key or "")]
-    assert verify and not verify[0].disabled
+    assert len(verify) == 1
+    diag = f"captions={[c.value for c in at.caption]} errors={[e.value for e in getattr(at, 'error', [])]}"
+    assert not verify[0].disabled, diag
     verify[0].click()
+    at.run()
+    diag = f"captions={[c.value for c in at.caption]} errors={[e.value for e in getattr(at, 'error', [])]}"
+    assert not at.exception, diag
+    assert not list(getattr(at, "error", [])), diag
+    assert client.call_count == 2, "Discovery + UNA sola Detection indipendente"
+
+    # 3. Risultato creato dal comparatore e conservato nello stato dell'app (accessor con documento esplicito)
+    cons = state.get_consistency_results(doc.document_id, state=at.session_state)
+    assert [c.status for c in cons] == [ConsistencyStatus.DISCREPANCY_ABSENT], diag
+    dets = state.get_detection_results(at.session_state)
+    assert len(dets) == 1 and dets[0].metadata["origin_flow"] == "DISCOVERY_VERIFICATION"
+    assert cons[0].detection_run_id == dets[0].metadata["run_id"]
+
+    # 4. Esportazione diretta dalla card + report reale dallo stato della stessa sessione
+    assert any("Esporta verifica JSON" in lbl for lbl in _download_labels(at)), _download_labels(at)
+    raw, _name = export_semantic_verification_json(cons[0], doc, session_state=at.session_state)
+    _assert_demo_report(json.loads(raw), raw)
+    assert client.call_count == 2
+
+    # 5. Rerun: il risultato resta visibile e la Detection non viene richiamata
     at.run()
     assert not at.exception
     assert client.call_count == 2
-    cons = state.get_consistency_results(at.session_state) if hasattr(state, "get_consistency_results") else None
-    if cons is not None:
-        assert [c.status for c in cons] == [ConsistencyStatus.DISCREPANCY_ABSENT]
-    downloads = at.get("download_button")
-    assert any("Esporta verifica JSON" in str(getattr(d, "proto", d)) for d in downloads)
-    # un rerun non rilancia il modello e mantiene il bottone
-    at.run()
-    assert client.call_count == 2
-    assert any("Esporta verifica JSON" in str(getattr(d, "proto", d)) for d in at.get("download_button"))
+    assert len(state.get_consistency_results(doc.document_id, state=at.session_state)) == 1
+    assert any("Esporta verifica JSON" in lbl for lbl in _download_labels(at))
