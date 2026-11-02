@@ -42,6 +42,7 @@ from analysis.export import (
     serialize_report_to_json,
 )
 from analysis.models import classify_discovery_exception
+import analysis.service as service_mod
 from analysis.service import discovery_failure_metrics
 from tests.unit.test_detection_microchunk_checkpoint_resume import (  # noqa: F401  (fixture autouse inclusa)
     MODEL,
@@ -360,7 +361,9 @@ def test_photo_36_messages_two_parents_export_hides_microchunk_records_and_now_s
     # più chiamate HTTP dei "chunk" visibili: 13 richieste per 2 slot esportati
     assert len(client.log) == 13
     report = json.loads(serialize_report_to_json(build_topic_discovery_export_report(res, doc)))
-    assert report["diagnostics_export"] == {"records_recorded": 6, "records_exported": 2, "records_not_exported": 4}
+    de = report["diagnostics_export"]
+    assert (de["records_recorded"], de["records_exported"], de["records_not_exported"]) == (6, 2, 4)
+    assert de["attempt_rows_exported"] == len(de["attempt_log"]) == len(client.log) == 13 and de["attempt_rows_dropped"] == 0
     shown = []
     def walk(o: Any) -> None:
         if isinstance(o, dict):
@@ -447,3 +450,190 @@ def test_historical_export_without_policy_has_no_new_block(monkeypatch):
     legacy = TopicDiscoveryResult(topics=res.topics, provenance_document_id=res.provenance_document_id, metadata=meta)
     report = build_topic_discovery_export_report(legacy, doc)
     assert "diagnostics_export" not in report and "analysis_policy" not in report
+
+
+# ============================================================================
+# 5. Registro per-tentativo nell'export SAFE (indipendente da chunk_index): 2 parent x 3 microchunk
+# ============================================================================
+
+def _two_parent_scenario(monkeypatch):
+    """Parent 0 = msg 0-19 (microchunk 0-7, 8-15, 16-19); parent 1 = msg 20-39 (20-27, 28-35, 36-39).
+    - P0/m1 (8-15): 2 tentativi troncati (length a metà stringa) -> bisezione: metà a = errore sintattico poi OK, metà b OK.
+    - P1/m1 (28-35): guasto persistente sul messaggio 33 -> bisezione ripetuta fino a depth 3 -> FALLITO (non ultimo).
+    - tutti gli altri: SUCCESS indipendenti."""
+    seen: dict[tuple[int, ...], int] = {}
+
+    def responder(pos: list[int], user: str) -> bytes:
+        seen[tuple(pos)] = seen.get(tuple(pos), 0) + 1
+        n, p = seen[tuple(pos)], set(pos)
+        if p == set(range(8, 16)):
+            return _body(MID_STRING, "length")
+        if p == set(range(8, 12)):
+            return _body(AFTER_COMMA, "stop") if n == 1 else _body(_good(user))
+        if 33 in p:
+            return _body(MID_STRING, "length")
+        return _body(_good(user))
+
+    doc = _doc("two", 40)
+    res, client, events = _run_service(doc, responder, monkeypatch, max_chunk_bundles=20)
+    report = json.loads(serialize_report_to_json(build_topic_discovery_export_report(res, doc)))
+    return doc, res, client, events, report
+
+
+def _rows(report: dict[str, Any]) -> list[dict[str, Any]]:
+    return report["diagnostics_export"]["attempt_log"]
+
+
+def _node(rows: list[dict[str, Any]], parent: int, micro: int, path: str) -> list[dict[str, Any]]:
+    return [r for r in rows if (r["parent_index"], r["micro_index"], r["node_path"]) == (parent, micro, path)]
+
+
+def test_two_parents_three_microchunks_every_error_cause_is_readable_in_the_safe_export(monkeypatch):
+    doc, res, client, events, report = _two_parent_scenario(monkeypatch)
+    m = res.metadata
+    assert (m["status"], m["expected_chunk_count"], m["completed_chunk_count"], m["failed_chunk_count"]) == ("PARTIAL", 2, 1, 1)
+    assert m["microchunk_count"] == 6 and len(client.log) == 19
+    de, rows = report["diagnostics_export"], _rows(report)
+    # la collisione dell'array legacy esiste ancora (è invariato) ma NON toglie informazione al registro nuovo
+    assert (de["records_recorded"], de["records_exported"], de["records_not_exported"]) == (6, 2, 4)
+    assert de["attempt_rows_exported"] == len(rows) == len(client.log) and de["attempt_rows_dropped"] == 0
+    # P0/m1: radice troncata due volte (length a metà stringa, 640 poi 960), poi figli
+    root = _node(rows, 0, 1, "")
+    assert [(r["attempt"], r["outcome"], r["finish_reason_kind"], r["json_failure_kind"], r["max_tokens_requested"]) for r in root] == [
+        (1, "TRUNCATED_LENGTH", "LENGTH", "UNTERMINATED_STRING", 640),
+        (2, "TRUNCATED_LENGTH", "LENGTH", "UNTERMINATED_STRING", 960),
+    ]
+    assert [(r["attempt"], r["outcome"], r["finish_reason_kind"], r["json_failure_kind"]) for r in _node(rows, 0, 1, "a")] == [
+        (1, "JSON_SYNTAX", "STOP", "EXPECTING_DELIMITER"), (2, "OK", "STOP", None)]
+    assert [r["outcome"] for r in _node(rows, 0, 1, "b")] == ["OK"] and {r["depth"] for r in _node(rows, 0, 1, "a")} == {1}
+    # P1/m1 (figlio NON ultimo, fallito): ogni nodo fallito mostra la sua vera causa fino a depth 3
+    for path, depth in (("", 0), ("b", 1), ("ba", 2), ("bab", 3)):
+        node = _node(rows, 1, 1, path)
+        assert [r["outcome"] for r in node] == ["TRUNCATED_LENGTH", "TRUNCATED_LENGTH"], path
+        assert {(r["depth"], r["finish_reason_kind"], r["json_failure_kind"]) for r in node} == {(depth, "LENGTH", "UNTERMINATED_STRING")}
+    assert [r["outcome"] for r in _node(rows, 1, 1, "a")] == ["OK"] and [r["outcome"] for r in _node(rows, 1, 1, "baa")] == ["OK"]
+    # SUCCESS indipendenti restano visibili e identificabili
+    for key in ((0, 0), (0, 2), (1, 0), (1, 2)):
+        assert [r["outcome"] for r in _node(rows, *key, "")] == ["OK"]
+    # ogni riga ha identificatori tecnici stabili; legacy_chunk_index mostra DOVE collide
+    assert {r["legacy_chunk_index"] for r in _node(rows, 1, 1, "bab")} == {2}
+    assert {r["legacy_chunk_index"] for r in _node(rows, 0, 1, "")} == {1} == {r["legacy_chunk_index"] for r in _node(rows, 1, 0, "")}
+
+
+def test_attempt_rows_reconcile_with_http_calls_retries_and_bisections(monkeypatch):
+    _, res, client, events, report = _two_parent_scenario(monkeypatch)
+    rows = _rows(report)
+    last = events[-1]
+    assert len(rows) == len(client.log)  # una riga per chiamata HTTP effettiva
+    assert sum(1 for r in rows if r["attempt"] >= 2) == last.retries_count
+    nodes = {(r["parent_index"], r["micro_index"], r["node_path"]) for r in rows}
+    bisected = {n for n in nodes if (n[0], n[1], n[2] + "a") in nodes}
+    assert len(bisected) == last.bisections_count == 4
+    assert [r["seq"] for r in rows] == sorted(r["seq"] for r in rows) == list(range(len(rows)))
+    # i numeri per chiamata concordano con quanto realmente inviato a LM Studio
+    assert [r["max_tokens_requested"] for r in rows] == [c["max_tokens"] for c in client.log]
+
+
+def test_legacy_record_calls_total_matches_rows_of_its_subtree(monkeypatch):
+    _, res, client, _, report = _two_parent_scenario(monkeypatch)
+    rows = _rows(report)
+    failed = next(dict(d) for d in res.metadata["chunk_diagnostics"] if d["status"] == "FAILED")
+    sub = [r for r in rows if (r["parent_index"], r["micro_index"]) == (1, 1)]
+    assert failed["diagnostic_metrics"]["llm_calls_total"] == len(sub) == 10
+    assert failed["attempts"] == 2 != len(sub)
+
+
+def test_attempt_log_has_no_text_alias_or_raw_json(monkeypatch):
+    doc, res, client, events, report = _two_parent_scenario(monkeypatch)
+    allowed_strings = ALLOWED_ATTEMPT_OUTCOMES | ALLOWED_FINISH_REASON_KINDS | ALLOWED_JSON_FAILURE_KINDS | {"PARENT", "MICROCHUNK"}
+    for row in _rows(report):
+        for key, value in row.items():
+            if isinstance(value, str):
+                assert value in allowed_strings or re.fullmatch(r"[ab]{0,8}", value), (key, value)
+            else:
+                assert value is None or isinstance(value, (int, bool)), (key, value)
+    blob = json.dumps(report) + json.dumps([dict(d) for d in res.metadata["chunk_diagnostics"]], default=str)
+    for forbidden in (SECRET, "Messaggio sintetico", "topics", "short_description", "evidence_ids", '"E0', "msg_two_"):
+        assert forbidden not in json.dumps(_rows(report)), forbidden
+    assert SECRET not in blob and "Messaggio sintetico" not in blob
+
+
+def test_top_level_split_keeps_the_failed_parent_attempts(monkeypatch):
+    """D6: parent diretto troncato due volte -> split in metà. I tentativi del PARENT compaiono ancora nel registro."""
+    doc = _doc("six", 6)
+    res, client, _ = _run_service(doc, lambda pos, u: _body(MID_STRING, "length") if len(pos) == 6 else _body(_good(u)), monkeypatch)
+    report = json.loads(serialize_report_to_json(build_topic_discovery_export_report(res, doc)))
+    rows = _rows(report)
+    parent_rows = [r for r in rows if r["level"] == "PARENT"]
+    micro_rows = [r for r in rows if r["level"] == "MICROCHUNK"]
+    assert [(r["attempt"], r["outcome"], r["finish_reason_kind"]) for r in parent_rows] == [(1, "TRUNCATED_LENGTH", "LENGTH"), (2, "TRUNCATED_LENGTH", "LENGTH")]
+    assert len(micro_rows) == 2 and all(r["outcome"] == "OK" for r in micro_rows) and len(rows) == len(client.log) == 4
+    assert res.metadata["status"] == "COMPLETE" and res.metadata["analyzed_evidence_count"] == 6
+
+
+def test_current_attempt_never_inherits_finish_reason_or_tokens_of_the_previous_one(http):
+    """D5: tentativo 1 = risposta con citazione inventata (stop, 321 token); tentativo 2 = timeout senza risposta."""
+    calls = []
+
+    def fake(req: Any, timeout: float | None = None):
+        calls.append(1)
+        if len(calls) == 1:
+            return _HttpResp(_body(json.dumps({"topics": [{"label": "T", "short_description": "d", "evidence_ids": ["E990"]}]})))
+        raise TimeoutError("timed out")
+
+    http(lambda i, u: b"")
+    lms.urllib.request.urlopen = fake  # type: ignore[assignment]  (monkeypatch di `http` ripristina urlopen a fine test)
+    analyzer = TopicDiscoveryAnalyzer(client=lms.LmStudioClient(model_id=MODEL), default_model_id=MODEL, operational_mode=True)
+    with pytest.raises(Exception) as ei:
+        analyzer.discover_topics(document=_doc("t", 6), model_id=MODEL, max_topics=5, max_tokens=640, operational_mode=True, context_length=8192)
+    exc = ei.value
+    a1, a2 = exc.attempt_telemetry
+    assert (a1["outcome"], a1["finish_reason_kind"], a1["completion_tokens"], a1["response_received"]) == ("INVALID_CITATION", "STOP", 321, True)
+    assert (a2["outcome"], a2["finish_reason_kind"], a2["completion_tokens"], a2["response_received"]) == ("BACKEND_ERROR", "MISSING", None, False)
+    # caratterizzazione dell'attributo LEGACY (invariato, non usato dal nuovo registro): eredita il valore del tentativo 1
+    assert getattr(exc, "finish_reason", None) == "stop"
+    fm = discovery_failure_metrics(exc)
+    assert fm["llm_calls_total"] == 2 and fm["attempts_detail"][1]["finish_reason_kind"] == "MISSING"
+
+
+def test_missing_finish_reason_and_usage_are_null_never_zero_or_stop(monkeypatch):
+    doc = _doc("aud", 19)
+    res, _, _ = _run_service(doc, lambda pos, u: _body(AFTER_COMMA, None, usage=False) if pos and max(pos) >= 16 else _body(_good(u)), monkeypatch)
+    report = json.loads(serialize_report_to_json(build_topic_discovery_export_report(res, doc)))
+    bad = [r for r in _rows(report) if r["outcome"] != "OK"]
+    assert bad and all(r["finish_reason_kind"] == "MISSING" and r["completion_tokens"] is None for r in bad)
+    failed = next(dict(d) for d in res.metadata["chunk_diagnostics"] if d["status"] == "FAILED")
+    assert failed["finish_reason"] is None and failed["completion_tokens"] is None  # nessun "stop" né 0 inventati
+
+
+def test_attempt_log_is_reset_between_runs_and_capped(monkeypatch):
+    doc = _doc("aud", 19)
+    client = _HttpMockClient(lambda pos, u: _body(_good(u)), doc.document_id, monkeypatch)
+    svc = _service(client, None)
+    svc.run_topic_discovery(document=doc, client=client, model_name=MODEL)
+    second = svc.run_topic_discovery(document=doc, client=client, model_name=MODEL)
+    assert len(second.metadata["discovery_attempt_log"]) == 3 and second.metadata["discovery_attempt_log_dropped"] == 0
+    monkeypatch.setattr(service_mod, "ATTEMPT_LOG_CAP", 2)
+    capped = svc.run_topic_discovery(document=doc, client=client, model_name=MODEL)
+    assert len(capped.metadata["discovery_attempt_log"]) == 2 and capped.metadata["discovery_attempt_log_dropped"] == 1
+    report = json.loads(serialize_report_to_json(build_topic_discovery_export_report(capped, doc)))
+    assert report["diagnostics_export"]["attempt_rows_exported"] == 2 and report["diagnostics_export"]["attempt_rows_dropped"] == 1
+
+
+def test_unavailable_telemetry_produces_an_unknown_row_not_a_zero():
+    svc = _service(FakeClient(lambda u, n: None), None)
+    svc._discovery_attempt_sink = []
+    svc._log_discovery_calls(None, level="MICROCHUNK", parent_index=0, micro_index=1, node_path="a", depth=1, legacy_chunk_index=1, document=_doc("x", 3))
+    (row,) = svc._discovery_attempt_sink
+    assert row["outcome"] == "UNKNOWN" and row["attempt"] is None and row["completion_tokens"] is None and row["bundle_count"] == 3
+
+
+def test_sanitizer_of_attempt_rows_rejects_hostile_values():
+    from analysis.export import sanitize_attempt_log_row
+    row = sanitize_attempt_log_row({
+        "seq": 1, "level": SECRET, "node_path": SECRET, "outcome": SECRET, "finish_reason_kind": SECRET, "json_failure_kind": SECRET,
+        "parent_index": "3", "depth": -1, "response_chars": SECRET, "extra_text": SECRET, "json_error_at_end": "yes",
+    })
+    assert SECRET not in json.dumps(row) and "extra_text" not in row
+    assert (row["level"], row["node_path"], row["outcome"], row["finish_reason_kind"], row["json_failure_kind"]) == (None, None, "UNKNOWN", "OTHER", "OTHER_SYNTAX")
+    assert row["depth"] is None and row["response_chars"] is None and row["json_error_at_end"] is None

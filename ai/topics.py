@@ -727,6 +727,8 @@ class TopicDiscoveryAnalyzer:
         """
         Esegue la scoperta non supervisionata di temi emergenti nel documento.
         """
+        # Telemetria dell'ULTIMA chiamata (interi/enum chiusi): azzerata a ogni invocazione, mai riusata tra chiamate.
+        self.last_attempt_telemetry: tuple[dict[str, Any], ...] = ()
         target_model = model_id or self.default_model_id
         valid_evidence_ids = {s.evidence_id for s in document.all_evidence_sections}
 
@@ -962,6 +964,7 @@ Instructions:
                     ]
                     continue
 
+                attempt_log.append(_attempt_entry("OK", attempt + 1, used_max_tokens, resp_this_attempt, None))
                 last_error = None
                 break
 
@@ -1249,6 +1252,7 @@ Instructions:
                 pass
             raise last_error
 
+        self.last_attempt_telemetry = tuple(attempt_log)
         metadata: dict[str, Any] = {
             "prompt_version": prompt_version,
             "strategy": strategy.value,
