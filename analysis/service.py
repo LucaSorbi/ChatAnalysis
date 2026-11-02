@@ -2465,6 +2465,7 @@ class LocalTopicAnalysisService:
                 completed_count = 1
                 failed_count = 0
                 det_status = "SUCCESS"
+                single_restored_from_checkpoint = False
                 if 0 in cached_results:
                     result = cached_results[0]
                     tracker.chunk_success(1, record_request=False)
@@ -2485,8 +2486,19 @@ class LocalTopicAnalysisService:
                             schema_valid=True,
                             evidence_valid=True,
                             checkpoint_saved=True,
+                            # Stessa provenienza esplicita del percorso multi-parent: il risultato NON è una nuova inferenza.
+                            resume_provenance={
+                                "result_origin": RESUME_ORIGIN_CHECKPOINT,
+                                "via_microchunks": None,
+                                "microchunks_recovered": None,
+                                "microchunks_computed": None,
+                                "microchunks_failed": None,
+                                "current_run_http_requests": 0,
+                                "original_attempts": None,
+                            },
                         )
                     )
+                    single_restored_from_checkpoint = True
                 else:
                     tracker.start_chunk(1, phase="Analisi dei messaggi", record_request=False)
                     t_chunk_start = time.perf_counter()
@@ -2840,6 +2852,9 @@ class LocalTopicAnalysisService:
                 meta["microchunk_count"] = int(tracker.microchunks_total)
                 meta["microchunk_completed_count"] = int(tracker.microchunks_completed)
                 meta["microchunk_failed_count"] = int(tracker.microchunks_failed)
+                if single_restored_from_checkpoint:
+                    # Parent interamente ripristinato da checkpoint validato (come nel percorso multi-parent).
+                    meta["recovered_chunk_count"] = 1
                 meta["chunk_diagnostics"] = [d.to_dict() for d in all_chunk_diagnostics]
                 meta["detection_diagnostics"] = self._detection_diagnostics_summary(tracker, det_stats, 1, 1 if det_status == "SUCCESS" else 0, start_time, all_chunk_diagnostics)
                 is_label_only = getattr(topic, "is_label_only", False) or (topic.label.strip().casefold() == topic.description.strip().casefold())
