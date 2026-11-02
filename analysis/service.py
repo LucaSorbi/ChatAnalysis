@@ -55,6 +55,7 @@ from ai.chunking import (
 from ai.json_failure import finish_reason_from_kind
 from ai.structured import (
     DEGENERATION_POLICY_STRUCTURAL,
+    DISCOVERY_OUTPUT_CONTRACT_VERSION,
     TOPIC_DETECTION_SCHEMA,
     TOPIC_DISCOVERY_SCHEMA,
 )
@@ -337,6 +338,8 @@ ATTEMPT_LOG_CAP = 256  # righe di telemetria per run (interi/enum): oltre il tet
 # È parte dell'identità della run (config fingerprint) e dell'export: i checkpoint creati con i tetti storici NON sono
 # riusabili in silenzio.
 MICRO_OUTPUT_BUDGET_POLICY = "micro_budget_formula_v2"
+# Contratto di output (schema strict) di Topic Discovery operativa: vedi ai.structured. Parte dell'identità della run.
+OUTPUT_CONTRACT_VERSION = DISCOVERY_OUTPUT_CONTRACT_VERSION
 
 
 class _DetectionSplitPartial(Exception):
@@ -3432,6 +3435,9 @@ class LocalTopicAnalysisService:
                     # Regola del budget d'uscita dei microchunk (anch'essa comportamentale): checkpoint creati con i
                     # vecchi tetti fissi 640/448 NON vengono riusati.
                     "micro_output_budget_policy": MICRO_OUTPUT_BUDGET_POLICY,
+                    # Contratto di output (schema strict con short_description non vuota): checkpoint creati con lo
+                    # schema storico NON vengono riusati.
+                    "output_contract_version": OUTPUT_CONTRACT_VERSION,
                     "resolved_model_key": (
                         getattr(target_client, "_active_binding", None).resolved_model_key
                         if getattr(target_client, "_active_binding", None)
@@ -3901,6 +3907,7 @@ class LocalTopicAnalysisService:
                 meta["evidence_citation_protocol"] = "deterministic_alias_v1"
                 meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
                 meta["micro_output_budget_policy"] = MICRO_OUTPUT_BUDGET_POLICY
+                meta["output_contract_version"] = OUTPUT_CONTRACT_VERSION
                 self._attach_attempt_log(meta)
                 if is_verified_live_single:
                     meta["provenance_verified"] = True
@@ -4480,6 +4487,7 @@ class LocalTopicAnalysisService:
         meta["evidence_citation_protocol"] = "deterministic_alias_v1"
         meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
         meta["micro_output_budget_policy"] = MICRO_OUTPUT_BUDGET_POLICY
+        meta["output_contract_version"] = OUTPUT_CONTRACT_VERSION
         self._attach_attempt_log(meta)
         meta["status"] = disc_status
         if doc_fp:

@@ -54,6 +54,7 @@ from ai.structured import (
     DEGENERATION_POLICY_STRUCTURAL,
     TOPIC_DETECTION_SCHEMA,
     TOPIC_DISCOVERY_SCHEMA,
+    TOPIC_DISCOVERY_SCHEMA_OPERATIONAL,
     validate_topic_detection_payload,
     validate_topic_discovery_payload,
 )
@@ -852,17 +853,19 @@ Instructions:
             {"role": "user", "content": user_message_content},
         ]
 
+        # Schema strict: in modalità operativa il contratto v2 (short_description non vuota, allineato al validatore).
+        output_schema = TOPIC_DISCOVERY_SCHEMA_OPERATIONAL if is_op else TOPIC_DISCOVERY_SCHEMA
         # Stima preventiva input tokens e verifica budget rispetto a context_length
         if max_tokens is None:
             max_tokens = 1024
 
-        input_est = estimate_request_input_tokens(messages, schema=TOPIC_DISCOVERY_SCHEMA)
+        input_est = estimate_request_input_tokens(messages, schema=output_schema)
         if is_op and context_length > 0:
             plan = calculate_token_budget_plan(
                 context_length=context_length,
                 messages=messages,
                 reserved_output_tokens=max_tokens,
-                schema=TOPIC_DISCOVERY_SCHEMA,
+                schema=output_schema,
             )
             if not plan.fits_in_context:
                 if plan.available_headroom < 128:
@@ -875,7 +878,7 @@ Instructions:
 
         max_attempts = 2 if is_op else 1
         current_max_tokens = max_tokens
-        current_schema = TOPIC_DISCOVERY_SCHEMA
+        current_schema = output_schema
         current_schema_strict = True
         last_error: Exception | None = None
         response = None
@@ -1107,7 +1110,7 @@ Instructions:
                         context_length=context_length,
                         messages=candidate_msgs,
                         reserved_output_tokens=reserved_out,
-                        schema=TOPIC_DISCOVERY_SCHEMA,
+                        schema=output_schema,
                     )
 
                     if cand_plan.fits_in_context and cand_plan.available_headroom >= 256:
@@ -1128,7 +1131,7 @@ Instructions:
                             context_length=context_length,
                             messages=compact_msgs,
                             reserved_output_tokens=reserved_out,
-                            schema=TOPIC_DISCOVERY_SCHEMA,
+                            schema=output_schema,
                         )
                         if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
                             messages = compact_msgs
@@ -1184,7 +1187,7 @@ Instructions:
                         else:
                             current_topics = max(2, current_topics // 2)
                             messages[0]["content"] = _make_sys_prompt(current_topics)
-                            input_est = estimate_request_input_tokens(messages, schema=TOPIC_DISCOVERY_SCHEMA)
+                            input_est = estimate_request_input_tokens(messages, schema=output_schema)
                             current_max_tokens = calculate_dynamic_output_budget(
                                 context_length=context_length,
                                 estimated_prompt_tokens=input_est,
@@ -1214,7 +1217,7 @@ Instructions:
                             context_length=context_length,
                             messages=candidate_msgs,
                             reserved_output_tokens=reserved_out,
-                            schema=TOPIC_DISCOVERY_SCHEMA,
+                            schema=output_schema,
                         )
                         if cand_plan.fits_in_context and cand_plan.available_headroom >= 256:
                             messages = candidate_msgs
@@ -1233,7 +1236,7 @@ Instructions:
                                 context_length=context_length,
                                 messages=compact_msgs,
                                 reserved_output_tokens=reserved_out,
-                                schema=TOPIC_DISCOVERY_SCHEMA,
+                                schema=output_schema,
                             )
                             if compact_plan.fits_in_context and compact_plan.available_headroom >= 256:
                                 messages = compact_msgs

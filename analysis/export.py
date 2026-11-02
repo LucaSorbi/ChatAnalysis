@@ -256,6 +256,7 @@ ALLOWED_VALIDATION_KINDS = {
     "EVIDENCE_ID_NOT_STRING", "EVIDENCE_IDS_EMPTY", "OTHER_VALIDATION",
 }
 ALLOWED_MICRO_OUTPUT_BUDGET_POLICIES = {"micro_budget_formula_v2"}
+ALLOWED_OUTPUT_CONTRACT_VERSIONS = {"discovery_contract_v2_nonempty_description"}
 ALLOWED_RESULT_ORIGINS = {"CHECKPOINT_VALIDATED", "COMPUTED_THIS_RUN", "MIXED_CHECKPOINT_AND_COMPUTED"}
 ALLOWED_HTTP_BASES = {"REQUEST_LISTENER", "NOT_AVAILABLE"}
 ALLOWED_CHECKPOINT_PERSISTENCE = {"OK", "WRITE_FAILURES", "NOT_ATTEMPTED"}
@@ -2117,6 +2118,12 @@ def build_topic_discovery_export_report(
         **(
             {"output_budget_policy": {"micro_output_budget_policy": meta.get("micro_output_budget_policy")}}
             if meta.get("micro_output_budget_policy") in ALLOWED_MICRO_OUTPUT_BUDGET_POLICIES
+            else {}
+        ),
+        # Additivo: versione del contratto di output (schema strict) usato; assente nelle run precedenti.
+        **(
+            {"output_contract": {"schema_contract_version": meta.get("output_contract_version")}}
+            if meta.get("output_contract_version") in ALLOWED_OUTPUT_CONTRACT_VERSIONS
             else {}
         ),
         # Additivo: quanti record di diagnostica sono stati registrati e quanti compaiono davvero nell'export.

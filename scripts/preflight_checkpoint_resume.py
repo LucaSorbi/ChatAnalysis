@@ -87,6 +87,7 @@ from analysis.models import (
 )
 from analysis.service import (
     MICRO_OUTPUT_BUDGET_POLICY,
+    OUTPUT_CONTRACT_VERSION,
     LocalTopicAnalysisService,
     calculate_discovery_max_tokens,
 )
@@ -3548,6 +3549,7 @@ class PreflightResumeAuditor:
                     "acceptance_policy": DEGENERATION_POLICY_STRUCTURAL,
                     # Stessa identità del servizio: la regola del budget d'uscita dei microchunk è parte della run.
                     "micro_output_budget_policy": MICRO_OUTPUT_BUDGET_POLICY,
+                    "output_contract_version": OUTPUT_CONTRACT_VERSION,
                     "resolved_model_key": self.resolved_model_key,
                     "quantization": self.quantization,
                 }
