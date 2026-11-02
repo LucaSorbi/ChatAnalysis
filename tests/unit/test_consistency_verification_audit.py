@@ -382,13 +382,13 @@ def test_unknown_run_id_and_missing_run_id_are_rejected_without_detection(monkey
     assert len(llm.detection_prompts) == n
 
 
-def test_latent_gap_characterization_same_document_id_with_changed_content_is_accepted_without_fingerprint(monkeypatch):
+def test_same_document_id_with_changed_content_is_blocked_before_any_model_call(monkeypatch):
     """
-    CARATTERIZZAZIONE di un gap LATENTE (NON corretto qui, NON causa del sintomo segnalato): per una run di Discovery
-    in memoria il service non confronta la fingerprint del documento attivo; stesso `document_id` + stessi evidence_id ma
-    contenuto diverso (reimport / arricchimento successivo) viene verificato, e la Detection non registra la fingerprint
-    del documento realmente analizzato. Se un giorno il gap verrà chiuso, questo test va aggiornato di conseguenza.
+    INVARIANTE (gap chiuso): stesso `document_id` + stessi evidence_id ma contenuto diverso (reimport / arricchimento
+    successivo) NON viene verificato: la fingerprint dello snapshot analizzato dalla Discovery e' registrata e confrontata
+    PRIMA di ogni chiamata al modello. Nessuna Detection, nessun ConsistencyResult.
     """
+    from analysis.verification import DocumentSnapshotMismatchError
     doc_v1 = _derived_doc("doc_re", "STT")
     llm = Llm(monkeypatch, disc_msg="msg_doc_re_3")
     sess: dict[str, Any] = {}
@@ -398,17 +398,17 @@ def test_latent_gap_characterization_same_document_id_with_changed_content_is_ac
     doc_v2 = ConversationEvidenceDocument(document_id="doc_re", bundles=tuple(b), source_name="whatsapp_test")
     from analysis.checkpoint import compute_document_fingerprint
     assert compute_document_fingerprint(doc_v1) != compute_document_fingerprint(doc_v2)
-    det, cons = _verify(doc_v2, res, llm, sess)  # nessuna eccezione
-    assert cons.discovery_run_id == res.metadata["run_id"]
-    assert det.metadata.get("document_fingerprint") is None
-    assert res.metadata.get("document_fingerprint") is None
+    assert res.metadata.get("document_fingerprint") == compute_document_fingerprint(doc_v1)
+    with pytest.raises(DocumentSnapshotMismatchError):
+        _verify(doc_v2, res, llm, sess)
+    assert llm.detection_prompts == []
 
 
 def test_partial_discovery_run_can_be_verified_and_consistency_does_not_record_the_source_status(monkeypatch):
     """
-    CARATTERIZZAZIONE (gap di telemetria LATENTE, non corretto): la verifica è consentita anche su topic provenienti da
-    una Discovery PARTIAL; `consistency_completeness` riguarda solo la Detection e l'export non riporta lo stato della
-    Discovery sorgente. Non è il caso dei quattro export segnalati (Discovery COMPLETE).
+    La verifica e' consentita su topic di una Discovery PARTIAL; l'export della sola Detection (manuale/associata) non
+    riporta lo stato della Discovery sorgente: quello e' il compito del rapporto di verifica associata
+    (vedi test_semantic_verification_report.py). Qui si fissa che il formato storico resta invariato.
     """
     doc = _derived_doc("doc_part", "OCR", at=10, n=12)
 
