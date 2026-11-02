@@ -48,7 +48,7 @@ from ai.serializer import (
     serialize_document_compact_jsonl,
     serialize_document_for_llm,
 )
-from ai.json_failure import finish_reason_kind
+from ai.json_failure import VALIDATION_KINDS, finish_reason_kind
 from ai.structured import (
     DEGENERATION_POLICY_HISTORICAL,
     DEGENERATION_POLICY_STRUCTURAL,
@@ -667,7 +667,14 @@ def _attempt_outcome(exc: BaseException) -> str:
     return "OTHER"
 
 
-def _attempt_entry(outcome: str, attempt_no: int, max_tokens_requested: int | None, resp: Any, exc: BaseException | None) -> dict[str, Any]:
+def _attempt_entry(
+    outcome: str,
+    attempt_no: int,
+    max_tokens_requested: int | None,
+    resp: Any,
+    exc: BaseException | None,
+    max_topics_requested: int | None = None,
+) -> dict[str, Any]:
     """Voce di telemetria per UN tentativo: interi ed enum chiusi. Mai testo, hash o finestre di risposta."""
     fr = getattr(exc, "finish_reason", None) if exc is not None else None
     raw = getattr(resp, "raw_response", None) if resp is not None else None
@@ -679,6 +686,8 @@ def _attempt_entry(outcome: str, attempt_no: int, max_tokens_requested: int | No
     jf = getattr(exc, "json_failure", None) if exc is not None else None
     content = getattr(resp, "content", None) if resp is not None else None
     chars = len(content) if isinstance(content, str) else (jf.get("response_chars") if isinstance(jf, Mapping) else None)
+    vk = getattr(exc, "validation_kind", None) if exc is not None else None
+    tr = getattr(exc, "topics_returned", None) if exc is not None else None
     entry: dict[str, Any] = {
         "attempt": int(attempt_no),
         "outcome": outcome,
@@ -687,6 +696,10 @@ def _attempt_entry(outcome: str, attempt_no: int, max_tokens_requested: int | No
         "finish_reason_kind": finish_reason_kind(fr) if (resp is not None or fr is not None) else "MISSING",
         "completion_tokens": int(tokens) if isinstance(tokens, (int, float)) and not isinstance(tokens, bool) and tokens >= 0 else None,
         "response_chars": int(chars) if isinstance(chars, int) else None,
+        # Solo per OTHER_STRUCTURED: causa della validazione in enum chiuso (None se non determinabile: mai inventata).
+        "validation_kind": (vk if vk in VALIDATION_KINDS else "OTHER_VALIDATION") if (vk is not None and outcome == "OTHER_STRUCTURED") else None,
+        "limit_requested": int(max_topics_requested) if isinstance(max_topics_requested, int) and not isinstance(max_topics_requested, bool) else None,
+        "returned_count": int(tr) if isinstance(tr, int) and not isinstance(tr, bool) and tr >= 0 and vk == "TOPIC_COUNT_EXCEEDS_LIMIT" and outcome == "OTHER_STRUCTURED" else None,
     }
     for k in _JSON_FAILURE_KEYS:
         entry[k] = jf.get(k) if isinstance(jf, Mapping) else None
@@ -880,6 +893,7 @@ Instructions:
             attempt_used = attempt
             resp_this_attempt = None
             used_max_tokens = current_max_tokens
+            used_topics = current_topics
             try:
                 call_kwargs = {
                     "messages": messages,
@@ -943,7 +957,7 @@ Instructions:
                     if s.text and s.text.strip() and s.text.strip() != "<Media omessi>" and "crittografati end-to-end" not in s.text
                 )
                 if len(discovered) == 0 and is_op and substantive_sec_count >= 3 and attempt + 1 < max_attempts:
-                    attempt_log.append(_attempt_entry("EMPTY_TOPICS", attempt + 1, used_max_tokens, resp_this_attempt, None))
+                    attempt_log.append(_attempt_entry("EMPTY_TOPICS", attempt + 1, used_max_tokens, resp_this_attempt, None, current_topics))
                     if on_retry_callback:
                         try:
                             on_retry_callback("empty_topic_outcome", attempt + 1)
@@ -964,14 +978,14 @@ Instructions:
                     ]
                     continue
 
-                attempt_log.append(_attempt_entry("OK", attempt + 1, used_max_tokens, resp_this_attempt, None))
+                attempt_log.append(_attempt_entry("OK", attempt + 1, used_max_tokens, resp_this_attempt, None, current_topics))
                 last_error = None
                 break
 
             except Exception as exc:
                 last_error = exc
                 try:
-                    attempt_log.append(_attempt_entry(_attempt_outcome(exc), attempt + 1, used_max_tokens, resp_this_attempt, exc))
+                    attempt_log.append(_attempt_entry(_attempt_outcome(exc), attempt + 1, used_max_tokens, resp_this_attempt, exc, used_topics))
                     setattr(exc, "attempt_telemetry", tuple(attempt_log))
                     setattr(exc, "llm_calls", int(calls_issued))
                 except Exception:

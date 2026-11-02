@@ -250,6 +250,12 @@ ALLOWED_JSON_FAILURE_KINDS = {
     "EMPTY_RESPONSE", "UNTERMINATED_STRING", "EXPECTING_VALUE", "EXPECTING_DELIMITER", "EXTRA_DATA",
     "INVALID_ESCAPE", "INVALID_CONTROL_CHAR", "NOT_AN_OBJECT", "OTHER_SYNTAX",
 }
+ALLOWED_VALIDATION_KINDS = {
+    "TOP_KEYS_MISMATCH", "TOPICS_NOT_LIST", "TOPIC_COUNT_EXCEEDS_LIMIT", "TOPIC_NOT_OBJECT", "TOPIC_KEYS_MISMATCH",
+    "LABEL_INVALID", "DESCRIPTION_INVALID", "EVIDENCE_IDS_NOT_LIST", "EVIDENCE_IDS_DUPLICATED",
+    "EVIDENCE_ID_NOT_STRING", "EVIDENCE_IDS_EMPTY", "OTHER_VALIDATION",
+}
+ALLOWED_MICRO_OUTPUT_BUDGET_POLICIES = {"micro_budget_formula_v2"}
 ALLOWED_RESULT_ORIGINS = {"CHECKPOINT_VALIDATED", "COMPUTED_THIS_RUN", "MIXED_CHECKPOINT_AND_COMPUTED"}
 ALLOWED_HTTP_BASES = {"REQUEST_LISTENER", "NOT_AVAILABLE"}
 ALLOWED_CHECKPOINT_PERSISTENCE = {"OK", "WRITE_FAILURES", "NOT_ATTEMPTED"}
@@ -785,6 +791,7 @@ def sanitize_attempt_log_row(raw: Any) -> dict[str, Any] | None:
     jk = raw.get("json_failure_kind")
     outcome = raw.get("outcome")
     fr = raw.get("finish_reason_kind")
+    vk = raw.get("validation_kind")
     return {
         "seq": _int("seq"),
         "level": level if level in ALLOWED_ATTEMPT_LEVELS else None,
@@ -807,6 +814,10 @@ def sanitize_attempt_log_row(raw: Any) -> dict[str, Any] | None:
         "json_error_line": _int("json_error_line"),
         "json_error_col": _int("json_error_col"),
         "json_error_at_end": _bool("json_error_at_end"),
+        # Solo per OTHER_STRUCTURED: causa della validazione in enum chiuso; mai testo.
+        "validation_kind": (vk if vk in ALLOWED_VALIDATION_KINDS else "OTHER_VALIDATION") if vk is not None else None,
+        "limit_requested": _int("limit_requested"),
+        "returned_count": _int("returned_count"),
     }
 
 
@@ -2100,6 +2111,12 @@ def build_topic_discovery_export_report(
         **(
             {"analysis_policy": {"acceptance_policy": meta.get("acceptance_policy")}}
             if meta.get("acceptance_policy") in ALLOWED_ACCEPTANCE_POLICIES
+            else {}
+        ),
+        # Additivo: regola del budget d'uscita dei microchunk (assente nelle run create con i tetti fissi 640/448).
+        **(
+            {"output_budget_policy": {"micro_output_budget_policy": meta.get("micro_output_budget_policy")}}
+            if meta.get("micro_output_budget_policy") in ALLOWED_MICRO_OUTPUT_BUDGET_POLICIES
             else {}
         ),
         # Additivo: quanti record di diagnostica sono stati registrati e quanti compaiono davvero nell'export.

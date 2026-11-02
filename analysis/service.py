@@ -330,6 +330,14 @@ def _outcome_llm_calls(outcome: Any) -> tuple[int | None, int]:
 
 ATTEMPT_LOG_CAP = 256  # righe di telemetria per run (interi/enum): oltre il tetto si conta soltanto
 
+# Versione della regola che fissa il budget d'USCITA delle chiamate di microchunk/bisezione di Topic Discovery.
+# - storica (non più scritta): tetti fissi 640 (depth 0) / 448 (depth>0), indipendenti dal numero di topic richiesti;
+# - "micro_budget_formula_v2": min(max_tokens dell'utente, topic*120+256) del NODO (stessa regola usata da retry e
+#   dimezzamenti in ai/topics.py), poi sempre ridotto all'headroom reale del contesto o rifiutato (AnalysisInputTooLarge).
+# È parte dell'identità della run (config fingerprint) e dell'export: i checkpoint creati con i tetti storici NON sono
+# riusabili in silenzio.
+MICRO_OUTPUT_BUDGET_POLICY = "micro_budget_formula_v2"
+
 
 class _DetectionSplitPartial(Exception):
     """Controllo di flusso interno: split Detection concluso con copertura incompleta."""
@@ -362,6 +370,18 @@ def calculate_discovery_max_tokens(
         if user_max_tokens is not None and user_max_tokens > 512:
             return min(user_max_tokens, max_safe)
         return max(1024, min(needed, max_safe))
+
+
+def calculate_micro_output_budget(max_topics: int, user_max_tokens: int | None) -> int:
+    """
+    Budget d'uscita di UNA chiamata di microchunk/bisezione: topic*120+256 (stessa regola del dimensionamento dei retry
+    in ai/topics.py), mai oltre il `max_tokens` scelto dall'utente. L'adeguamento all'headroom del contesto resta in
+    `TopicDiscoveryAnalyzer.discover_topics` (riduzione oppure `AnalysisInputTooLargeError`: nessun troncamento a sorpresa).
+    """
+    needed = int(max_topics) * 120 + 256
+    if isinstance(user_max_tokens, int) and not isinstance(user_max_tokens, bool) and user_max_tokens > 0:
+        return min(user_max_tokens, needed)
+    return needed
 
 
 class LocalTopicAnalysisService:
@@ -1751,6 +1771,7 @@ class LocalTopicAnalysisService:
                 "attempt", "outcome", "response_received", "max_tokens_requested", "finish_reason_kind",
                 "completion_tokens", "response_chars", "json_failure_kind", "json_error_offset",
                 "json_error_line", "json_error_col", "json_error_at_end",
+                "validation_kind", "limit_requested", "returned_count",
             )
             if isinstance(att, Mapping):
                 row.update({k: att.get(k) for k in fields})
@@ -1807,7 +1828,7 @@ class LocalTopicAnalysisService:
             tracker.record_retry(f"sub_d{depth}:{r}")
 
         micro_target_topics = min(chunk_target_topics, max(2, min(5, len(sub.bundles))))
-        micro_max_tokens = min(eff_max_tokens or self.default_max_tokens or 640, 640 if depth == 0 else 448)
+        micro_max_tokens = calculate_micro_output_budget(micro_target_topics, eff_max_tokens or self.default_max_tokens)
         try:
             res = self._discover_logged(
                 analyzer, sub,
@@ -3408,6 +3429,9 @@ class LocalTopicAnalysisService:
                     # Policy di accettazione (comportamentale): fa parte dell'identità della run, quindi i checkpoint
                     # creati con la policy storica (v1) NON vengono riusati con la v2.
                     "acceptance_policy": DEGENERATION_POLICY_STRUCTURAL,
+                    # Regola del budget d'uscita dei microchunk (anch'essa comportamentale): checkpoint creati con i
+                    # vecchi tetti fissi 640/448 NON vengono riusati.
+                    "micro_output_budget_policy": MICRO_OUTPUT_BUDGET_POLICY,
                     "resolved_model_key": (
                         getattr(target_client, "_active_binding", None).resolved_model_key
                         if getattr(target_client, "_active_binding", None)
@@ -3876,6 +3900,7 @@ class LocalTopicAnalysisService:
                 meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
                 meta["evidence_citation_protocol"] = "deterministic_alias_v1"
                 meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
+                meta["micro_output_budget_policy"] = MICRO_OUTPUT_BUDGET_POLICY
                 self._attach_attempt_log(meta)
                 if is_verified_live_single:
                     meta["provenance_verified"] = True
@@ -4454,6 +4479,7 @@ class LocalTopicAnalysisService:
         meta["unanalyzed_evidence_count"] = max(0, int(total_evidence_count - len(analyzed_evidence_ids)))
         meta["evidence_citation_protocol"] = "deterministic_alias_v1"
         meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
+        meta["micro_output_budget_policy"] = MICRO_OUTPUT_BUDGET_POLICY
         self._attach_attempt_log(meta)
         meta["status"] = disc_status
         if doc_fp:
