@@ -14,7 +14,7 @@ Piattaforma forense accademica e investigativa per l'acquisizione, normalizzazio
 - **`multimodal/`**: Trascrizione audio locale (`faster-whisper`), OCR (`pytesseract`/`Pillow`), descrizioni visuali e `MediaAssetRegistry` scoped alla sessione.
 - **`search/`**: Motore di ricerca full-text e BM25 per sezioni di evidenza forense con indicizzazione RAM ONE-TIME per conversazione.
 - **`ai/`**: Integrazione controllata con LLM locali su LM Studio (Qwen2.5 7B, Llama 3.1 8B, DeepSeek-R1-Distill) vincolata a loopback security e contratti di binding positivi.
-- **`analysis/`**: Servizi di Topic Detection, Topic Discovery euristico e Prova del Nove (`verify_discovered_topic` con `ConsistencyService`).
+- **`analysis/`**: Servizi di Topic Detection, Topic Discovery euristico e verifica di consistenza semantica indipendente (`verify_discovered_topic` con `ConsistencyService`; guida: [`docs/VERIFICA_CONSISTENZA_SEMANTICA_INDIPENDENTE.md`](docs/VERIFICA_CONSISTENZA_SEMANTICA_INDIPENDENTE.md)).
 - **`ui/`**: Interfaccia Streamlit disaccoppiata e reattiva con isolamento delle sessioni e ciclo di vita transazionale dei dataset.
 
 ---
