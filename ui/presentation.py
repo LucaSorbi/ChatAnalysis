@@ -48,6 +48,17 @@ from pathlib import Path
 
 from ai.models import TopicDecision, TopicDetectionResult, TopicDiscoveryResult
 from analysis.models import ConsistencyStatus, OperationalProfile, resolve_operational_profile
+from analysis.export import SemanticVerificationExportError
+from analysis.verification import DocumentSnapshotMismatchError
+from ui.verification import (
+    BLOCK_MESSAGES,
+    describe_export_error,
+    describe_verification_outcome,
+    evaluate_verification_preconditions,
+    export_semantic_verification_json,
+    find_discovery_run,
+    select_verification_results,
+)
 from analysis.checkpoint import AnalysisCheckpointStore
 from search.models import MatchMode
 from search.service import SearchService
@@ -1654,13 +1665,31 @@ def render_topics() -> None:
                                 disabled=True,
                             )
 
-                # Pulsante: Verifica con Topic Detection (Prova del Nove)
+                # Verifica di consistenza semantica indipendente (decisioni e testi: ui/verification.py)
+                card_run_id = hit.metadata.get("run_id")
+                source_run = find_discovery_run(
+                    card_run_id,
+                    doc.document_id if doc is not None else "",
+                    list(doc_analysis.discovery_runs) + list(state.get_discovery_results()),
+                )
+                pre = evaluate_verification_preconditions(
+                    doc, source_run, topic_provenance_document_id=hit.metadata.get("provenance_document_id")
+                )
                 verify_col, _ = st.columns([2, 3])
                 with verify_col:
                     verify_btn = st.button(
                         "🔬 Verifica con Topic Detection",
                         key=f"verify_disc_topic_{idx}_{hit.topic_id}",
+                        disabled=not pre.can_verify,
+                        help=(
+                            "Seconda inferenza indipendente: la Detection riceve etichetta e descrizione del topic, "
+                            "mai le evidenze della Discovery."
+                        ),
                     )
+                if not pre.can_verify and pre.block_message:
+                    st.caption(f"🚫 {pre.block_message}")
+                for warn_txt in pre.warnings:
+                    st.caption(f"ℹ️ {warn_txt}")
 
                 if verify_btn:
                     if doc is None:
@@ -1680,14 +1709,14 @@ def render_topics() -> None:
                             client = state.get_lm_studio_client()
                             raw_model = state.get_lm_studio_model() or DEFAULT_OPERATIONAL_MODEL
                             progress_placeholder = st.empty()
-                            prog_cb = create_streamlit_progress_callback(progress_placeholder, title="VERIFICA PROVA DEL NOVE IN CORSO")
+                            prog_cb = create_streamlit_progress_callback(progress_placeholder, title="VERIFICA DI CONSISTENZA SEMANTICA IN CORSO")
                             try:
                                 progress_placeholder.info("Preparazione seconda inferenza indipendente...")
-                                with st.spinner("Seconda inferenza indipendente (Prova del Nove) in corso..."):
+                                with st.spinner("Seconda inferenza indipendente in corso..."):
                                     det_res, consistency_res = execute_discovery_verification(
                                         document=doc,
                                         discovered_topic=hit.raw_result,
-                                        discovery_run_id=hit.metadata.get("run_id"),
+                                        discovery_run_id=card_run_id,
                                         client=client,
                                         model_id=raw_model,
                                         progress_callback=prog_cb,
@@ -1706,9 +1735,17 @@ def render_topics() -> None:
                                 elif consistency_res.status == ConsistencyStatus.PARTIALLY_CONSISTENT:
                                     st.info(f"Topic '{hit.label}' verificato! Esito: PRESENT (PARZIALMENTE COERENTE su evidenze distinte)")
                                 elif consistency_res.status == ConsistencyStatus.DISCREPANCY_ABSENT:
-                                    st.warning(f"⚠️ DISCREPANZA: Topic '{hit.label}' valutato ABSENT in Topic Detection")
+                                    st.warning(
+                                        f"⚠️ DISCREPANZA: Discovery ha identificato il topic '{hit.label}'; la Detection indipendente "
+                                        "non lo ha rilevato (ABSENT). Non è un errore di esecuzione né una prova di assenza."
+                                    )
                                 else:
-                                    st.warning(f"⚠️ INCERTO: Topic '{hit.label}' valutato UNCERTAIN in Topic Detection")
+                                    st.warning(
+                                        f"🟡 INCERTO: la Detection indipendente è rimasta incerta (UNCERTAIN) sul topic '{hit.label}'."
+                                    )
+                            except DocumentSnapshotMismatchError:
+                                progress_placeholder.empty()
+                                st.error(BLOCK_MESSAGES["SNAPSHOT_MISMATCH"])
                             except LmStudioUnavailableError:
                                 progress_placeholder.empty()
                                 st.error("LM Studio non raggiungibile su http://127.0.0.1:1234. Verificare che il server locale sia attivo.")
@@ -1719,28 +1756,24 @@ def render_topics() -> None:
                                 progress_placeholder.empty()
                                 st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}: {exc}")
 
-                # Visualizzazione dell'esito di verifica e consistency
-                target_run_id = hit.metadata.get("run_id")
-                cons_list = [
-                    c for c in state.get_consistency_results(doc.document_id)
-                    if c.topic_label.strip().casefold() == hit.label.strip().casefold()
-                    and (target_run_id is None or c.metadata.get("discovery_run_id") == target_run_id or c.metadata.get("discovery_run_id") is None)
-                ]
-                if cons_list:
-                    latest_cons = cons_list[-1]
+                # Esito della verifica di QUESTO topic in QUESTA run (identità: run + UID del topic, mai la label)
+                topic_verifications = (
+                    select_verification_results(
+                        state.get_consistency_results(doc.document_id), doc.document_id, card_run_id, hit.raw_result
+                    )
+                    if doc is not None else ()
+                )
+                if topic_verifications:
+                    latest_cons = topic_verifications[-1]
+                    outcome = describe_verification_outcome(latest_cons)
                     with st.container(border=True):
-                        if latest_cons.status == ConsistencyStatus.CONSISTENT:
-                            badge_str = "✅ COERENTE"
-                        elif latest_cons.status == ConsistencyStatus.PARTIALLY_CONSISTENT:
-                            badge_str = "🔵 PARZIALMENTE COERENTE"
-                        elif latest_cons.status == ConsistencyStatus.DISCREPANCY_ABSENT:
-                            badge_str = "⚠️ DISCREPANZA (ABSENT)"
-                        else:
-                            badge_str = "🟡 INCERTO (UNCERTAIN)"
-
-                        st.markdown(f"#### 🔬 Risultato Verifica Indipendente: {badge_str}")
+                        st.markdown(f"#### 🔬 Risultato Verifica Indipendente: {outcome.badge}")
                         st.markdown(f"**Consistency status:** `{latest_cons.status.value}`")
+                        st.info(outcome.headline)
+                        st.caption(outcome.execution_origin_label)
                         st.info(f"**Valutazione Consistenza:** {latest_cons.rationale}")
+                        for note_txt in outcome.notes:
+                            st.caption(f"• {note_txt}")
 
                         c_d1, c_d2 = st.columns(2)
                         with c_d1:
@@ -1754,6 +1787,26 @@ def render_topics() -> None:
 
                         overlap_str = ", ".join(latest_cons.overlap_evidence_ids) if latest_cons.overlap_evidence_ids else "Nessuna evidenza in comune"
                         st.caption(f"Evidenze condivise in overlap: `{overlap_str}`")
+                        st.caption(f"Verifiche eseguite per questo topic in questa run: {len(topic_verifications)} (mostrata l'ultima).")
+
+                        # Esportazione del rapporto di verifica (SAFE_REDACTED): nessuna chiamata al modello
+                        try:
+                            verif_json, verif_filename = export_semantic_verification_json(latest_cons, doc)
+                        except SemanticVerificationExportError as exp_err:
+                            st.error(f"Esportazione non disponibile: {describe_export_error(str(exp_err))}")
+                        except Exception as exp_exc:
+                            st.error(f"Esportazione non disponibile: {type(exp_exc).__name__}")
+                        else:
+                            st.download_button(
+                                "⬇️ Esporta verifica JSON (SAFE_REDACTED)",
+                                data=verif_json,
+                                file_name=verif_filename,
+                                mime="application/json",
+                                key=f"export_verification_{idx}_{latest_cons.detection_run_id}",
+                            )
+                        st.caption(
+                            "I risultati restano in memoria solo finché la sessione è attiva: esporta il JSON per conservare la verifica."
+                        )
 
                 # Controllo correlazione se esiste una detection manuale separata per questo topic
                 doc_analysis = state.get_document_analysis_state(doc.document_id)
