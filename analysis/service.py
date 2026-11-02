@@ -15,6 +15,7 @@ Principi architetturali:
 """
 from __future__ import annotations
 
+from dataclasses import replace as dataclasses_replace
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -72,6 +73,13 @@ from analysis.progress import (
     AnalysisProgressTracker,
 )
 from analysis.export import get_git_commit
+from analysis.verification import (
+    DocumentSnapshotMismatchError,
+    SnapshotStatus,
+    check_document_snapshot,
+    compute_discovered_topic_uid,
+    derive_execution_origin,
+)
 from analysis.checkpoint import (
     AnalysisCheckpointStore,
     CheckpointSaveError,
@@ -3923,6 +3931,7 @@ class LocalTopicAnalysisService:
                 meta["acceptance_policy"] = DEGENERATION_POLICY_STRUCTURAL
                 meta["micro_output_budget_policy"] = MICRO_OUTPUT_BUDGET_POLICY
                 meta["output_contract_version"] = OUTPUT_CONTRACT_VERSION
+                meta["document_fingerprint"] = doc_fp or compute_document_fingerprint(document)
                 self._attach_attempt_log(meta)
                 if is_verified_live_single:
                     meta["provenance_verified"] = True
@@ -4505,8 +4514,8 @@ class LocalTopicAnalysisService:
         meta["output_contract_version"] = OUTPUT_CONTRACT_VERSION
         self._attach_attempt_log(meta)
         meta["status"] = disc_status
-        if doc_fp:
-            meta["document_fingerprint"] = doc_fp
+        # Snapshot realmente analizzato: registrato SEMPRE (anche senza checkpoint) per il controllo di equivalenza in verifica.
+        meta["document_fingerprint"] = doc_fp or compute_document_fingerprint(document)
         if cfg_fp:
             meta["config_fingerprint"] = cfg_fp
         meta["max_topics"] = eff_max_topics
@@ -5065,6 +5074,16 @@ class LocalTopicAnalysisService:
         elif is_recovered:
             self._authenticate_recovered_discovery_run_for_verification(document, registered_run, eff_discovery_run_id)
 
+        # Identità dello SNAPSHOT: la Detection deve analizzare lo stesso contenuto (testo, evidence_id, sezioni STT/OCR)
+        # analizzato dalla Discovery. Contenuto diverso a parità di document_id => blocco PRIMA di qualsiasi chiamata al modello.
+        snapshot_check = check_document_snapshot(registered_run.metadata, document)
+        if snapshot_check.status == SnapshotStatus.MISMATCH:
+            raise DocumentSnapshotMismatchError(
+                f"Il documento attivo ha un contenuto diverso da quello analizzato dalla Discovery '{eff_discovery_run_id}' "
+                "(fingerprint differente: reimport o arricchimento STT/OCR successivo). "
+                "Verifica bloccata: rieseguire la Topic Discovery sul documento attuale."
+            )
+
         # Verifica obbligatoria che il topic appartenga alla run registrata con identità positiva completa
         matching_in_run = [
             t for t in registered_run.topics
@@ -5075,7 +5094,13 @@ class LocalTopicAnalysisService:
                 f"Topic '{actual_topic.label}' non appartiene alla run di discovery registrata '{eff_discovery_run_id}'."
             )
 
-        reg_topic = matching_in_run[0]
+        # Identità POSITIVA per contenuto (label + descrizione + evidence_id): topic omonimi nella stessa run non si confondono.
+        exact_in_run = [
+            t for t in matching_in_run
+            if t.short_description.strip() == actual_topic.short_description.strip()
+            and tuple(t.evidence_ids) == tuple(actual_topic.evidence_ids)
+        ]
+        reg_topic = exact_in_run[0] if exact_in_run else matching_in_run[0]
 
         # Validazione rigorosa dell'identità del topic: short_description ed evidence_ids
         # Rifiuta topic con stessa label ma descrizione o evidence_id alterati
@@ -5140,6 +5165,7 @@ class LocalTopicAnalysisService:
         det_meta["verified_discovery_run_id"] = eff_discovery_run_id
         det_meta["input_label"] = actual_topic.label
         det_meta["input_description"] = actual_topic.short_description
+        det_meta["document_fingerprint"] = snapshot_check.active_fingerprint
         det_result = TopicDetectionResult(
             topic=det_result.topic,
             decision=det_result.decision,
@@ -5162,6 +5188,25 @@ class LocalTopicAnalysisService:
             discovery_run_id=eff_discovery_run_id,
             detection_run_id=det_run_id,
         )
+
+        # Contesto di verifica registrato nella stessa ConsistencyResult (fonte unica per UI ed export).
+        # Il confronto resta quello di ConsistencyService: qui si AGGIUNGONO soltanto identità e provenienza.
+        run_meta = registered_run.metadata if isinstance(registered_run.metadata, Mapping) else {}
+        verification_context = {
+            "discovery_topic_uid": compute_discovered_topic_uid(eff_discovery_run_id, reg_topic),
+            "discovery_status": str(run_meta.get("status") or "NOT_RECORDED"),
+            "discovery_origin": str(run_meta.get("origin") or "NOT_RECORDED"),
+            "discovery_total_evidence_count": run_meta.get("total_evidence_count"),
+            "discovery_analyzed_evidence_count": run_meta.get("analyzed_evidence_count"),
+            "discovery_completed_chunk_count": run_meta.get("completed_chunk_count"),
+            "discovery_chunk_count": run_meta.get("chunk_count"),
+            "snapshot_status": snapshot_check.status.value,
+            "discovery_document_fingerprint": snapshot_check.discovery_fingerprint,
+            "detection_document_fingerprint": snapshot_check.active_fingerprint,
+            "query_has_description": bool(query.description.strip()),
+            "detection_execution_origin": derive_execution_origin(det_result.metadata).value,
+        }
+        consistency = dataclasses_replace(consistency, metadata={**consistency.metadata, **verification_context})
 
         return det_result, consistency
 
