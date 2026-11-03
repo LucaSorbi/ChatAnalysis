@@ -1462,6 +1462,7 @@ class LmStudioClient(BaseLocalLlmClient):
         timeout_seconds: float = 240.0,
         required_quantization: str | None = None,
         allow_fallback_quantization: bool = False,
+        flash_attention: bool | None = None,
         **kwargs: Any,
     ) -> ModelLoadResult:
         """
@@ -1480,11 +1481,13 @@ class LmStudioClient(BaseLocalLlmClient):
         """
         _validate_loopback_url(self.base_url)
         url = f"{self.base_url}/api/v1/models/load"
-        payload = {
+        payload: dict[str, Any] = {
             "model": model_id,
             "context_length": context_length,
             "echo_load_config": True,
         }
+        if flash_attention is not None:
+            payload["flash_attention"] = bool(flash_attention)
         req_data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=req_data, headers=self._get_headers(), method="POST")
 
@@ -1831,7 +1834,26 @@ class LmStudioClient(BaseLocalLlmClient):
             allow_fallback_quantization=allow_fb,
         )
 
-        if res_meta.is_loaded:
+        matched_nm = next((nm for nm in native_models if nm.key == res_meta.model_key), None)
+        force_disable_flash_attn: bool | None = kwargs.get("flash_attention")
+        has_loaded_flash_attn_true = False
+        if matched_nm is not None:
+            for inst_obj in matched_nm.loaded_instances:
+                if isinstance(inst_obj, Mapping):
+                    cfg_obj = inst_obj.get("config")
+                    if isinstance(cfg_obj, Mapping) and cfg_obj.get("flash_attention") is True:
+                        has_loaded_flash_attn_true = True
+                        break
+            if (
+                force_disable_flash_attn is None
+                and getattr(matched_nm, "quantization_evidence_source", None) == "SERVER_API_QUANTIZATION_OBJECT"
+            ):
+                force_disable_flash_attn = False
+
+        if res_meta.is_loaded and has_loaded_flash_attn_true and force_disable_flash_attn is not True:
+            self.unload_model(res_meta.instance_id or res_meta.model_key, timeout_seconds=30.0)
+            force_disable_flash_attn = False
+        elif res_meta.is_loaded:
             active_id = res_meta.instance_id or res_meta.model_key
             self.model_id = active_id
             self._loaded_instance_id = res_meta.instance_id
@@ -1861,6 +1883,7 @@ class LmStudioClient(BaseLocalLlmClient):
             timeout_seconds=timeout_seconds,
             required_quantization=req_quant,
             allow_fallback_quantization=allow_fb,
+            flash_attention=force_disable_flash_attn,
             quantization=res_meta.quantization,
             quantization_evidence_source=res_meta.quantization_evidence_source,
         )

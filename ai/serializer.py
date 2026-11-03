@@ -21,6 +21,8 @@ Principi di sicurezza e forensi:
 from __future__ import annotations
 
 import json
+import re
+import unicodedata
 from typing import Any, Mapping
 
 from ai.models import (
@@ -28,7 +30,75 @@ from ai.models import (
     ConversationEvidenceDocument,
     EvidenceTranslationResult,
 )
-from multimodal.evidence import TextEvidenceSection
+from multimodal.evidence import EvidenceSourceType, TextEvidenceSection
+
+_MEDIA_PLACEHOLDER_EXACT: frozenset[str] = frozenset({
+    "<media omessi>",
+    "<audio omesso>",
+    "<immagine omessa>",
+    "<video omesso>",
+    "<sticker omesso>",
+    "<documento omesso>",
+    "media omessi",
+    "image omitted",
+    "audio omitted",
+    "video omitted",
+})
+
+_MEDIA_ATTACHMENT_FILENAME_RE = re.compile(
+    r"^\s*(?:"
+    r"(?:IMG|PTT|AUD|VID|DOC|STK)[-_]\d{8}[-_]WA\d+\.[a-z0-9]{2,5}(?:\s*\((?:file allegato|allegato)\))?"
+    r"|[\w.\-]+\.(?:opus|ogg|mp3|m4a|wav|jpg|jpeg|png|webp|mp4|pdf)\s*\((?:file allegato|allegato)\)"
+    r")\s*$",
+    re.IGNORECASE,
+)
+
+_PHATIC_VOCABULARY: frozenset[str] = frozenset({
+    "ciao", "ehi", "ehila", "hey", "salve", "buongiorno", "buonasera", "buonanotte",
+    "come", "stai", "va", "tutto", "bene", "benissimo", "ok", "okay", "perfetto",
+    "tranquillo", "tranquilla", "grazie", "mille", "anche", "a", "te", "voi",
+    "buona", "buon", "giornata", "serata", "lavoro", "allora", "presto",
+    "ci", "vediamo", "sentiamo", "aggiorniamo", "domani", "dopo", "piu", "tardi",
+    "stasera", "mattina", "un", "abbraccio", "saluto", "saluti", "bacio", "baci",
+    "si", "no", "certo", "dai", "ahah", "ahahah", "ahahahah", "haha", "hahaha",
+    "fantastico", "fantastica", "cara", "caro", "figurati", "ricevuto",
+    "benone", "ottimo", "grande", "marco", "giulia", "anna", "francesca",
+    "paolo", "bea", "beatrice", "simone", "luca", "sara", "elena", "davide", "matteo",
+    "chiara", "andrea", "federico", "marta", "martina", "alessia", "lorenzo",
+})
+
+
+def is_media_placeholder_text(text: str | None) -> bool:
+    """Restituisce True se il testo è un mero placeholder di media omesso o nome file allegato privo di contenuto."""
+    if not text:
+        return True
+    stripped = text.strip()
+    if not stripped:
+        return True
+    low = stripped.casefold()
+    if low in _MEDIA_PLACEHOLDER_EXACT:
+        return True
+    if "crittografati end-to-end" in low:
+        return True
+    if _MEDIA_ATTACHMENT_FILENAME_RE.match(stripped):
+        return True
+    return False
+
+
+def is_phatic_greeting_text(text: str | None) -> bool:
+    """Restituisce True se il messaggio consiste esclusivamente in saluti, cortesie fàtiche o congedi brevi."""
+    if not text:
+        return False
+    stripped = text.strip()
+    if not stripped or len(stripped) > 75:
+        return False
+    if is_media_placeholder_text(stripped):
+        return False
+    norm = unicodedata.normalize("NFKD", stripped).encode("ascii", "ignore").decode("ascii").casefold()
+    tokens = re.findall(r"[a-z0-9]+", norm)
+    if not tokens or len(tokens) > 9:
+        return False
+    return all(tok in _PHATIC_VOCABULARY for tok in tokens)
 
 EVIDENCE_DATA_START_DELIMITER = "=== BEGIN FORENSIC EVIDENCE DATA (UNTRUSTED RAW JSON) ==="
 EVIDENCE_DATA_END_DELIMITER = "=== END FORENSIC EVIDENCE DATA ==="
@@ -264,6 +334,10 @@ def serialize_document_compact_jsonl(
         sender = evidence_to_sender.get(section.evidence_id)
         if sender:
             record["sender"] = sender
+        if section.source_type != EvidenceSourceType.ORIGINAL_TEXT:
+            record["source_type"] = section.source_type.value
+        elif is_media_placeholder_text(content):
+            record["media_placeholder"] = True
         record["text"] = content
 
         # Serializzazione compatta a riga singola con escaping JSON sicuro
