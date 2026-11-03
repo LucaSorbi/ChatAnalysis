@@ -1206,10 +1206,12 @@ Instructions:
                     if cat == "CONTEXT_OVERFLOW":
                         raise
                     if cat == "INFERENCE_BACKEND_ERROR":
-                        if len(document.bundles) > 3:
-                            # Su blocchi più grandi rilanciamo affinché lo scheduler di microchunking possa bisezionare
+                        if len(document.bundles) > 8:
+                            # Su blocchi grandi rilanciamo affinché lo scheduler di microchunking possa bisezionare
                             raise
-                        # Su sotto-blocchi minimi (<= 3 messaggi) tentiamo un retry vincolato con budget compatto e seed incrementato
+                        # GBNF crash fallback: su retry aggiriamo il parser GBNF C++ di llama.cpp
+                        # impostando current_schema = None e fornendo la direttiva di compatibilità JSON
+                        current_schema = None
                         current_topics = max(2, min(current_topics, 2))
                         current_max_tokens = min(current_max_tokens or 384, 384)
                         seed = (seed + 1) if seed is not None else 43
@@ -1220,14 +1222,17 @@ Instructions:
                                 "role": "user",
                                 "content": (
                                     f"{orig_u}\n\n"
-                                    "IMPORTANT: Extract at most 2 concise topics. Keep each short_description under 15 words "
-                                    "and list each evidence_id AT MOST ONCE (no duplicates)."
+                                    "[CRITICAL FORMAT DIRECTIVE - LM STUDIO COMPATIBILITY]\n"
+                                    "Output ONLY a valid JSON object starting with { and ending with } conforming to schema:\n"
+                                    '{"topics": [{"label": "string in natural Italian", "short_description": "string in Italian", "evidence_ids": ["alias"]}]}\n'
+                                    "Do NOT output markdown fences, greetings, or text outside the JSON object. "
+                                    "Keep short_description under 15 words and list each evidence_id AT MOST ONCE."
                                 ),
                             },
                         ]
                         if on_retry_callback:
                             try:
-                                on_retry_callback(attempt + 1, "gbnf_compact_retry")
+                                on_retry_callback(attempt + 1, "gbnf_fallback_no_schema_retry")
                             except Exception:
                                 pass
                         time.sleep(0.3)

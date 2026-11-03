@@ -1781,32 +1781,77 @@ class LmStudioClient(BaseLocalLlmClient):
                 f"Impossibile contattare LM Studio su {self.base_url} per il caricamento del modello: {e}"
             ) from e
 
-    def unload_model(self, model_id: str | None = None, timeout_seconds: float = 30.0) -> bool:
-        """
-        Scarica un modello dalla memoria tramite POST /api/v1/models/unload se supportato.
-        Invalida rigorosamente i binding del modello scaricato solo a fronte di conferma positiva.
-        """
-        _validate_loopback_url(self.base_url)
-        url = f"{self.base_url}/api/v1/models/unload"
-        payload: dict[str, Any] = {}
-        target_to_unload = model_id or self.model_id or (self._active_binding.resolved_model_key if self._active_binding else None)
-        if target_to_unload:
-            payload["model"] = target_to_unload
+    def _post_unload_request(self, url: str, payload: dict[str, Any], timeout_seconds: float) -> bool:
         req_data = json.dumps(payload).encode("utf-8")
         req = urllib.request.Request(url, data=req_data, headers=self._get_headers(), method="POST")
         try:
             with urllib.request.urlopen(req, timeout=timeout_seconds) as resp:
-                if resp.status in (200, 204):
-                    self.invalidate_binding(target_to_unload)
-                    self._last_loaded_model = None
-                    self._last_loaded_model_key = None
-                    self._loaded_instance_id = None
-                    self.load_mode = "unloaded"
-                    return True
-                return False
+                return resp.status in (200, 204)
         except (urllib.error.HTTPError, *_NETWORK_ERRORS):
-            # Fallimento unload: il modello rimane potenzialmente caricato, i binding non vengono invalidati
             return False
+
+    def unload_model(self, model_id: str | None = None, timeout_seconds: float = 30.0) -> bool:
+        """
+        Scarica un modello dalla memoria tramite POST /api/v1/models/unload se supportato.
+        Invalida rigorosamente i binding del modello scaricato solo a fronte di conferma positiva.
+        LM Studio API v1 richiede rigorosamente {"instance_id": "<id>"}.
+        Supporta fallback a {"model": "<id>"} per mock server e versioni legacy.
+        """
+        _validate_loopback_url(self.base_url)
+        url = f"{self.base_url}/api/v1/models/unload"
+        target_to_unload = model_id or self.model_id or (self._active_binding.resolved_model_key if self._active_binding else None)
+
+        candidate_instance_ids: list[str] = []
+        if target_to_unload:
+            candidate_instance_ids.append(target_to_unload)
+        if self._loaded_instance_id and self._loaded_instance_id not in candidate_instance_ids:
+            candidate_instance_ids.append(self._loaded_instance_id)
+        if self._active_binding and self._active_binding.loaded_instance_id:
+            if self._active_binding.loaded_instance_id not in candidate_instance_ids:
+                candidate_instance_ids.append(self._active_binding.loaded_instance_id)
+
+        try:
+            native_models = self.get_native_models()
+            for nm in native_models:
+                m_matches = (
+                    not target_to_unload
+                    or nm.key.lower() == str(target_to_unload).lower()
+                    or self.is_equivalent_model(str(target_to_unload), nm.key)
+                )
+                for inst_obj in nm.loaded_instances:
+                    if isinstance(inst_obj, Mapping):
+                        iid = str(inst_obj.get("id") or "").strip()
+                        if iid:
+                            if m_matches or (target_to_unload and iid.lower() == str(target_to_unload).lower()):
+                                if iid not in candidate_instance_ids:
+                                    candidate_instance_ids.append(iid)
+        except Exception:
+            pass
+
+        if not candidate_instance_ids and target_to_unload:
+            candidate_instance_ids = [target_to_unload]
+
+        if not candidate_instance_ids:
+            return False
+
+        any_success = False
+        for inst_id in candidate_instance_ids:
+            # 1. Schema ufficiale LM Studio REST v1
+            success = self._post_unload_request(url, {"instance_id": inst_id}, timeout_seconds)
+            if not success:
+                # 2. Fallback per mock/legacy
+                success = self._post_unload_request(url, {"model": inst_id}, timeout_seconds)
+            if success:
+                any_success = True
+
+        if any_success:
+            self.invalidate_binding(target_to_unload)
+            self._last_loaded_model = None
+            self._last_loaded_model_key = None
+            self._loaded_instance_id = None
+            self.load_mode = "unloaded"
+            return True
+        return False
 
     def ensure_model_loaded(
         self,
