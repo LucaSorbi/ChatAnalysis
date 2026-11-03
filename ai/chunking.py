@@ -658,6 +658,7 @@ _DOMAIN_STEM_SYNONYMS: dict[str, str] = {
     "laptop": "portatil",
     "notebook": "portatil",
     "ferroviar": "tren",
+    "ferroviari": "tren",
     "frecciaross": "tren",
     "oculistic": "oculist",
     "dockerfile": "docker",
@@ -695,6 +696,22 @@ def _extract_label_numbers(label: str) -> tuple[str, ...]:
     return tuple(re.findall(r"\d+", label or ""))
 
 
+_OPPOSING_ACTION_STEMS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"acquist", "ordin", "compr"}), frozenset({"restituzion", "res", "rimbors", "annullament"})),
+    (frozenset({"installazion", "attivazion"}), frozenset({"disinstallazion", "disattivazion", "rimozion"})),
+    (frozenset({"partenz", "andat"}), frozenset({"ritorn", "rientr"})),
+    (frozenset({"backup", "salvatagg"}), frozenset({"ottimizzazion", "query", "migrazion", "deadlock"})),
+    (frozenset({"lavor", "consulenz"}), frozenset({"vacanz", "turism"})),
+)
+
+
+def _have_opposing_actions(stems_a: set[str], stems_b: set[str]) -> bool:
+    for s1, s2 in _OPPOSING_ACTION_STEMS:
+        if (stems_a & s1 and stems_b & s2) or (stems_a & s2 and stems_b & s1):
+            return True
+    return False
+
+
 def _find_matching_consolidated_key(
     consolidated: dict[str, dict[str, Any]],
     canonical_key: str,
@@ -721,34 +738,28 @@ def _find_matching_consolidated_key(
         if not item_all_stems:
             continue
 
+        # Guardia semantica: azioni o finalità opposte/contraddittorie sui titoli non devono mai fondersi
+        if _have_opposing_actions(cand_lbl_stems, item_lbl_stems):
+            continue
+
         shared_lbl = cand_lbl_stems & item_lbl_stems
         shared_all = cand_all_stems & item_all_stems
+        has_evidence_overlap = bool(eids_set & item["evidence_ids_set"])
 
-        # Caso 1: Le due label condividono almeno 2 stem di dominio specifici,
-        # oppure gli stem specifici di una label sono interamente contenuti nel dominio
-        # (label+descrizione) dell'altro topic, oppure condividono 1 stem di label ed evidenze.
-        if (
-            len(shared_lbl) >= 2
-            or (cand_lbl_stems and cand_lbl_stems <= item_all_stems)
-            or (item_lbl_stems and item_lbl_stems <= cand_all_stems)
-            or (shared_lbl and bool(eids_set & item["evidence_ids_set"]))
-        ):
-            return key
+        # Caso 1: Condivisione diretta di evidenze forensi (stessi messaggi o allegati citati)
+        if has_evidence_overlap:
+            if shared_lbl or len(shared_all) >= 2:
+                return key
 
-        # Caso 2: Stesso evento/workflow distribuito su più messaggi o microchunk:
-        # condividono almeno 2 stem di dominio specifici tra (label+descrizione) e ciascuna label
-        # interseca il dominio specifico dell'altro topic (oppure condividono evidenze dirette),
-        # oppure condividono uno stem tecnico/specifico presente nella label di uno e nel dominio dell'altro.
-        if len(shared_all) >= 2:
-            if (cand_lbl_stems & item_all_stems) and (item_lbl_stems & cand_all_stems):
+        # Caso 2: Evidenze disgiunte (topic rilevati in messaggi/chunk separati)
+        # Richiede alta sovrapposizione tematica sui soli stem delle label (Jaccard >= 0.5 con almeno 2 stem,
+        # oppure identità esatta degli stem di label) per evitare che un topic incorpori ingiustificatamente
+        # un'attività distinta solo perché citata nella descrizione contestuale.
+        if cand_lbl_stems and item_lbl_stems:
+            union_lbl = cand_lbl_stems | item_lbl_stems
+            jaccard = len(shared_lbl) / len(union_lbl) if union_lbl else 0.0
+            if (len(shared_lbl) >= 2 and jaccard >= 0.5) or (cand_lbl_stems == item_lbl_stems):
                 return key
-            if bool(eids_set & item["evidence_ids_set"]):
-                return key
-        if shared_all and (
-            (cand_lbl_stems & shared_all and item_lbl_stems & item_all_stems)
-            and bool(shared_all & {"docker", "gitpr", "oculist", "caldai", "laure", "portatil"})
-        ):
-            return key
 
     return None
 

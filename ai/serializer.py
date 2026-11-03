@@ -57,7 +57,7 @@ _PHATIC_VOCABULARY: frozenset[str] = frozenset({
     "ciao", "ehi", "ehila", "hey", "salve", "buongiorno", "buonasera", "buonanotte",
     "come", "stai", "va", "tutto", "bene", "benissimo", "ok", "okay", "perfetto",
     "tranquillo", "tranquilla", "grazie", "mille", "anche", "a", "te", "voi",
-    "buona", "buon", "giornata", "serata", "lavoro", "allora", "presto",
+    "buona", "buon", "giornata", "serata", "allora", "presto",
     "ci", "vediamo", "sentiamo", "aggiorniamo", "domani", "dopo", "piu", "tardi",
     "stasera", "mattina", "un", "abbraccio", "saluto", "saluti", "bacio", "baci",
     "si", "no", "certo", "dai", "ahah", "ahahah", "ahahahah", "haha", "hahaha",
@@ -65,6 +65,13 @@ _PHATIC_VOCABULARY: frozenset[str] = frozenset({
     "benone", "ottimo", "grande", "marco", "giulia", "anna", "francesca",
     "paolo", "bea", "beatrice", "simone", "luca", "sara", "elena", "davide", "matteo",
     "chiara", "andrea", "federico", "marta", "martina", "alessia", "lorenzo",
+})
+
+_EXPLICIT_PHATIC_MARKERS: frozenset[str] = frozenset({
+    "ciao", "ehi", "ehila", "hey", "salve", "buongiorno", "buonasera", "buonanotte",
+    "buona", "buon", "grazie", "figurati", "abbraccio", "bacio", "baci",
+    "saluto", "saluti", "presto", "arrivederci", "vediamo", "sentiamo", "aggiorniamo",
+    "stai", "benone", "ahah", "ahahah", "haha", "hahaha",
 })
 
 
@@ -97,6 +104,8 @@ def is_phatic_greeting_text(text: str | None) -> bool:
     norm = unicodedata.normalize("NFKD", stripped).encode("ascii", "ignore").decode("ascii").casefold()
     tokens = re.findall(r"[a-z0-9]+", norm)
     if not tokens or len(tokens) > 9:
+        return False
+    if not any(tok in _EXPLICIT_PHATIC_MARKERS for tok in tokens):
         return False
     return all(tok in _PHATIC_VOCABULARY for tok in tokens)
 

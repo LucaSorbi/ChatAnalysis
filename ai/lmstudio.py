@@ -1734,6 +1734,18 @@ class LmStudioClient(BaseLocalLlmClient):
                 pass
 
             if e.code == 400:
+                if flash_attention is not None:
+                    # Fallback resiliente: se il server legacy o un mock rifiuta 'flash_attention',
+                    # ritenta il caricamento senza il parametro.
+                    return self.load_model(
+                        model_id,
+                        context_length=context_length,
+                        timeout_seconds=timeout_seconds,
+                        required_quantization=required_quantization,
+                        allow_fallback_quantization=allow_fallback_quantization,
+                        flash_attention=None,
+                        **kwargs,
+                    )
                 raise AiModelLoadError(
                     f"Errore HTTP 400 da LM Studio durante il caricamento di '{model_id}': {err_body or e.reason}",
                     status_code=400,
@@ -1804,6 +1816,8 @@ class LmStudioClient(BaseLocalLlmClient):
         target_instance_id: str | None = None,
         required_quantization: str | None = None,
         allow_fallback_quantization: bool = False,
+        flash_attention: bool | None = None,
+        auto_reload_qwen_flash_attention: bool = True,
         **kwargs: Any,
     ) -> str:
         """
@@ -1811,7 +1825,8 @@ class LmStudioClient(BaseLocalLlmClient):
         1. Verifica che LM Studio sia attivo su loopback.
         2. Recupera i modelli tramite GET /api/v1/models (o fallback GET /v1/models).
         3. Risolve deterministicamente il model_key e lo stato di caricamento.
-        4. Se già caricato, restituisce l'identificatore attivo.
+        4. Se già caricato, restituisce l'identificatore attivo (scaricando preventivamente solo
+           se è un modello Qwen caricato con flash_attention=True e auto-fix abilitato).
         5. Se installato ma non caricato, invia POST /api/v1/models/load con schema conforme.
         6. Restituisce il model_id reale da passare all'inferenza.
         """
@@ -1835,7 +1850,9 @@ class LmStudioClient(BaseLocalLlmClient):
         )
 
         matched_nm = next((nm for nm in native_models if nm.key == res_meta.model_key), None)
-        force_disable_flash_attn: bool | None = kwargs.get("flash_attention")
+        eff_flash_attn: bool | None = flash_attention if flash_attention is not None else kwargs.get("flash_attention")
+        is_qwen_family = "qwen" in str(model_id).lower() or (matched_nm is not None and "qwen" in str(matched_nm.key).lower())
+
         has_loaded_flash_attn_true = False
         if matched_nm is not None:
             for inst_obj in matched_nm.loaded_instances:
@@ -1844,15 +1861,23 @@ class LmStudioClient(BaseLocalLlmClient):
                     if isinstance(cfg_obj, Mapping) and cfg_obj.get("flash_attention") is True:
                         has_loaded_flash_attn_true = True
                         break
-            if (
-                force_disable_flash_attn is None
-                and getattr(matched_nm, "quantization_evidence_source", None) == "SERVER_API_QUANTIZATION_OBJECT"
-            ):
-                force_disable_flash_attn = False
 
-        if res_meta.is_loaded and has_loaded_flash_attn_true and force_disable_flash_attn is not True:
+        # Regola di unload conservativa:
+        # Non scaricare mai modelli già caricati in uso salvo nei casi specifici:
+        # 1. Caller ha esplicitamente richiesto flash_attention=False e l'istanza attiva ha flash_attention=True.
+        # 2. Modello della famiglia Qwen su server dove l'istanza attiva ha flash_attention=True,
+        #    caller non ha forzato flash_attention=True, e auto_reload_qwen_flash_attention è abilitato.
+        should_unload_flash_attn = False
+        if res_meta.is_loaded and has_loaded_flash_attn_true:
+            if eff_flash_attn is False:
+                should_unload_flash_attn = True
+            elif eff_flash_attn is None and is_qwen_family and auto_reload_qwen_flash_attention:
+                should_unload_flash_attn = True
+
+        load_flash_attn = eff_flash_attn
+        if should_unload_flash_attn:
             self.unload_model(res_meta.instance_id or res_meta.model_key, timeout_seconds=30.0)
-            force_disable_flash_attn = False
+            load_flash_attn = False
         elif res_meta.is_loaded:
             active_id = res_meta.instance_id or res_meta.model_key
             self.model_id = active_id
@@ -1877,13 +1902,16 @@ class LmStudioClient(BaseLocalLlmClient):
             self.register_binding(binding)
             return active_id
 
+        if load_flash_attn is None and is_qwen_family:
+            load_flash_attn = False
+
         load_result = self.load_model(
             model_id=res_meta.model_key,
             context_length=context_length,
             timeout_seconds=timeout_seconds,
             required_quantization=req_quant,
             allow_fallback_quantization=allow_fb,
-            flash_attention=force_disable_flash_attn,
+            flash_attention=load_flash_attn,
             quantization=res_meta.quantization,
             quantization_evidence_source=res_meta.quantization_evidence_source,
         )

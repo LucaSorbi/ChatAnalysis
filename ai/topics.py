@@ -163,8 +163,18 @@ def filter_operational_discovered_topics(
         ):
             continue
 
-        # Se tutte le sezioni citate sono esplicite negazioni/annullamenti dell'azione, scarta il topic
-        if all(
+        # Se tutte le sezioni citate sono esplicite negazioni/annullamenti dell'azione:
+        # Se il topic stesso verte legittimamente sull'annullamento/rinuncia/diniego (es. 'Annullamento ordine biglietti',
+        # 'Rinuncia al mutuo bancario'), il tema è valido e sostanziale; se invece il topic dichiara falsamente l'azione
+        # affermativa non avvenuta (es. 'Acquisto scooter', 'Richiesta mutuo bancario'), va scartato.
+        is_cancellation_topic = any(
+            kw in norm_lbl
+            for kw in (
+                "annullament", "cancellazion", "rinunci", "disdett", "dinieg",
+                "revoc", "rifiut", "restituzion", "res", "rimbors",
+            )
+        )
+        if not is_cancellation_topic and all(
             eid in sec_by_id and any(pat.search(sec_by_id[eid].text or "") for pat in _EXPLICIT_NEGATION_PATTERNS)
             for eid in substantive_eids
         ):
@@ -203,7 +213,7 @@ OPERATIONAL SEMANTIC & MULTIMODAL INTERPRETATION DIRECTIVE:
    - The requested topic may be expressed semantically rather than through literal keyword overlap.
    - If the evidence clearly describes the concept or technical/practical workflow represented by the topic, return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
    - Do NOT require the literal words of the topic title to appear verbatim if valid synonyms, paraphrases, or domain-appropriate equivalents are directly supported by the evidence (including across multiple messages in the block).
-   - Do NOT return PRESENT unless there is concrete, affirmative evidence in the conversation text. Mere casual chat, greetings, bare media placeholders, or explicit negations (e.g. 'non abbiamo mai chiesto un mutuo', 'non ho più acquistato lo scooter') are STRICTLY ABSENT.
+   - Do NOT return PRESENT unless there is concrete, affirmative evidence in the conversation text. Mere casual chat, greetings, bare media placeholders, or explicit negations (e.g. 'non abbiamo mai chiesto un mutuo', 'non ho più acquistato lo scooter') are STRICTLY ABSENT (unless the requested topic itself is explicitly inquiring about the cancellation, refusal, or denial of an action).
 2. BALANCED FORENSIC TRI-STATE DISCIPLINE:
    - PRESENT: Return 'PRESENT' if and only if the forensic evidence contains clear, direct, and verifiable proof that the topic was actively and affirmatively discussed. Every 'PRESENT' decision MUST cite at least one specific, genuinely supporting evidence_id. PRESENT still requires at least one valid evidence_id.
    - ABSENT: Return 'ABSENT' whenever the topic is not discussed, or is only mentioned in the negative (explicitly denied or cancelled). When decision is 'ABSENT', 'evidence_ids' MUST be an empty array [].
