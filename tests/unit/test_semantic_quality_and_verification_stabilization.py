@@ -353,6 +353,48 @@ def test_filter_operational_discovered_topics_preserves_legitimate_cancellation_
     assert filtered[0].label == "Annullamento ordine biglietti"
 
 
+def test_filter_operational_discovered_topics_does_not_treat_incidental_res_substring_as_cancellation():
+    """Verifica che parole contenenti la sottostringa 'res' (prestito, presentazione, restauro)
+    non eludano il filtro negazioni spacciandosi per topic di annullamento/reso."""
+    from tests.fixtures.synthetic_semantic_corpus import _make_doc
+
+    doc = _make_doc(
+        "doc_negation_incidental_res",
+        [
+            ("m01", "Mario", "1", "Non abbiamo mai chiesto un prestito bancario.", None, None),
+            ("m02", "Anna", "2", "Non abbiamo fatto alcuna presentazione del progetto.", None, None),
+            ("m03", "Luca", "3", "Non abbiamo fatto alcun lavoro di restauro della facciata.", None, None),
+            ("m04", "Giulia", "4", "Ho restituito il pacco difettoso e richiesto il reso.", None, None),
+        ],
+    )
+
+    t_prestito = DiscoveredTopic(
+        label="Prestito bancario",
+        short_description="Richiesta di prestito",
+        evidence_ids=("m01::ORIGINAL_TEXT",),
+    )
+    t_presentazione = DiscoveredTopic(
+        label="Presentazione del progetto",
+        short_description="Presentazione",
+        evidence_ids=("m02::ORIGINAL_TEXT",),
+    )
+    t_restauro = DiscoveredTopic(
+        label="Restauro della facciata",
+        short_description="Lavori di restauro",
+        evidence_ids=("m03::ORIGINAL_TEXT",),
+    )
+    t_reso = DiscoveredTopic(
+        label="Reso del prodotto difettoso",
+        short_description="Giulia ha richiesto il reso",
+        evidence_ids=("m04::ORIGINAL_TEXT",),
+    )
+
+    filtered = filter_operational_discovered_topics((t_prestito, t_presentazione, t_restauro, t_reso), doc)
+    # Solo il tema autentico di reso deve sopravvivere; i tre falsi affermativi su negazioni devono essere filtrati
+    assert [t.label for t in filtered] == ["Reso del prodotto difettoso"]
+
+
+
 def test_phatic_classifier_rejects_substantive_phrases():
     """Verifica che frasi con contenuti reali ('Lavoro domani') non siano scambiate per saluti fàtici."""
     assert is_phatic_greeting_text("Lavoro domani") is False

@@ -60,7 +60,10 @@ def main():
     # GATE
     gate_dir = STAGING_DIR / "GATE"
     gate_dir.mkdir(parents=True, exist_ok=True)
-    shutil.copy2(HANDOFF_DIR / "phase3_real_gate_results.json", gate_dir / "phase3_real_gate_results.json")
+    if (HANDOFF_DIR / "phase3_real_gate_results.json").exists():
+        shutil.copy2(HANDOFF_DIR / "phase3_real_gate_results.json", gate_dir / "phase3_real_gate_results.json")
+    if (HANDOFF_DIR / "phase3_real_chat_validation_results.json").exists():
+        shutil.copy2(HANDOFF_DIR / "phase3_real_chat_validation_results.json", gate_dir / "phase3_real_chat_validation_results.json")
 
     # PRIVACY
     priv_dir = STAGING_DIR / "PRIVACY"
@@ -72,10 +75,17 @@ Branch: fix/semantic-quality-and-verification-stabilization-20261103
 Si certifica che:
 1. Nessun messaggio, testo in chiaro o identificativo reale proveniente da chat private e presente nei file di test o report.
 2. Tutti gli scenari del benchmark semantico (DEV e HOLDOUT) sono costituiti da dialoghi interamente sintetici.
-3. I risultati della FASE 3 (Chat Audio e Chat Foto) contengono esclusivamente metriche aggregate, conteggi di sezioni, status di completamento e tempi di esecuzione, con payload testuali soppressi.
+3. I risultati della FASE 3 (Chat Audio e Chat Foto autentiche) contengono esclusivamente metriche aggregate, conteggi di sezioni, status di completamento e tempi di esecuzione, con payload testuali e identificativi personali rigorosamente soppressi.
 4. I file di database SQLite originali non sono inclusi nell'archivio.
 """
     (priv_dir / "privacy_check.txt").write_text(privacy_text, encoding="utf-8")
+
+    # Ottieni HEAD commit dinamicamente
+    import subprocess
+    try:
+        head_commit = subprocess.check_output(["git", "rev-parse", "--short", "HEAD"], cwd=REPO_ROOT).decode().strip()
+    except Exception:
+        head_commit = "HEAD"
 
     # 2. Genera MANIFEST.txt con SHA-256 dei file interni
     manifest_lines = [
@@ -83,7 +93,7 @@ Si certifica che:
         "CHATANALYSIS — MANIFEST DEL PACCHETTO DI HANDOFF (2026-11-03)",
         "Branch: fix/semantic-quality-and-verification-stabilization-20261103",
         "Base commit: 3068d43047a324dc8e9ad3acb8ef0477c2cc33a0",
-        "Head commit: e9abd21",
+        f"Head commit: {head_commit}",
         "Verdetto: FREEZE CON LIMITI DICHIARATI",
         "================================================================================",
         "",
@@ -136,3 +146,4 @@ Si certifica che:
 
 if __name__ == "__main__":
     main()
+

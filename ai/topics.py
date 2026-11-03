@@ -107,6 +107,19 @@ _EXPLICIT_NEGATION_PATTERNS: tuple[re.Pattern[str], ...] = (
     re.compile(r"\bho\s+annullato\s+tutto\b", re.IGNORECASE),
 )
 
+_CANCELLATION_LABEL_SUBSTRINGS: tuple[str, ...] = (
+    "annullament",
+    "cancellazion",
+    "rinunci",
+    "disdett",
+    "dinieg",
+    "revoc",
+    "rifiut",
+    "restituzion",
+    "rimbors",
+)
+_CANCELLATION_LABEL_WORDS: frozenset[str] = frozenset({"reso", "resi"})
+
 
 def _normalize_label_for_filter(label: str) -> str:
     norm = unicodedata.normalize("NFKD", label or "").encode("ascii", "ignore").decode("ascii").casefold()
@@ -167,12 +180,10 @@ def filter_operational_discovered_topics(
         # Se il topic stesso verte legittimamente sull'annullamento/rinuncia/diniego (es. 'Annullamento ordine biglietti',
         # 'Rinuncia al mutuo bancario'), il tema è valido e sostanziale; se invece il topic dichiara falsamente l'azione
         # affermativa non avvenuta (es. 'Acquisto scooter', 'Richiesta mutuo bancario'), va scartato.
-        is_cancellation_topic = any(
-            kw in norm_lbl
-            for kw in (
-                "annullament", "cancellazion", "rinunci", "disdett", "dinieg",
-                "revoc", "rifiut", "restituzion", "res", "rimbors",
-            )
+        norm_words = set(norm_lbl.split())
+        is_cancellation_topic = (
+            any(kw in norm_lbl for kw in _CANCELLATION_LABEL_SUBSTRINGS)
+            or bool(norm_words & _CANCELLATION_LABEL_WORDS)
         )
         if not is_cancellation_topic and all(
             eid in sec_by_id and any(pat.search(sec_by_id[eid].text or "") for pat in _EXPLICIT_NEGATION_PATTERNS)
