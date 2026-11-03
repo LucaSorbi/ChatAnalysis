@@ -37,6 +37,7 @@ REPO_ROOT = Path(__file__).resolve().parents[2]
 
 def test_packaging_wheel_contains_analysis_and_core_packages():
     """Costruisce una wheel reale e verifica i package inclusi e l'import isolato."""
+    pytest.importorskip("setuptools", reason="setuptools non installato nell'ambiente di test (richiesto da --no-build-isolation)")
     # Assicura ambiente di build pulito privo di residui da compilazioni precedenti
     shutil.rmtree(REPO_ROOT / "build", ignore_errors=True)
 

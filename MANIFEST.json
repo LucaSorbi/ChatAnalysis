@@ -1,0 +1,33 @@
+{
+  "bundle_id": "CHATANALYSIS_PYTEST_8_FAILURE_TRIAGE_2026-11-03",
+  "created_at_utc": "2026-11-03T21:10:48.176606+00:00",
+  "base_commit": "b5905220ecfa349d4230444f860ab21da0895038",
+  "verdict": "SAFE_TO_FREEZE",
+  "triaged_failures_count": 8,
+  "triaged_failures_resolved": 8,
+  "full_suite_passed": 2377,
+  "full_suite_failed": 0,
+  "full_suite_skipped": 6,
+  "files": [
+    {
+      "filename": "CHATANALYSIS_PYTEST_8_FAILURE_TRIAGE_2026-11-03.md",
+      "sha256": "8bebcda2c0fb2894b5afd261bc5ff86dd7b398248c94a5b27aa014f551df0bd1",
+      "bytes": 11584
+    },
+    {
+      "filename": "patch.diff",
+      "sha256": "be8f330c45e28936b81fcc302ca0253330bad134f19cd479ba254273d55fc002",
+      "bytes": 11214
+    },
+    {
+      "filename": "test_run_8_failures_passed.txt",
+      "sha256": "203c834d58999306e81c1840e370bb46ceb3758732de4e906e485b3cc1ff7e6e",
+      "bytes": 2750
+    },
+    {
+      "filename": "test_run_full_unit_suite_passed.txt",
+      "sha256": "3fbd5cf5ffbdc15fec797c8c1e182fe71085841e0c9b5b16da7dbae34ff69ac1",
+      "bytes": 13112
+    }
+  ]
+}

@@ -345,10 +345,14 @@ def test_detection_multi_chunk_completeness():
     ev1 = "unified:whatsapp_txt:1::ORIGINAL_TEXT"
     ev20 = "unified:whatsapp_txt:20::ORIGINAL_TEXT"
 
+    # 2 parent chunk da 15 messaggi: in modalità operativa (soglia 8 messaggi sostanziali),
+    # ciascun parent chunk è pre-suddiviso in 2 microchunk (4 microchunk totali).
     mock_client = ControllableMockLlmClient(
         responses=[
-            {"decision": "PRESENT", "evidence_ids": [ev1], "rationale": "Chunk 1 presente"},
-            {"decision": "PRESENT", "evidence_ids": [ev20], "rationale": "Chunk 2 presente"},
+            {"decision": "PRESENT", "evidence_ids": [ev1], "rationale": "Chunk 1 micro 0 presente"},
+            {"decision": "ABSENT", "evidence_ids": [], "rationale": "Chunk 1 micro 1 assente"},
+            {"decision": "PRESENT", "evidence_ids": [ev20], "rationale": "Chunk 2 micro 0 presente"},
+            {"decision": "ABSENT", "evidence_ids": [], "rationale": "Chunk 2 micro 1 assente"},
         ]
     )
 

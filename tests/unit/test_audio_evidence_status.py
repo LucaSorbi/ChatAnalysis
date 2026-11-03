@@ -132,7 +132,8 @@ def test_ingestion_never_starts_stt_and_reports_not_run():
     assert summarize_audio_evidence(doc)["STT_NOT_RUN"] == 1
 
 
-def test_stt_not_installed_is_stt_unavailable_not_transcribed():
+def test_stt_not_installed_is_stt_unavailable_not_transcribed(monkeypatch):
+    monkeypatch.setattr("multimodal.transcriber.FasterWhisperTranscriber.is_available", classmethod(lambda cls: False))
     doc, reg = _ingest(_zip(True), "chat.zip")
     enriched, report = execute_local_media_processing(doc, registry=reg, stt_backend=None)
     # in questo ambiente faster-whisper non è installato (come su un PC senza il pacchetto)
@@ -223,7 +224,9 @@ def test_failed_or_unavailable_stt_does_not_change_document_fingerprint():
 
 
 @pytest.mark.parametrize("variant", ["not_found", "unavailable", "transcribed"])
-def test_safe_export_has_counts_only_and_no_transcript_or_filename(variant):
+def test_safe_export_has_counts_only_and_no_transcript_or_filename(variant, monkeypatch):
+    if variant == "unavailable":
+        monkeypatch.setattr("multimodal.transcriber.FasterWhisperTranscriber.is_available", classmethod(lambda cls: False))
     if variant == "not_found":
         doc, reg = _ingest(CHAT.encode("utf-8"), "_chat.txt")
         backend = None

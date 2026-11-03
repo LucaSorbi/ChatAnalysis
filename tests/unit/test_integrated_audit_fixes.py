@@ -303,7 +303,7 @@ def test_discovery_retry_reduces_topics_when_headroom_exhausted():
         document=doc,
         max_topics=10,
         max_tokens=500,
-        context_length=1800, # Headroom molto ristretta
+        context_length=2500, # Headroom molto ristretta (con prompt v4 da ~1.8K token)
         operational_mode=True,
     )
     assert len(res.topics) == 1
@@ -693,7 +693,7 @@ def test_discovery_retry_recalculates_budget_on_prompt_change():
         document=doc,
         max_topics=8,
         max_tokens=400,
-        context_length=2000,
+        context_length=2500,
         operational_mode=True,
     )
     assert len(res.topics) == 1

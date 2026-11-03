@@ -644,7 +644,7 @@ def normalize_topic_label(label: str) -> str:
 
 
 _GENERIC_CONSOLIDATION_STEMS: frozenset[str] = frozenset({
-    "tem", "argoment", "descrizion", "organizzazion", "preparazion", "attivit",
+    "tem", "tema", "argoment", "descrizion", "organizzazion", "preparazion", "attivit",
     "pianificazion", "gestion", "problem", "soluzion", "discussion", "conversazion",
     "conferm", "aggiornament", "prenotazion", "iscrizion", "acquist", "cors",
     "partit", "studi", "lavor", "incontr", "appuntament", "messagg", "verific",
@@ -758,7 +758,7 @@ def _find_matching_consolidated_key(
         if cand_lbl_stems and item_lbl_stems:
             union_lbl = cand_lbl_stems | item_lbl_stems
             jaccard = len(shared_lbl) / len(union_lbl) if union_lbl else 0.0
-            if (len(shared_lbl) >= 2 and jaccard >= 0.5) or (cand_lbl_stems == item_lbl_stems):
+            if len(shared_lbl) >= 2 and (jaccard >= 0.5 or cand_lbl_stems == item_lbl_stems):
                 return key
 
     return None
