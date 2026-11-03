@@ -119,6 +119,10 @@ ALLOWED_PROMPT_VERSIONS: set[str] = {
     "operational",
     "v1",
     "v2",
+    "topic_discovery_operational_v3",
+    "topic_discovery_operational_v4",
+    "topic_detection_operational_v2",
+    "topic_detection_operational_v3",
 }
 
 # Allowlist chiusa dei tipi di analisi

@@ -17,8 +17,10 @@ Principi architetturali (Fasi A, B, I, J, L, M):
 """
 from __future__ import annotations
 
+import re
 import time
-from typing import Any, Mapping
+import unicodedata
+from typing import Any, Mapping, Sequence
 
 from ai.backend import (
     AiBackendRequestError,
@@ -45,9 +47,12 @@ from ai.serializer import (
     SERIALIZATION_VERSION_COMPACT_JSONL,
     SYSTEM_SECURITY_DIRECTIVE,
     generate_evidence_alias_maps,
+    is_media_placeholder_text,
+    is_phatic_greeting_text,
     serialize_document_compact_jsonl,
     serialize_document_for_llm,
 )
+from multimodal.evidence import EvidenceSourceType
 from ai.json_failure import VALIDATION_KINDS, finish_reason_kind
 from ai.structured import (
     DEGENERATION_POLICY_HISTORICAL,
@@ -66,9 +71,117 @@ from ai.token_budget import (
 )
 
 PROMPT_VERSION_DETECTION = "topic_detection_v1"
-PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v2"
+PROMPT_VERSION_DETECTION_OPERATIONAL = "topic_detection_operational_v3"
 PROMPT_VERSION_DISCOVERY = "topic_discovery_v1"
-PROMPT_VERSION_DISCOVERY_OPERATIONAL = "topic_discovery_operational_v3"
+PROMPT_VERSION_DISCOVERY_OPERATIONAL = "topic_discovery_operational_v4"
+
+_BANNED_PHATIC_OR_META_LABELS: frozenset[str] = frozenset({
+    "saluto",
+    "saluti",
+    "saluto e benvenuto",
+    "saluti iniziali",
+    "saluti finali",
+    "saluti e ringraziamenti",
+    "ringraziamenti",
+    "conclusione della conversazione",
+    "chiusura della conversazione",
+    "chiusura conversazione",
+    "apertura della conversazione",
+    "apertura conversazione",
+    "comunicazione personale",
+    "conversazione generale",
+    "general discussion",
+    "problems and solutions",
+    "file allegato",
+    "media allegato",
+    "allegato multimediale",
+    "omissione media",
+    "media omessi",
+})
+
+_EXPLICIT_NEGATION_PATTERNS: tuple[re.Pattern[str], ...] = (
+    re.compile(r"\bnon\s+abbiamo\s+mai\s+(?:chiesto|fatto|aperto|comprato|acquistato)\b", re.IGNORECASE),
+    re.compile(r"\bnon\s+ho\s+pi[uù]\s+(?:acquistato|comprato|prenotato|fatto|chiesto)\b", re.IGNORECASE),
+    re.compile(r"\bnon\s+abbiamo\s+(?:aperto|fatto|chiesto|pratiche)\b", re.IGNORECASE),
+    re.compile(r"\bnon\s+ho\s+alcuna\s+intenzione\s+di\b", re.IGNORECASE),
+    re.compile(r"\bho\s+annullato\s+tutto\b", re.IGNORECASE),
+)
+
+
+def _normalize_label_for_filter(label: str) -> str:
+    norm = unicodedata.normalize("NFKD", label or "").encode("ascii", "ignore").decode("ascii").casefold()
+    norm = re.sub(r"[^a-z0-9]+", " ", norm)
+    return " ".join(norm.split())
+
+
+def filter_operational_discovered_topics(
+    topics: Sequence[DiscoveredTopic],
+    document: ConversationEvidenceDocument,
+) -> tuple[DiscoveredTopic, ...]:
+    """
+    Filtra deterministicamente i topic operativi rimuovendo:
+    1. Citazioni a meri placeholder multimediali ('<Media omessi>', 'IMG-... (file allegato)') quando
+       sono presenti sezioni sostanziali (es. STT_TRANSCRIPTION / OCR_TEXT), o l'intero topic se
+       supportato esclusivamente da placeholder privi di contenuto.
+    2. Meta-label puramente fàtiche o di allegato ('Saluto', 'File allegato', 'Comunicazione personale',
+       'Conclusione della conversazione', 'Problems and solutions') o topic i cui evidence_id citano
+       esclusivamente saluti fàtici.
+    3. Topic fabbricati su negazioni esplicite (es. 'Assenza di pratiche finanziarie', o singola frase
+       che dichiara di NON aver compiuto l'azione).
+    """
+    if not topics:
+        return ()
+
+    sec_by_id = {s.evidence_id: s for s in document.all_evidence_sections}
+    cleaned: list[DiscoveredTopic] = []
+
+    for t in topics:
+        norm_lbl = _normalize_label_for_filter(t.label)
+        if not norm_lbl:
+            continue
+        if norm_lbl in _BANNED_PHATIC_OR_META_LABELS:
+            continue
+        if norm_lbl.startswith(("assenza di ", "mancanza di ", "nessun ", "nessuna ")):
+            continue
+
+        substantive_eids: list[str] = []
+        for eid in t.evidence_ids:
+            sec = sec_by_id.get(eid)
+            if sec is None:
+                continue
+            if sec.source_type == EvidenceSourceType.ORIGINAL_TEXT and is_media_placeholder_text(sec.text):
+                continue
+            substantive_eids.append(eid)
+
+        if not substantive_eids:
+            continue
+
+        # Se tutte le sezioni citate sono puramente saluti/congedi fàtici, scarta il topic
+        if all(
+            eid in sec_by_id and is_phatic_greeting_text(sec_by_id[eid].text)
+            for eid in substantive_eids
+        ):
+            continue
+
+        # Se tutte le sezioni citate sono esplicite negazioni/annullamenti dell'azione, scarta il topic
+        if all(
+            eid in sec_by_id and any(pat.search(sec_by_id[eid].text or "") for pat in _EXPLICIT_NEGATION_PATTERNS)
+            for eid in substantive_eids
+        ):
+            continue
+
+        if tuple(substantive_eids) != tuple(t.evidence_ids):
+            cleaned.append(
+                DiscoveredTopic(
+                    label=t.label,
+                    short_description=t.short_description,
+                    evidence_ids=tuple(substantive_eids),
+                )
+            )
+        else:
+            cleaned.append(t)
+
+    return tuple(cleaned)
 
 PROGRAMMING_ERRORS = (
     NameError,
@@ -86,13 +199,14 @@ OPERATIONAL_SEMANTIC_DIRECTIVE = """
 OPERATIONAL SEMANTIC & MULTIMODAL INTERPRETATION DIRECTIVE:
 1. OBJECTIVE THEMATIC & CONCEPTUAL EVALUATION:
    - In LABEL-ONLY mode (where no separate description is provided), interpret the genuine thematic and conceptual scope of the topic label across Italian and any other languages present in the evidence.
+   - When a DESCRIPTION is also provided (LABEL_AND_DESCRIPTION mode), evaluate the topic using BOTH the label and the concrete details in the description. If the evidence confirms the specific events or actions in the description, return PRESENT even if the label uses a broader category phrasing.
    - The requested topic may be expressed semantically rather than through literal keyword overlap.
-   - If the evidence clearly describes the concept represented by the topic, return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
-   - Do NOT require the literal words of the topic title to appear verbatim if valid synonyms, paraphrases, or domain-appropriate equivalents are directly supported by the evidence.
-   - Do NOT return PRESENT unless there is concrete, direct evidence in the conversation text. Mere casual chat, greetings, or tangential background context are STRICTLY ABSENT.
+   - If the evidence clearly describes the concept or technical/practical workflow represented by the topic, return PRESENT even when the exact words used in the topic label do not appear literally in the evidence.
+   - Do NOT require the literal words of the topic title to appear verbatim if valid synonyms, paraphrases, or domain-appropriate equivalents are directly supported by the evidence (including across multiple messages in the block).
+   - Do NOT return PRESENT unless there is concrete, affirmative evidence in the conversation text. Mere casual chat, greetings, bare media placeholders, or explicit negations (e.g. 'non abbiamo mai chiesto un mutuo', 'non ho più acquistato lo scooter') are STRICTLY ABSENT.
 2. BALANCED FORENSIC TRI-STATE DISCIPLINE:
-   - PRESENT: Return 'PRESENT' if and only if the forensic evidence contains clear, direct, and verifiable proof that the topic was actively discussed. Every 'PRESENT' decision MUST cite at least one specific, genuinely supporting evidence_id. PRESENT still requires at least one valid evidence_id.
-   - ABSENT: Return 'ABSENT' whenever the topic is not directly discussed, mentioned, or evidenced in the conversation. When decision is 'ABSENT', 'evidence_ids' MUST be an empty array [].
+   - PRESENT: Return 'PRESENT' if and only if the forensic evidence contains clear, direct, and verifiable proof that the topic was actively and affirmatively discussed. Every 'PRESENT' decision MUST cite at least one specific, genuinely supporting evidence_id. PRESENT still requires at least one valid evidence_id.
+   - ABSENT: Return 'ABSENT' whenever the topic is not discussed, or is only mentioned in the negative (explicitly denied or cancelled). When decision is 'ABSENT', 'evidence_ids' MUST be an empty array [].
    - UNCERTAIN: Return 'UNCERTAIN' if the evidence is fragmentary, ambiguous, tangential, or merely hints at related elements without providing solid proof. Do NOT force 'PRESENT' on ambiguous data.
    - Do NOT bias your judgment toward any verdict. Treat PRESENT, ABSENT, and UNCERTAIN with equal objectivity.
 3. STRICT EVIDENCE GROUNDING:
@@ -102,9 +216,10 @@ OPERATIONAL SEMANTIC & MULTIMODAL INTERPRETATION DIRECTIVE:
 4. MULTIMODAL SOURCES:
    - Evaluate the meaning of ALL evidence sources, including:
      - message text
-     - audio transcriptions
-     - image OCR text
-     - image vision descriptions
+     - audio transcriptions ("source_type": "STT_TRANSCRIPTION")
+     - image OCR text ("source_type": "OCR_TEXT")
+     - image vision descriptions ("source_type": "IMAGE_VISION_DESC")
+   - When evidence comes from an audio transcription or OCR text, cite the STT_TRANSCRIPTION or OCR_TEXT evidence_id, NOT bare attachment filename placeholders ("media_placeholder": true).
 """
 
 OPERATIONAL_MULTIMODAL_DIRECTIVE = OPERATIONAL_SEMANTIC_DIRECTIVE
@@ -280,19 +395,38 @@ OUTPUT RULES:
             )
 
         topic_desc_block = f"\nDescription: {topic.description}" if topic.description else ""
-        user_message_content = (
-            f"=== TARGET TOPIC TO DETECT ===\n"
-            f"Label: '{topic.label}'{topic_desc_block}\n"
-            f"===============================\n\n"
-            f"{user_content}\n\n"
-            f"=== TASK EVALUATION ===\n"
-            f"Carefully evaluate whether the specific target topic '{topic.label}' is explicitly discussed in the evidence above.\n"
-            f"- If the conversation does not explicitly discuss '{topic.label}', return decision 'ABSENT' with 'evidence_ids': [].\n"
-            f"- Return 'PRESENT' ONLY if explicit written text directly discusses '{topic.label}'.\n"
-            "- CRITICAL: Do NOT infer this topic from unrelated discussions (e.g. casual outings or sports).\n"
-            "- CRITICAL: Do NOT cite '<Media omessi>' or infer the topic from omitted media.\n"
-            "Provide concise 'rationale' in Italian. Return ONLY a valid JSON object matching the schema."
-        )
+        if is_operational:
+            target_eval_ref = (
+                f"the target topic '{topic.label}' (and its description: '{topic.description}')"
+                if (topic.description and not is_label_only)
+                else f"the target topic '{topic.label}'"
+            )
+            user_message_content = (
+                f"=== TARGET TOPIC TO DETECT ===\n"
+                f"Label: '{topic.label}'{topic_desc_block}\n"
+                f"===============================\n\n"
+                f"{user_content}\n\n"
+                f"=== TASK EVALUATION ===\n"
+                f"Carefully evaluate whether {target_eval_ref} is substantively and affirmatively discussed in the evidence above (including message text, STT_TRANSCRIPTION, and OCR_TEXT).\n"
+                f"- Return 'PRESENT' if the evidence directly discusses the subject or workflow of {target_eval_ref} (even via synonyms, technical equivalents, or across multiple messages), and cite only the supporting evidence_ids.\n"
+                f"- Return 'ABSENT' with 'evidence_ids': [] if the topic is not discussed, or is only mentioned as an explicit negation/cancellation (e.g. 'non abbiamo mai chiesto', 'non ho più acquistato').\n"
+                "- CRITICAL: Do NOT infer this topic from unrelated discussions, greetings, or bare media placeholders ('<Media omessi>', 'IMG-... (file allegato)').\n"
+                "Provide concise 'rationale' in Italian. Return ONLY a valid JSON object matching the schema."
+            )
+        else:
+            user_message_content = (
+                f"=== TARGET TOPIC TO DETECT ===\n"
+                f"Label: '{topic.label}'{topic_desc_block}\n"
+                f"===============================\n\n"
+                f"{user_content}\n\n"
+                f"=== TASK EVALUATION ===\n"
+                f"Carefully evaluate whether the specific target topic '{topic.label}' is explicitly discussed in the evidence above.\n"
+                f"- If the conversation does not explicitly discuss '{topic.label}', return decision 'ABSENT' with 'evidence_ids': [].\n"
+                f"- Return 'PRESENT' ONLY if explicit written text directly discusses '{topic.label}'.\n"
+                "- CRITICAL: Do NOT infer this topic from unrelated discussions (e.g. casual outings or sports).\n"
+                "- CRITICAL: Do NOT cite '<Media omessi>' or infer the topic from omitted media.\n"
+                "Provide concise 'rationale' in Italian. Return ONLY a valid JSON object matching the schema."
+            )
 
         messages: list[dict[str, str]] = [
             {"role": "system", "content": system_content},
@@ -407,17 +541,24 @@ OUTPUT RULES:
 
                 if is_operational and decision == TopicDecision.PRESENT:
                     cited_secs = [s for s in document.all_evidence_sections if s.evidence_id in evidence_ids]
-                    has_substantive_text = any(
-                        s.text and s.text.strip() not in ("<Media omessi>", "<media omessi>", "<audio omesso>")
+                    substantive_cited_ids = [
+                        s.evidence_id
                         for s in cited_secs
-                    )
-                    if not has_substantive_text:
+                        if not (
+                            s.source_type == EvidenceSourceType.ORIGINAL_TEXT
+                            and is_media_placeholder_text(s.text)
+                        )
+                    ]
+                    if not substantive_cited_ids:
                         raise AiInvalidEvidenceCitationError(
                             "Le evidenze citate consistono esclusivamente in placeholder di media omessi privi di testo (<Media omessi>). "
                             "I placeholder multimediali omessi non possono costituire prova di un topic. "
                             "Se non vi è discussione testuale esplicita, la decisione deve essere ABSENT con evidence_ids vuota.",
                             invalid_evidence_ids=tuple(evidence_ids),
                         )
+                    if len(substantive_cited_ids) != len(evidence_ids):
+                        subj_set = set(substantive_cited_ids)
+                        evidence_ids = tuple(eid for eid in evidence_ids if eid in subj_set)
 
                 last_error = None
                 break
@@ -802,18 +943,22 @@ class TopicDiscoveryAnalyzer:
                     f"Cite ONLY the values from 'evidence_id' (e.g. {valid_alias_list[0]}). "
                     f"Do NOT cite 'source_record_id' or numbers not in this evidence list."
                 )
-            sp = f"""TASK: OPEN TOPIC DISCOVERY (Version: {prompt_version})
-You are an expert conversation analyst.
-Analyze the provided messages and extract all distinct topics, subjects, and activities discussed.
+            sec_header = f"{COMPACT_SYSTEM_SECURITY_DIRECTIVE}\n" if is_op else ""
+            sp = f"""{sec_header}TASK: OPEN TOPIC DISCOVERY (Version: {prompt_version})
+You are an expert forensic conversation analyst.
+Analyze the provided messages and extract only the concrete, specific topics, events, and technical or practical activities actually discussed.
 
 Instructions:
-1. Identify all distinct topics, subjects, and activities discussed in the messages.
+1. Identify all concrete topics, subjects, and activities affirmatively discussed in the messages.
 2. For each topic, output:
-   - "label": title of the topic in Italian (e.g. 'Organizzazione viaggio', 'Preparazione esami', 'Attività sportiva')
-   - "short_description": description of what is discussed in Italian
+   - "label": specific title of the topic in natural Italian naming the exact subject, object, place, or task (e.g. 'Biglietti del treno per Bologna', 'Esame universitario di Basi di Dati', 'Sostituzione batteria del portatile', 'Partita di calcetto del giovedì', 'Iscrizione al corso di nuoto', 'Backup automatico database PostgreSQL', 'Prenotazione visita oculistica'). Never use vague umbrella labels like 'Organizzazione viaggio', 'Preparazione esami', 'Attività sportiva', 'Problemi tecnici', 'Organizzazione lavorativa', or English labels.
+   - "short_description": clear factual description of what is discussed in Italian
    {cite_item}
-3. Every evidence_id cited must be an ID from the provided evidence. Each topic must cite at least one valid evidence_id.{available_aliases_note}
-4. Output a JSON object with key "topics" containing the list of discovered topics (at most {num_topics} elements).
+3. Group all messages in this block that belong to the same event, issue, or technical workflow (e.g. fixing a Dockerfile error and merging its GitHub pull request, or an audio note and OCR confirmation for the same medical appointment) into ONE unified topic citing all supporting evidence_ids. Keep genuinely different activities separate (e.g. calcetto vs nuoto).
+4. Ignore pure greetings, thanks, farewells, bare media attachment placeholders ('<Media omessi>', 'IMG-... (file allegato)', or records with "media_placeholder": true), and explicitly negated/cancelled actions (e.g. 'non abbiamo mai chiesto un mutuo', 'non ho più acquistato lo scooter'). If no concrete affirmative topic is present, output {{"topics": []}}.
+5. When a topic is supported by an audio transcription ("source_type": "STT_TRANSCRIPTION") or image OCR ("source_type": "OCR_TEXT"), cite the STT_TRANSCRIPTION or OCR_TEXT evidence_id rather than bare attachment filename placeholders. Never invent visual content for images without OCR/Vision text.
+6. Every evidence_id cited must be an ID from the provided evidence. Each topic must cite at least one valid evidence_id.{available_aliases_note}
+7. Output a JSON object with key "topics" containing the list of discovered topics (at most {num_topics} elements).
 """
             if strategy == AnalysisLanguageStrategy.DIRECT_MULTILINGUAL:
                 sp += "\nMULTILINGUAL DIRECTIVE: The evidence may contain multiple languages. Analyze all languages and output labels/descriptions in Italian.\n"
@@ -842,11 +987,19 @@ Instructions:
                 evidence_id_map=id_to_alias if use_aliases else None,
             )
 
-        user_message_content = (
-            f"{user_content}\n\n"
-            f"Based on the conversation evidence above, extract up to {current_topics} main topics and activities discussed.\n"
-            "Return ONLY a valid JSON object matching the schema."
-        )
+        if is_op:
+            user_message_content = (
+                f"{user_content}\n\n"
+                f"Based on the conversation evidence above, extract up to {current_topics} main topics and activities discussed.\n"
+                "Group related turns of the same ongoing event or technical workflow into a single unified topic citing all its evidence_ids.\n"
+                "Return ONLY a valid JSON object matching the schema."
+            )
+        else:
+            user_message_content = (
+                f"{user_content}\n\n"
+                f"Based on the conversation evidence above, extract up to {current_topics} main topics and activities discussed.\n"
+                "Return ONLY a valid JSON object matching the schema."
+            )
 
         messages = [
             {"role": "system", "content": _make_sys_prompt(current_topics)},
@@ -954,10 +1107,15 @@ Instructions:
                     alias_map=alias_to_id if use_aliases else None,
                     degeneration_policy=acceptance_policy,
                 )
+                if is_op:
+                    discovered = filter_operational_discovered_topics(discovered, document)
 
                 substantive_sec_count = sum(
                     1 for s in document.all_evidence_sections
-                    if s.text and s.text.strip() and s.text.strip() != "<Media omessi>" and "crittografati end-to-end" not in s.text
+                    if s.text
+                    and s.text.strip()
+                    and not is_media_placeholder_text(s.text)
+                    and not is_phatic_greeting_text(s.text)
                 )
                 if len(discovered) == 0 and is_op and substantive_sec_count >= 3 and attempt + 1 < max_attempts:
                     attempt_log.append(_attempt_entry("EMPTY_TOPICS", attempt + 1, used_max_tokens, resp_this_attempt, None, current_topics))
@@ -974,8 +1132,8 @@ Instructions:
                             "role": "user",
                             "content": (
                                 "CORRECTION DIRECTIVE: No topics were identified, but substantive conversation messages are present in this block. "
-                                "Identify what the participants are discussing (e.g. plans, activities, meetings, sports, studies, or subjects) "
-                                "and return the distinct topics in the JSON array matching the schema."
+                                "If the participants affirmatively discuss concrete subjects, plans, activities, or technical tasks, return those specific topics in the JSON array matching the schema; "
+                                "if the messages only contain greetings, phatic chatter, bare media placeholders, or negated actions, return {\"topics\": []}."
                             ),
                         },
                     ]

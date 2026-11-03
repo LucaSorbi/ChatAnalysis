@@ -99,11 +99,24 @@ class ConsistencyService:
                 f"indipendente. Rationale Detection: {detection_result.rationale}"
             )
 
+        union_size = len(set(discovery_eids) | set(detection_eids))
+        jaccard = round(len(overlap) / union_size, 4) if union_size > 0 else 0.0
+        if status == ConsistencyStatus.CONSISTENT:
+            discrepancy_reason_code = "NONE"
+        elif status == ConsistencyStatus.PARTIALLY_CONSISTENT:
+            discrepancy_reason_code = "DISJOINT_EVIDENCE"
+        elif status == ConsistencyStatus.DISCREPANCY_ABSENT:
+            discrepancy_reason_code = "DETECTION_CONFIRMED_ABSENT"
+        else:
+            discrepancy_reason_code = "DETECTION_UNCERTAIN"
+
         meta_dict: dict[str, Any] = {
             "discovery_evidence_count": len(discovery_eids),
             "detection_evidence_count": len(detection_eids),
             "overlap_count": len(overlap),
             "detection_decision": decision.value,
+            "jaccard_similarity": jaccard,
+            "discrepancy_reason_code": discrepancy_reason_code,
         }
 
         is_partial = (
