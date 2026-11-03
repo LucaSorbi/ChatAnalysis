@@ -59,7 +59,7 @@ def test_synthetic_corpus_structure_and_splits():
     dev = [c for c in all_cases if c.split == "DEV"]
     holdout = [c for c in all_cases if c.split == "HOLDOUT"]
     assert len(dev) >= 8
-    assert len(holdout) >= 4
+    assert len(holdout) >= 6
     scenarios = {c.scenario for c in dev}
     assert {"I", "II", "III", "IV", "V_A", "V_B", "VI", "VII", "VIII"} <= scenarios
 
@@ -229,7 +229,7 @@ def test_aggregate_topic_discovery_consolidates_domain_stems_and_preserves_disti
     assert {"d3_m04::ORIGINAL_TEXT"} in eids_sets
     assert {"d3_m07::ORIGINAL_TEXT"} in eids_sets
 
-    # Verifica consolidamento transitivo su workflow tecnico unico (Docker + GitHub PR)
+    # Verifica che topic con compiti distinti ed evidenze disgiunte NON vengano fusi forzatamente
     r_devops = TopicDiscoveryResult(
         topics=(
             DiscoveredTopic(
@@ -256,13 +256,110 @@ def test_aggregate_topic_discovery_consolidates_domain_stems_and_preserves_disti
         provenance_document_id="doc_devops::chunk_0",
     )
     agg_devops = aggregate_topic_discovery([r_devops], parent_document_id="doc_devops", max_topics=10)
-    assert len(agg_devops.topics) == 1
-    assert set(agg_devops.topics[0].evidence_ids) == {
-        "d5a_m01::ORIGINAL_TEXT",
-        "d5a_m02::ORIGINAL_TEXT",
-        "d5a_m03::ORIGINAL_TEXT",
-        "d5a_m04::ORIGINAL_TEXT",
-    }
+    # I task con evidenze disgiunte e domini/azioni differenti non vengono unificati artificialmente
+    assert len(agg_devops.topics) >= 2
+
+
+def test_consolidation_negative_synthetic_pairs_preserve_distinct_topics():
+    """
+    Verifica con test sintetici NEGATIVI che compiti, azioni o domini distinti
+    NON vengano mai impropriamente fusi per alzare artificialmente la precisione:
+    1. Due problemi distinti dello stesso database (Deadlock vs Migrazione);
+    2. Acquisto vs restituzione dello stesso prodotto (Acquisto vs Reso);
+    3. Due viaggi distinti verso la stessa città (Lavoro vs Vacanza a Milano);
+    4. Stesso termine tecnico ma task diversi (Backup vs Ottimizzazione query);
+    5. Stessa chat, evidenze disgiunte (Bug fix vs Merge PR).
+    """
+    # 1. Due problemi distinti dello stesso database
+    r_db = TopicDiscoveryResult(
+        topics=(
+            DiscoveredTopic("Deadlock transazioni PostgreSQL", "Analisi blocchi reciproci.", ("m01", "m02")),
+            DiscoveredTopic("Migrazione schema PostgreSQL", "Esecuzione script DDL tabelle.", ("m03", "m04")),
+        ),
+        provenance_document_id="doc_db",
+    )
+    agg_db = aggregate_topic_discovery([r_db], "doc_db")
+    assert len(agg_db.topics) == 2
+
+    # 2. Acquisto vs restituzione dello stesso prodotto
+    r_prod = TopicDiscoveryResult(
+        topics=(
+            DiscoveredTopic("Acquisto stampante laser da ufficio", "Ordine e fattura stampante.", ("m05",)),
+            DiscoveredTopic("Restituzione stampante laser guasta", "Reso fornitore stampante.", ("m06",)),
+        ),
+        provenance_document_id="doc_prod",
+    )
+    agg_prod = aggregate_topic_discovery([r_prod], "doc_prod")
+    assert len(agg_prod.topics) == 2
+
+    # 3. Due viaggi distinti verso la stessa città
+    r_city = TopicDiscoveryResult(
+        topics=(
+            DiscoveredTopic("Viaggio di lavoro a Milano", "Riunione consulenza clienti.", ("m07",)),
+            DiscoveredTopic("Weekend di vacanza a Milano", "Musei e relax con amici.", ("m08",)),
+        ),
+        provenance_document_id="doc_city",
+    )
+    agg_city = aggregate_topic_discovery([r_city], "doc_city")
+    assert len(agg_city.topics) == 2
+
+    # 4. Stesso termine tecnico ma task diversi
+    r_pg = TopicDiscoveryResult(
+        topics=(
+            DiscoveredTopic("Backup database PostgreSQL", "Configurazione dump notturno.", ("m09",)),
+            DiscoveredTopic("Ottimizzazione query PostgreSQL", "Creazione indici lenti.", ("m10",)),
+        ),
+        provenance_document_id="doc_pg",
+    )
+    agg_pg = aggregate_topic_discovery([r_pg], "doc_pg")
+    assert len(agg_pg.topics) == 2
+
+    # 5. Stessa chat, evidenze disgiunte
+    r_disj = TopicDiscoveryResult(
+        topics=(
+            DiscoveredTopic("Correzione bug autenticazione", "Bug fix login backend.", ("m11",)),
+            DiscoveredTopic("Merge pull request su GitHub", "Merge PR completato.", ("m12",)),
+        ),
+        provenance_document_id="doc_disj",
+    )
+    agg_disj = aggregate_topic_discovery([r_disj], "doc_disj")
+    assert len(agg_disj.topics) == 2
+
+
+def test_filter_operational_discovered_topics_preserves_legitimate_cancellation_topic():
+    """Verifica che un topic legittimo sull'annullamento/rinuncia non venga eliminato dal filtro negazioni."""
+    from tests.fixtures.synthetic_semantic_corpus import _make_doc
+
+    doc = _make_doc(
+        "doc_cancellation",
+        [
+            ("c_m01", "Elena", "1", "Ho annullato tutto l'ordine dei biglietti perché lo spettacolo è stato rinviato.", None, None),
+        ],
+    )
+
+    cancellation_topic = DiscoveredTopic(
+        label="Annullamento ordine biglietti",
+        short_description="Elena ha annullato l'ordine dei biglietti dello spettacolo.",
+        evidence_ids=("c_m01::ORIGINAL_TEXT",),
+    )
+    false_affirmative_topic = DiscoveredTopic(
+        label="Acquisto biglietti per lo spettacolo",
+        short_description="Acquisto completato dei biglietti.",
+        evidence_ids=("c_m01::ORIGINAL_TEXT",),
+    )
+
+    filtered = filter_operational_discovered_topics((cancellation_topic, false_affirmative_topic), doc)
+    assert len(filtered) == 1
+    assert filtered[0].label == "Annullamento ordine biglietti"
+
+
+def test_phatic_classifier_rejects_substantive_phrases():
+    """Verifica che frasi con contenuti reali ('Lavoro domani') non siano scambiate per saluti fàtici."""
+    assert is_phatic_greeting_text("Lavoro domani") is False
+    assert is_phatic_greeting_text("Domani mattina alle 9 ho una riunione") is False
+    assert is_phatic_greeting_text("Bene, ci vediamo domani un abbraccio") is True
+    assert is_phatic_greeting_text("Ciao Marco! Come stai?") is True
+    assert is_phatic_greeting_text("Grazie mille, a dopo!") is True
 
 
 def test_lmstudio_ensure_model_loaded_reloads_when_flash_attention_true_detected(monkeypatch: pytest.MonkeyPatch):
@@ -290,6 +387,8 @@ def test_lmstudio_ensure_model_loaded_reloads_when_flash_attention_true_detected
 
         if method == "GET" and "/v1/models" in url and "/api/v1/models" not in url:
             return Resp({"data": [{"id": "qwen2.5-7b-instruct"}]})
+        if method == "GET" and "/v1/models" in url and "/api/v1/models" not in url:
+            return Resp({"data": [{"id": "meta-llama-3-8b-instruct"}]})
         if method == "GET" and "/api/v1/models" in url:
             return Resp({
                 "models": [{
@@ -328,6 +427,202 @@ def test_lmstudio_ensure_model_loaded_reloads_when_flash_attention_true_detected
         "echo_load_config": True,
         "flash_attention": False,
     }
+
+
+def test_lmstudio_ensure_model_loaded_keeps_non_qwen_model_without_unloading(monkeypatch: pytest.MonkeyPatch):
+    """Verifica di non regressione: modelli non-Qwen già caricati non vengono scaricati arbitrariamente."""
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def mock_urlopen(req: Any, timeout: float = 10.0) -> Any:
+        url = req.full_url
+        method = req.get_method()
+        body = json.loads(req.data.decode("utf-8")) if req.data else None
+        calls.append((method, url, body))
+
+        class Resp:
+            def __init__(self, payload: dict[str, Any], status: int = 200):
+                self.status = status
+                self._bytes = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._bytes
+
+            def __enter__(self) -> Resp:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+        if method == "GET" and "/v1/models" in url and "/api/v1/models" not in url:
+            return Resp({"data": [{"id": "meta-llama-3.1-8b-instruct"}]})
+        if method == "GET" and "/api/v1/models" in url:
+            return Resp({
+                "models": [{
+                    "key": "meta-llama-3.1-8b-instruct",
+                    "display_name": "Llama 3.1 8B Instruct",
+                    "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                    "loaded_instances": [{
+                        "id": "meta-llama-3.1-8b-instruct",
+                        "config": {"context_length": 8192, "flash_attention": True},
+                    }],
+                }]
+            })
+        raise AssertionError(f"Chiamata inattesa: {method} {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    client = LmStudioClient()
+    active_id = client.ensure_model_loaded("meta-llama-3.1-8b-instruct", context_length=8192)
+    assert active_id == "meta-llama-3.1-8b-instruct"
+    unload_calls = [c for c in calls if "/api/v1/models/unload" in c[1]]
+    assert len(unload_calls) == 0
+
+
+def test_lmstudio_ensure_model_loaded_keeps_instance_when_config_is_none(monkeypatch: pytest.MonkeyPatch):
+    """Verifica che un'istanza con config non disponibile o None non venga scaricata."""
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def mock_urlopen(req: Any, timeout: float = 10.0) -> Any:
+        url = req.full_url
+        method = req.get_method()
+        body = json.loads(req.data.decode("utf-8")) if req.data else None
+        calls.append((method, url, body))
+
+        class Resp:
+            def __init__(self, payload: dict[str, Any], status: int = 200):
+                self.status = status
+                self._bytes = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._bytes
+
+            def __enter__(self) -> Resp:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+        if method == "GET" and "/v1/models" in url and "/api/v1/models" not in url:
+            return Resp({"data": [{"id": "meta-llama-3-8b-instruct"}]})
+        if method == "GET" and "/api/v1/models" in url:
+            return Resp({
+                "models": [{
+                    "key": "qwen2.5-7b-instruct",
+                    "display_name": "Qwen2.5 7B Instruct",
+                    "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                    "loaded_instances": [{
+                        "id": "qwen2.5-7b-instruct",
+                        "config": None,
+                    }],
+                }]
+            })
+        raise AssertionError(f"Chiamata inattesa: {method} {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    client = LmStudioClient()
+    active_id = client.ensure_model_loaded("qwen2.5-7b-instruct", context_length=8192)
+    assert active_id == "qwen2.5-7b-instruct"
+    unload_calls = [c for c in calls if "/api/v1/models/unload" in c[1]]
+    assert len(unload_calls) == 0
+
+
+def test_lmstudio_ensure_model_loaded_respects_explicit_flash_attention_true(monkeypatch: pytest.MonkeyPatch):
+    """Verifica che l'opzione esplicita flash_attention=True preservi l'istanza attiva senza unload."""
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+
+    def mock_urlopen(req: Any, timeout: float = 10.0) -> Any:
+        url = req.full_url
+        method = req.get_method()
+        body = json.loads(req.data.decode("utf-8")) if req.data else None
+        calls.append((method, url, body))
+
+        class Resp:
+            def __init__(self, payload: dict[str, Any], status: int = 200):
+                self.status = status
+                self._bytes = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._bytes
+
+            def __enter__(self) -> Resp:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+        if method == "GET" and "/v1/models" in url and "/api/v1/models" not in url:
+            return Resp({"data": [{"id": "meta-llama-3-8b-instruct"}]})
+        if method == "GET" and "/api/v1/models" in url:
+            return Resp({
+                "models": [{
+                    "key": "qwen2.5-7b-instruct",
+                    "display_name": "Qwen2.5 7B Instruct",
+                    "quantization": {"name": "Q4_K_M", "bits_per_weight": 4},
+                    "loaded_instances": [{
+                        "id": "qwen2.5-7b-instruct",
+                        "config": {"context_length": 8192, "flash_attention": True},
+                    }],
+                }]
+            })
+        raise AssertionError(f"Chiamata inattesa: {method} {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    client = LmStudioClient()
+    active_id = client.ensure_model_loaded("qwen2.5-7b-instruct", context_length=8192, flash_attention=True)
+    assert active_id == "qwen2.5-7b-instruct"
+    unload_calls = [c for c in calls if "/api/v1/models/unload" in c[1]]
+    assert len(unload_calls) == 0
+
+
+def test_lmstudio_load_model_retries_without_flash_attention_on_http_400(monkeypatch: pytest.MonkeyPatch):
+    """Verifica il fallback resiliente quando un server legacy rifiuta il campo 'flash_attention' con HTTP 400."""
+    calls: list[tuple[str, str, dict[str, Any] | None]] = []
+    attempt = 0
+
+    def mock_urlopen(req: Any, timeout: float = 10.0) -> Any:
+        nonlocal attempt
+        attempt += 1
+        url = req.full_url
+        method = req.get_method()
+        body = json.loads(req.data.decode("utf-8")) if req.data else None
+        calls.append((method, url, body))
+
+        class Resp:
+            def __init__(self, payload: dict[str, Any], status: int = 200):
+                self.status = status
+                self._bytes = json.dumps(payload).encode("utf-8")
+
+            def read(self) -> bytes:
+                return self._bytes
+
+            def __enter__(self) -> Resp:
+                return self
+
+            def __exit__(self, *args: Any) -> None:
+                pass
+
+        if method == "POST" and "/api/v1/models/load" in url:
+            if attempt == 1:
+                # Simula rifiuto HTTP 400 del parametro 'flash_attention'
+                import urllib.error
+                import io
+                raise urllib.error.HTTPError(
+                    url, 400, "Unknown field 'flash_attention'", {}, io.BytesIO(b'{"error": "Unknown field flash_attention"}')
+                )
+            return Resp({
+                "status": "loaded",
+                "instance_id": "qwen2.5-7b-instruct",
+                "model": "qwen2.5-7b-instruct",
+                "load_config": {"context_length": 8192},
+            })
+        raise AssertionError(f"Chiamata inattesa: {method} {url}")
+
+    monkeypatch.setattr(urllib.request, "urlopen", mock_urlopen)
+    client = LmStudioClient()
+    res = client.load_model("qwen2.5-7b-instruct", context_length=8192, flash_attention=False)
+    assert res.status.value in ("LOADED", "loaded", "already_loaded")
+    assert len(calls) == 2
+    assert "flash_attention" in calls[0][2]
+    assert "flash_attention" not in calls[1][2]
 
 
 def test_consistency_service_adds_jaccard_and_discrepancy_reason_code():

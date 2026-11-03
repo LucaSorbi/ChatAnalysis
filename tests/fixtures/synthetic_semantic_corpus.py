@@ -943,6 +943,100 @@ def build_synthetic_semantic_corpus() -> tuple[SyntheticBenchmarkCase, ...]:
         )
     )
 
+    # HOLDOUT 5: UNSEEN - Riparazione tapparella avvolgibile e sostituzione cinghia (tema mai presente nei prompt)
+    doc_ho_5 = _make_doc(
+        "synth_holdout_V_unseen_tapparella",
+        [
+            ("h5_m01", "Giacomo", "1", "Ciao papà, la tapparella del soggiorno si è bloccata a metà e non sale più.", None, None),
+            ("h5_m02", "Giacomo", "2", "Ho provato a tirare la corda ma si è sfilacciata del tutto la cinghia avvolgibile.", None, None),
+            ("h5_m03", "Roberto", "3", "Ho chiamato il tapparellista: viene domani mattina alle 10 per sostituire la cinghia e sbloccare il rullo.", None, None),
+            ("h5_m04", "Giacomo", "4", "Perfetto, lascio io le chiavi dell'appartamento al portiere prima di uscire.", None, None),
+        ],
+    )
+    cases.append(
+        SyntheticBenchmarkCase(
+            case_id="HOLDOUT_V_UNSEEN_TAPPARELLA",
+            split="HOLDOUT",
+            scenario="I",
+            title="[HOLDOUT UNSEEN] Riparazione tapparella bloccata e sostituzione cinghia avvolgibile",
+            expected_language="it",
+            document=doc_ho_5,
+            gold_topics=(
+                GoldTopic(
+                    gold_id="g_ho_tapparella",
+                    canonical_name="Riparazione della tapparella avvolgibile e sostituzione cinghia",
+                    concept_stems=("tapparell", "cinghi", "rull", "avvolgibil", "sostituzion", "riparazion"),
+                    gold_evidence_ids=(_ot("h5_m01"), _ot("h5_m02"), _ot("h5_m03")),
+                ),
+            ),
+            detection_queries=(
+                GoldDetectionQuery(
+                    query_id="q_ho5_pos_tapparella",
+                    label="Riparazione tapparella avvolgibile",
+                    description="Intervento del tecnico per sbloccare la tapparella e cambiare la cinghia rotta del soggiorno.",
+                    expected_decision=TopicDecision.PRESENT,
+                    expected_evidence_ids=(_ot("h5_m01"), _ot("h5_m02"), _ot("h5_m03")),
+                    category="positive",
+                ),
+                GoldDetectionQuery(
+                    query_id="q_ho5_neg_pannelli",
+                    label="Installazione pannelli solari fotovoltaici",
+                    description="Posa di moduli fotovoltaici sul tetto della casa.",
+                    expected_decision=TopicDecision.ABSENT,
+                    expected_evidence_ids=(),
+                    category="negative",
+                ),
+            ),
+        )
+    )
+
+    # HOLDOUT 6: UNSEEN - Richiesta rimborso volo cancellato e rifiuto voucher (tema mai presente nei prompt)
+    doc_ho_6 = _make_doc(
+        "synth_holdout_VI_unseen_volo_refund",
+        [
+            ("h6_m01", "Chiara", "1", "La compagnia aerea ha cancellato il nostro volo per Barcellona a causa dello sciopero.", None, None),
+            ("h6_m02", "Luca", "2", "Ci hanno proposto un voucher sconto ma ho rifiutato espressamente: non ci serve a nulla.", None, None),
+            ("h6_m03", "Luca", "3", "Ho inviato via PEC la richiesta formale di rimborso integrale del biglietto aereo e la compensazione europea.", None, None),
+            ("h6_m04", "Chiara", "4", "Ottimo, salviamo la ricevuta di accettazione e consegna della PEC.", None, None),
+        ],
+    )
+    cases.append(
+        SyntheticBenchmarkCase(
+            case_id="HOLDOUT_VI_UNSEEN_VOLO_REFUND",
+            split="HOLDOUT",
+            scenario="IV",
+            title="[HOLDOUT UNSEEN] Richiesta formale di rimborso volo aereo cancellato e rifiuto voucher",
+            expected_language="it",
+            document=doc_ho_6,
+            gold_topics=(
+                GoldTopic(
+                    gold_id="g_ho_volo_refund",
+                    canonical_name="Richiesta di rimborso per volo aereo cancellato",
+                    concept_stems=("vol", "rimbors", "cancell", "aere", "pec", "bigliett"),
+                    gold_evidence_ids=(_ot("h6_m01"), _ot("h6_m03"), _ot("h6_m04")),
+                ),
+            ),
+            detection_queries=(
+                GoldDetectionQuery(
+                    query_id="q_ho6_pos_rimborso",
+                    label="Richiesta rimborso volo aereo cancellato",
+                    description="Invio tramite PEC del reclamo per ottenere il rimborso del biglietto aereo a seguito della cancellazione del volo.",
+                    expected_decision=TopicDecision.PRESENT,
+                    expected_evidence_ids=(_ot("h6_m01"), _ot("h6_m03"), _ot("h6_m04")),
+                    category="positive",
+                ),
+                GoldDetectionQuery(
+                    query_id="q_ho6_neg_voucher",
+                    label="Accettazione del voucher sconto della compagnia aerea",
+                    description="Accettazione del buono sconto offerto dal vettore al posto del rimborso.",
+                    expected_decision=TopicDecision.ABSENT,
+                    expected_evidence_ids=(),
+                    category="negation",
+                ),
+            ),
+        )
+    )
+
     return tuple(cases)
 
 
