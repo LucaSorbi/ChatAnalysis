@@ -165,6 +165,8 @@ ubuntu_live_gate_readiness_bundle/
 ubuntu_smoke_gate_bundle/
 *_bundle/
 *_audit/
+handoff/
+scratch/
 
 # =============================================================================
 # Checkpoint di analisi reali e dati diagnostici investigativi — MAI versionare

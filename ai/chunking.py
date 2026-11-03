@@ -643,6 +643,127 @@ def normalize_topic_label(label: str) -> str:
     return " ".join(norm.split())
 
 
+_GENERIC_CONSOLIDATION_STEMS: frozenset[str] = frozenset({
+    "tem", "argoment", "descrizion", "organizzazion", "preparazion", "attivit",
+    "pianificazion", "gestion", "problem", "soluzion", "discussion", "conversazion",
+    "conferm", "aggiornament", "prenotazion", "iscrizion", "acquist", "cors",
+    "partit", "studi", "lavor", "incontr", "appuntament", "messagg", "verific",
+    "evidenz", "comunicazion", "pratic", "servizi", "sistem", "progett", "informazion",
+    "richiest", "controll", "orar", "giorn", "settiman", "doman", "ier", "ogg",
+    "real", "sintetic", "test", "val", "valid", "nuov", "prim", "second", "terz",
+    "tecnic", "manutenzion", "correzion", "risoluzion", "error", "problematic",
+})
+
+_DOMAIN_STEM_SYNONYMS: dict[str, str] = {
+    "laptop": "portatil",
+    "notebook": "portatil",
+    "ferroviar": "tren",
+    "ferroviari": "tren",
+    "frecciaross": "tren",
+    "oculistic": "oculist",
+    "dockerfile": "docker",
+    "dockerfil": "docker",
+    "container": "docker",
+    "pipelin": "docker",
+    "deploy": "docker",
+    "staging": "docker",
+    "github": "gitpr",
+    "pull": "gitpr",
+    "merge": "gitpr",
+    "merg": "gitpr",
+    "branch": "gitpr",
+    "request": "gitpr",
+}
+
+
+def _extract_domain_stems(text: str) -> set[str]:
+    norm = normalize_topic_label(text)
+    if not norm:
+        return set()
+    stems: set[str] = set()
+    for w in norm.split():
+        if w in ITALIAN_STOP_WORDS or w.isdigit():
+            continue
+        st = stem_italian_word(w)
+        st = _DOMAIN_STEM_SYNONYMS.get(st, st)
+        if len(st) < 4 or st in _GENERIC_CONSOLIDATION_STEMS:
+            continue
+        stems.add(st)
+    return stems
+
+
+def _extract_label_numbers(label: str) -> tuple[str, ...]:
+    return tuple(re.findall(r"\d+", label or ""))
+
+
+_OPPOSING_ACTION_STEMS: tuple[tuple[frozenset[str], frozenset[str]], ...] = (
+    (frozenset({"acquist", "ordin", "compr"}), frozenset({"restituzion", "res", "rimbors", "annullament"})),
+    (frozenset({"installazion", "attivazion"}), frozenset({"disinstallazion", "disattivazion", "rimozion"})),
+    (frozenset({"partenz", "andat"}), frozenset({"ritorn", "rientr"})),
+    (frozenset({"backup", "salvatagg"}), frozenset({"ottimizzazion", "query", "migrazion", "deadlock"})),
+    (frozenset({"lavor", "consulenz"}), frozenset({"vacanz", "turism"})),
+)
+
+
+def _have_opposing_actions(stems_a: set[str], stems_b: set[str]) -> bool:
+    for s1, s2 in _OPPOSING_ACTION_STEMS:
+        if (stems_a & s1 and stems_b & s2) or (stems_a & s2 and stems_b & s1):
+            return True
+    return False
+
+
+def _find_matching_consolidated_key(
+    consolidated: dict[str, dict[str, Any]],
+    canonical_key: str,
+    lbl_clean: str,
+    dsc_clean: str,
+    eids_set: set[str],
+) -> str | None:
+    if canonical_key in consolidated:
+        return canonical_key
+
+    cand_nums = _extract_label_numbers(lbl_clean)
+    cand_lbl_stems = _extract_domain_stems(lbl_clean)
+    cand_all_stems = _extract_domain_stems(f"{lbl_clean} {dsc_clean}")
+    if not cand_all_stems:
+        return None
+
+    for key, item in consolidated.items():
+        item_nums = item.get("label_numbers", ())
+        if cand_nums != item_nums and (cand_nums or item_nums):
+            continue
+
+        item_lbl_stems: set[str] = item.get("label_domain_stems", set())
+        item_all_stems: set[str] = item.get("all_domain_stems", set())
+        if not item_all_stems:
+            continue
+
+        # Guardia semantica: azioni o finalità opposte/contraddittorie sui titoli non devono mai fondersi
+        if _have_opposing_actions(cand_lbl_stems, item_lbl_stems):
+            continue
+
+        shared_lbl = cand_lbl_stems & item_lbl_stems
+        shared_all = cand_all_stems & item_all_stems
+        has_evidence_overlap = bool(eids_set & item["evidence_ids_set"])
+
+        # Caso 1: Condivisione diretta di evidenze forensi (stessi messaggi o allegati citati)
+        if has_evidence_overlap:
+            if shared_lbl or len(shared_all) >= 2:
+                return key
+
+        # Caso 2: Evidenze disgiunte (topic rilevati in messaggi/chunk separati)
+        # Richiede alta sovrapposizione tematica sui soli stem delle label (Jaccard >= 0.5 con almeno 2 stem,
+        # oppure identità esatta degli stem di label) per evitare che un topic incorpori ingiustificatamente
+        # un'attività distinta solo perché citata nella descrizione contestuale.
+        if cand_lbl_stems and item_lbl_stems:
+            union_lbl = cand_lbl_stems | item_lbl_stems
+            jaccard = len(shared_lbl) / len(union_lbl) if union_lbl else 0.0
+            if (len(shared_lbl) >= 2 and jaccard >= 0.5) or (cand_lbl_stems == item_lbl_stems):
+                return key
+
+    return None
+
+
 def aggregate_topic_discovery(
     chunk_results: Sequence[TopicDiscoveryResult],
     parent_document_id: str,
@@ -676,8 +797,10 @@ def aggregate_topic_discovery(
             lbl_clean = re.sub(r"^(?:label|topic|titolo|argomento|in)\s*[:=]\s*", "", t.label.strip(), flags=re.IGNORECASE).strip().strip("'\"") or t.label.strip()
             dsc_clean = re.sub(r"^(?:short_description|description|descrizione|in)\s*[:=]\s*", "", t.short_description.strip(), flags=re.IGNORECASE).strip() or t.short_description.strip()
             canonical_key = canonicalize_topic_label(lbl_clean) or normalize_topic_label(lbl_clean) or lbl_clean.casefold()
-            if canonical_key in consolidated:
-                item = consolidated[canonical_key]
+            cand_eids_set = set(t.evidence_ids)
+            match_key = _find_matching_consolidated_key(consolidated, canonical_key, lbl_clean, dsc_clean, cand_eids_set)
+            if match_key is not None:
+                item = consolidated[match_key]
                 item["supporting_chunks"].add(chunk_id)
                 eids_set = item["evidence_ids_set"]
                 eids_list = item["evidence_ids"]
@@ -685,10 +808,23 @@ def aggregate_topic_discovery(
                     if eid not in eids_set:
                         eids_set.add(eid)
                         eids_list.append(eid)
+                cand_lbl_stems = _extract_domain_stems(lbl_clean)
+                cand_all_stems = _extract_domain_stems(f"{lbl_clean} {dsc_clean}")
+                item["all_domain_stems"].update(cand_all_stems)
                 if len(dsc_clean) > len(item["short_description"]) and len(dsc_clean) <= 300:
                     item["short_description"] = dsc_clean
-                if len(lbl_clean) > len(item["label"]) and len(lbl_clean) <= 45:
+                if (
+                    len(cand_lbl_stems) > len(item.get("label_domain_stems", set()))
+                    and len(lbl_clean) <= 55
+                ) or (
+                    len(cand_lbl_stems) == len(item.get("label_domain_stems", set()))
+                    and len(lbl_clean) > len(item["label"])
+                    and len(lbl_clean) <= 45
+                ):
                     item["label"] = lbl_clean
+                    item["label_domain_stems"] = cand_lbl_stems
+                else:
+                    item["label_domain_stems"].update(cand_lbl_stems)
             else:
                 eids_list = list(t.evidence_ids)
                 consolidated[canonical_key] = {
@@ -699,8 +835,45 @@ def aggregate_topic_discovery(
                     "evidence_ids_set": set(eids_list),
                     "supporting_chunks": {chunk_id},
                     "first_seen_index": order_idx,
+                    "label_numbers": _extract_label_numbers(lbl_clean),
+                    "label_domain_stems": _extract_domain_stems(lbl_clean),
+                    "all_domain_stems": _extract_domain_stems(f"{lbl_clean} {dsc_clean}"),
                 }
                 order_idx += 1
+
+    # Secondo passaggio deterministico di chiusura transitiva (es. quando un topic intermedio
+    # collega due sotto-passaggi dello stesso workflow tecnico tramite i rispettivi stem di dominio)
+    merged_in_pass = True
+    while merged_in_pass and len(consolidated) > 1:
+        merged_in_pass = False
+        keys_list = list(consolidated.keys())
+        for idx_b in range(len(keys_list) - 1, 0, -1):
+            key_b = keys_list[idx_b]
+            if key_b not in consolidated:
+                continue
+            item_b = consolidated[key_b]
+            subset_consolidated = {k: consolidated[k] for k in keys_list[:idx_b] if k in consolidated}
+            target_key = _find_matching_consolidated_key(
+                subset_consolidated,
+                "__no_exact__",
+                item_b["label"],
+                item_b["short_description"],
+                item_b["evidence_ids_set"],
+            )
+            if target_key is not None:
+                target_item = consolidated[target_key]
+                target_item["supporting_chunks"].update(item_b["supporting_chunks"])
+                for eid in item_b["evidence_ids"]:
+                    if eid not in target_item["evidence_ids_set"]:
+                        target_item["evidence_ids_set"].add(eid)
+                        target_item["evidence_ids"].append(eid)
+                target_item["all_domain_stems"].update(item_b["all_domain_stems"])
+                target_item["label_domain_stems"].update(item_b["label_domain_stems"])
+                if len(item_b["short_description"]) > len(target_item["short_description"]) and len(item_b["short_description"]) <= 300:
+                    target_item["short_description"] = item_b["short_description"]
+                del consolidated[key_b]
+                merged_in_pass = True
+                break
 
     consolidated_items = list(consolidated.values())
     consolidated_count = len(consolidated_items)
