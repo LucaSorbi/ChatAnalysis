@@ -31,7 +31,7 @@ from ai.backend import (
     AnalysisInputTooLargeError,
     BaseLlmClient,
 )
-from ai.chunking import verify_translated_document_size
+from ai.chunking import is_substantive_message_bundle, verify_translated_document_size
 from ai.models import (
     AnalysisLanguageStrategy,
     ConversationEvidenceDocument,
@@ -616,7 +616,15 @@ OUTPUT RULES:
                     if cat == "CONTEXT_OVERFLOW":
                         raise
                     if cat == "INFERENCE_BACKEND_ERROR":
-                        if len(document.bundles) > 8:
+                        if hasattr(self.client, "unload_model") and hasattr(self.client, "ensure_model_loaded"):
+                            try:
+                                self.client.unload_model(target_model)
+                                self.client.ensure_model_loaded(target_model)
+                            except Exception:
+                                pass
+
+                        substantive_count = sum(1 for b in document.bundles if is_substantive_message_bundle(b))
+                        if substantive_count > 8:
                             raise
                         # GBNF crash fallback su blocchi piccoli: su retry aggiriamo il parser GBNF C++ di llama.cpp
                         # usando una direttiva esplicita di formato JSON validata rigorosamente lato Python
@@ -1206,7 +1214,16 @@ Instructions:
                     if cat == "CONTEXT_OVERFLOW":
                         raise
                     if cat == "INFERENCE_BACKEND_ERROR":
-                        if len(document.bundles) > 8:
+                        # Ripristino preventivo dello slot del motore LM Studio se corrotto da eccezione stream/grammatica
+                        if hasattr(self.client, "unload_model") and hasattr(self.client, "ensure_model_loaded"):
+                            try:
+                                self.client.unload_model(target_model)
+                                self.client.ensure_model_loaded(target_model)
+                            except Exception:
+                                pass
+
+                        substantive_count = sum(1 for b in document.bundles if is_substantive_message_bundle(b))
+                        if substantive_count > 8:
                             # Su blocchi grandi rilanciamo affinché lo scheduler di microchunking possa bisezionare
                             raise
                         # GBNF crash fallback: su retry aggiriamo il parser GBNF C++ di llama.cpp
