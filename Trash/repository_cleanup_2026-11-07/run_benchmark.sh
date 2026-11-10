@@ -157,20 +157,33 @@ echo
 
 
 # ------------------------------------------------------------
-# 7. Python virtual environment
+# 7. Python interpreter (no virtual environment activation needed)
 # ------------------------------------------------------------
 
-if [ ! -f ".venv/bin/activate" ]; then
-    echo "ERRORE: ambiente virtuale .venv non trovato."
+# If a virtual environment is already active, python3/python from PATH
+# normally points to it. Otherwise use the installed system interpreter.
+# BENCHMARK_PYTHON can override the choice with an explicit interpreter path.
+if [ -n "${BENCHMARK_PYTHON:-}" ]; then
+    PYTHON_BIN="$BENCHMARK_PYTHON"
+elif command -v python3 >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python3)"
+elif command -v python >/dev/null 2>&1; then
+    PYTHON_BIN="$(command -v python)"
+elif [ -x "$SCRIPT_DIR/.venv/bin/python" ]; then
+    PYTHON_BIN="$SCRIPT_DIR/.venv/bin/python"
+else
+    echo "ERRORE: Python non trovato (PATH o .venv/bin/python)."
     exit 1
 fi
 
-# shellcheck disable=SC1091
-source .venv/bin/activate
+if ! "$PYTHON_BIN" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 12) else 1)' >/dev/null 2>&1; then
+    echo "ERRORE: interprete Python non utilizzabile o versione inferiore a 3.12: $PYTHON_BIN"
+    exit 1
+fi
 
-echo "Python:"
-which python
-python --version
+echo "Python interpreter: $PYTHON_BIN"
+"$PYTHON_BIN" -c 'import sys; print("Python executable:", sys.executable)'
+"$PYTHON_BIN" --version
 echo
 
 
@@ -239,7 +252,7 @@ echo
 # 11. Verify local API
 # ------------------------------------------------------------
 
-python - <<'PY'
+"$PYTHON_BIN" - <<'PY'
 import json
 import urllib.request
 
@@ -333,7 +346,7 @@ echo
 # 15. Verify exact model identifier
 # ------------------------------------------------------------
 
-EXPECTED_MODEL="$MODEL_ID" python - <<'PY'
+EXPECTED_MODEL="$MODEL_ID" "$PYTHON_BIN" - <<'PY'
 import os
 import sys
 
@@ -487,9 +500,10 @@ echo
     echo "PYTHON"
     echo "------------------------------------------------------------"
 
-    which python
-    python --version
-    python -m pip --version
+    echo "Interpreter: $PYTHON_BIN"
+    "$PYTHON_BIN" -c 'import sys; print("Executable:", sys.executable)'
+    "$PYTHON_BIN" --version
+    "$PYTHON_BIN" -m pip --version
 
     echo
 
@@ -549,7 +563,7 @@ echo
 
 BENCHMARK_START="$(date +%s)"
 
-python ai/experiment.py \
+"$PYTHON_BIN" ai/experiment.py \
     --model-id "$MODEL_ID" \
     --family "$FAMILY" \
     --quantization "$QUANTIZATION" \

@@ -760,6 +760,7 @@ class LocalTopicAnalysisService:
                 raise TopicProvenanceError(
                     f"Discrepanza di origine per la run recuperata '{eff_run_id}': metadata='{origin_str}' != checkpoint='{chk_origin}'."
                 )
+            return self._record_authoritative_discovery_run(document_id, discovery_result)
 
         # Se la run live è già registrata, verifica che la registrazione esterna non tenti di sovrascriverla o alterarla
         existing = self._discovery_runs.get(document_id, {}).get(eff_run_id)
@@ -4738,6 +4739,7 @@ class LocalTopicAnalysisService:
             "original_run_id": orig_run_id,
             "document_id": document.document_id,
             "origin": persisted_origin,
+            "max_topics": eff_max_topics,
             "loading_mode": LoadingMode.CHECKPOINT_RESTORE.value,
             "recovery_mode": "CHECKPOINT_RESTORE",
             "attestation_level": attestation,
@@ -4851,20 +4853,27 @@ class LocalTopicAnalysisService:
                 s_raw = chk_data.serialized_results[s_idx]
                 try:
                     c_res = deserialize_discovery_result_from_checkpoint(s_raw)
-                    deserialized_chunk_results.append(c_res)
-                except Exception:
-                    pass
+                except Exception as d_err:
+                    raise TopicProvenanceError(
+                        f"Corruzione checkpoint per la run '{run_id}': deserializzazione fallita per il blocco {s_idx}."
+                    ) from d_err
+                deserialized_chunk_results.append(c_res)
         elif chk_data.subchunks:
-            for sub in chk_data.subchunks:
+            for sub_idx, sub in enumerate(chk_data.subchunks):
                 sub_raw = sub.get("serialized_result")
-                if isinstance(sub_raw, dict):
-                    try:
-                        c_res = deserialize_discovery_result_from_checkpoint(sub_raw)
-                        deserialized_chunk_results.append(c_res)
-                    except Exception:
-                        pass
+                if not isinstance(sub_raw, dict):
+                    raise TopicProvenanceError(
+                        f"Corruzione checkpoint per la run '{run_id}': subchunk {sub_idx} privo di serialized_result valido."
+                    )
+                try:
+                    c_res = deserialize_discovery_result_from_checkpoint(sub_raw)
+                except Exception as d_err:
+                    raise TopicProvenanceError(
+                        f"Corruzione checkpoint per la run '{run_id}': deserializzazione fallita per il subchunk {sub_idx}."
+                    ) from d_err
+                deserialized_chunk_results.append(c_res)
 
-        eff_max_topics = getattr(self.config, "max_topics", 10) or 10
+        eff_max_topics = meta.get("max_topics") or getattr(self.config, "max_topics", 10) or 10
         if deserialized_chunk_results:
             reconstructed_aggregate = aggregate_topic_discovery(
                 chunk_results=deserialized_chunk_results,
@@ -4883,9 +4892,6 @@ class LocalTopicAnalysisService:
         checkpoint_topics: dict[str, DiscoveredTopic] = {}
         for t in reconstructed_aggregate.topics:
             checkpoint_topics[t.label.strip().casefold()] = t
-            ckey = canonicalize_topic_label(t.label) or normalize_topic_label(t.label)
-            if ckey:
-                checkpoint_topics[ckey.strip().casefold()] = t
 
         if len(registered_run.topics) != len(reconstructed_aggregate.topics):
             raise TopicProvenanceError(
@@ -4896,20 +4902,67 @@ class LocalTopicAnalysisService:
 
         for reg_t in registered_run.topics:
             norm_lbl = reg_t.label.strip().casefold()
-            reg_ckey = (canonicalize_topic_label(reg_t.label) or normalize_topic_label(reg_t.label) or "").strip().casefold()
-            chk_t = checkpoint_topics.get(norm_lbl) or (checkpoint_topics.get(reg_ckey) if reg_ckey else None)
+            chk_t = checkpoint_topics.get(norm_lbl)
             if chk_t is None:
                 raise TopicProvenanceError(
                     f"Topic modificato o non autentico: il topic '{reg_t.label}' non è presente nei blocchi del checkpoint SQLite."
                 )
-            if reg_t.short_description.strip() != chk_t.short_description.strip():
-                raise TopicProvenanceError(
-                    f"Topic modificato: la descrizione di '{reg_t.label}' è stata alterata rispetto al checkpoint."
-                )
-            if tuple(reg_t.evidence_ids) != tuple(chk_t.evidence_ids):
+
+            # Raccoglie le descrizioni autentiche dei soli chunk che hanno contribuito a questo esatto topic aggregato
+            contributing_descriptions: set[str] = {chk_t.short_description.strip()}
+            chk_ckey = (canonicalize_topic_label(chk_t.label) or normalize_topic_label(chk_t.label) or "").strip().casefold()
+
+            # Raccoglie le coppie esatte e congiunte (short_description, tuple(evidence_ids)) registrate in singoli blocchi per questo topic
+            authentic_chunk_pairs: set[tuple[str, tuple[str, ...]]] = set()
+
+            for c_res in deserialized_chunk_results:
+                for ct in c_res.topics:
+                    ct_norm = ct.label.strip().casefold()
+                    ct_ckey = (canonicalize_topic_label(ct.label) or normalize_topic_label(ct.label) or "").strip().casefold()
+                    is_contributor = (ct_norm == norm_lbl) or (chk_ckey and ct_ckey == chk_ckey)
+                    if is_contributor and ct.short_description.strip():
+                        contributing_descriptions.add(ct.short_description.strip())
+                    if ct_norm == norm_lbl:
+                        authentic_chunk_pairs.add((ct.short_description.strip(), tuple(ct.evidence_ids)))
+
+            if chk_data.subchunks:
+                for sub in chk_data.subchunks:
+                    sub_raw = sub.get("serialized_result")
+                    if isinstance(sub_raw, dict):
+                        sub_res = deserialize_discovery_result_from_checkpoint(sub_raw)
+                        for st in sub_res.topics:
+                            st_norm = st.label.strip().casefold()
+                            st_ckey = (canonicalize_topic_label(st.label) or normalize_topic_label(st.label) or "").strip().casefold()
+                            is_contributor = (st_norm == norm_lbl) or (chk_ckey and st_ckey == chk_ckey)
+                            if is_contributor and st.short_description.strip():
+                                contributing_descriptions.add(st.short_description.strip())
+                            if st_norm == norm_lbl:
+                                authentic_chunk_pairs.add((st.short_description.strip(), tuple(st.evidence_ids)))
+
+            reg_desc = reg_t.short_description.strip()
+            reg_eids = tuple(reg_t.evidence_ids)
+            agg_eids = tuple(chk_t.evidence_ids)
+
+            # Criterio C1 (Forma aggregata): sequenza esatta degli evidence_id dell'aggregato + descrizione aggregata o di un chunk contribuente
+            is_valid_aggregate_form = (
+                reg_eids == agg_eids
+                and reg_desc in contributing_descriptions
+            )
+
+            # Criterio C2 (Forma di singolo blocco): coppia esatta e congiunta (short_description, tuple(evidence_ids)) salvata in un medesimo blocco
+            is_valid_chunk_form = (reg_desc, reg_eids) in authentic_chunk_pairs
+
+            if not is_valid_aggregate_form and not is_valid_chunk_form:
+                # Distingue formalmente il motivo del rigetto fail-closed
+                all_authentic_descriptions = contributing_descriptions | {p[0] for p in authentic_chunk_pairs}
+                if reg_desc not in all_authentic_descriptions:
+                    raise TopicProvenanceError(
+                        f"Topic modificato: la descrizione di '{reg_t.label}' è stata alterata rispetto al checkpoint."
+                    )
                 raise TopicProvenanceError(
                     f"Topic modificato: gli evidence_id di '{reg_t.label}' sono stati alterati rispetto al checkpoint."
                 )
+
             if not set(reg_t.evidence_ids).issubset(valid_evidence_ids):
                 raise TopicProvenanceError(
                     f"Evidenze estranee nel topic '{reg_t.label}': contiene evidence_id non appartenenti al documento attivo."

@@ -12,7 +12,7 @@ La vista (`ui/presentation.py`) si limita a mostrare ciò che questo modulo deci
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, MutableMapping, Sequence
+from typing import Any, Mapping, MutableMapping, Sequence
 
 from ai.models import (
     ConversationEvidenceDocument,
@@ -38,9 +38,25 @@ from analysis.verification import (
 BLOCK_MESSAGES: dict[str, str] = {
     "NO_DOCUMENT": "Nessun documento di conversazione disponibile.",
     "NO_EVIDENCE": "Il documento non contiene evidenze analizzabili: impossibile avviare la Topic Detection.",
+    "PROVENANCE_MISSING": (
+        "Metadati di provenienza del documento mancanti per questo topic: verifica indipendente disabilitata."
+    ),
     "DOCUMENT_MISMATCH": "Il topic appartiene a un altro documento: verifica bloccata per discrepanza di provenienza.",
+    "RUN_ID_MISSING": (
+        "Identificativo della run di Discovery mancante nei metadati: verifica indipendente disabilitata."
+    ),
     "DISCOVERY_RUN_UNAVAILABLE": (
         "La run di Discovery di questo topic non è più disponibile in sessione: rieseguire la Topic Discovery."
+    ),
+    "ORIGIN_MISSING": (
+        "Origine dell'esecuzione Discovery mancante o non valida nei metadati: verifica indipendente disabilitata."
+    ),
+    "SYNTHETIC_REFERENCE_ORIGIN": (
+        "Il topic proviene da un riferimento sintetico dimostrativo: "
+        "la verifica indipendente richiede una Topic Discovery effettiva."
+    ),
+    "TOPIC_METADATA_INVALID": (
+        "Dati strutturali del topic incompleti nei metadati della scheda: verifica indipendente disabilitata."
     ),
     "SNAPSHOT_MISMATCH": (
         "Il documento attuale ha un contenuto diverso da quello analizzato da questa Discovery "
@@ -79,17 +95,31 @@ class VerificationPreconditions:
     discovery_status: str | None
 
 
+_UNSET = object()
+
+
+def _clean_non_empty_str(value: Any) -> str | None:
+    """Normalizza un identificativo testuale non vuoto; rifiuta None, stringhe vuote o solo spazi."""
+    if isinstance(value, str):
+        stripped = value.strip()
+        return stripped if stripped else None
+    return None
+
+
 def find_discovery_run(
     run_id: str | None,
     document_id: str,
     candidate_runs: Sequence[TopicDiscoveryResult],
 ) -> TopicDiscoveryResult | None:
     """Run di Discovery per IDENTIFICATIVO (e documento): mai per posizione né per label."""
-    if not run_id:
+    clean_run_id = _clean_non_empty_str(run_id)
+    clean_doc_id = _clean_non_empty_str(document_id)
+    if clean_run_id is None or clean_doc_id is None:
         return None
     for r in candidate_runs:
-        meta = r.metadata or {}
-        if r.provenance_document_id == document_id and str(meta.get("run_id", "")).strip() == str(run_id).strip():
+        meta = r.metadata if isinstance(r.metadata, Mapping) else {}
+        r_run_id = _clean_non_empty_str(meta.get("run_id"))
+        if getattr(r, "provenance_document_id", None) == clean_doc_id and r_run_id == clean_run_id:
             return r
     return None
 
@@ -97,7 +127,10 @@ def find_discovery_run(
 def evaluate_verification_preconditions(
     document: ConversationEvidenceDocument | None,
     discovery_result: TopicDiscoveryResult | None,
-    topic_provenance_document_id: str | None = None,
+    topic_provenance_document_id: Any = _UNSET,
+    *,
+    topic_discovery_run_id: Any = _UNSET,
+    discovered_topic: Any = _UNSET,
 ) -> VerificationPreconditions:
     """Precondizioni della verifica: stesse regole del service (snapshot, provenienza), valutate PRIMA del click."""
 
@@ -108,12 +141,51 @@ def evaluate_verification_preconditions(
         return _blocked("NO_DOCUMENT")
     if not document.all_evidence_sections:
         return _blocked("NO_EVIDENCE")
-    if topic_provenance_document_id is not None and topic_provenance_document_id != document.document_id:
-        return _blocked("DOCUMENT_MISMATCH")
+
+    if topic_provenance_document_id is not _UNSET:
+        clean_topic_prov = _clean_non_empty_str(topic_provenance_document_id)
+        if clean_topic_prov is None:
+            return _blocked("PROVENANCE_MISSING")
+        if clean_topic_prov != document.document_id:
+            return _blocked("DOCUMENT_MISMATCH")
+
+    if topic_discovery_run_id is not _UNSET:
+        clean_topic_run_id = _clean_non_empty_str(topic_discovery_run_id)
+        if clean_topic_run_id is None:
+            return _blocked("RUN_ID_MISSING")
+
+    if discovered_topic is not _UNSET:
+        if (
+            not isinstance(discovered_topic, DiscoveredTopic)
+            or not _clean_non_empty_str(discovered_topic.label)
+            or not discovered_topic.evidence_ids
+        ):
+            return _blocked("TOPIC_METADATA_INVALID")
+
     if discovery_result is None:
         return _blocked("DISCOVERY_RUN_UNAVAILABLE")
 
-    meta = discovery_result.metadata
+    res_prov = _clean_non_empty_str(getattr(discovery_result, "provenance_document_id", None))
+    if res_prov is None:
+        return _blocked("PROVENANCE_MISSING")
+    if res_prov != document.document_id:
+        return _blocked("DOCUMENT_MISMATCH")
+
+    meta = discovery_result.metadata if isinstance(discovery_result.metadata, Mapping) else {}
+    res_run_id = _clean_non_empty_str(meta.get("run_id"))
+    if res_run_id is None:
+        return _blocked("RUN_ID_MISSING")
+    if topic_discovery_run_id is not _UNSET and res_run_id != _clean_non_empty_str(topic_discovery_run_id):
+        return _blocked("DISCOVERY_RUN_UNAVAILABLE")
+
+    raw_origin = meta.get("origin")
+    origin_val = getattr(raw_origin, "value", raw_origin)
+    clean_origin = _clean_non_empty_str(origin_val)
+    if clean_origin is None:
+        return _blocked("ORIGIN_MISSING")
+    if clean_origin == "SYNTHETIC_REFERENCE":
+        return _blocked("SYNTHETIC_REFERENCE_ORIGIN")
+
     disc_status = str(meta.get("status") or "NOT_RECORDED")
     snap = check_document_snapshot(meta, document)
     if snap.status == SnapshotStatus.MISMATCH:
@@ -139,20 +211,202 @@ def select_verification_results(
     consistency_results: Sequence[ConsistencyResult],
     document_id: str,
     discovery_run_id: str | None,
-    topic: DiscoveredTopic,
+    topic: DiscoveredTopic | None,
+    *,
+    detection_runs: Sequence[TopicDetectionResult] | None = None,
 ) -> tuple[ConsistencyResult, ...]:
     """
     Risultati di verifica di QUESTO topic in QUESTA run Discovery, in ordine cronologico.
-    L'associazione usa document_id + discovery_run_id + UID del topic (contenuto validato): nessuna corrispondenza per label.
+    L'associazione usa document_id + discovery_run_id + UID del topic (contenuto validato) +
+    detection_run_id valido (e, quando `detection_runs` è fornito, provenienza `DISCOVERY_VERIFICATION`
+    compatibile): nessuna corrispondenza per label e nessun legame con `MANUAL_DETECTION`.
     """
-    if not discovery_run_id:
+    clean_run_id = _clean_non_empty_str(discovery_run_id)
+    clean_doc_id = _clean_non_empty_str(document_id)
+    if clean_run_id is None or clean_doc_id is None or not isinstance(topic, DiscoveredTopic):
         return ()
-    uid = compute_discovered_topic_uid(discovery_run_id, topic)
-    return tuple(
-        c for c in consistency_results
-        if c.document_id == document_id
-        and c.discovery_run_id == discovery_run_id
-        and c.metadata.get("discovery_topic_uid") == uid
+    uid = compute_discovered_topic_uid(clean_run_id, topic)
+    selected: list[ConsistencyResult] = []
+    for c in consistency_results:
+        if c.document_id != clean_doc_id:
+            continue
+        if _clean_non_empty_str(c.discovery_run_id) != clean_run_id:
+            continue
+        det_run_id = _clean_non_empty_str(c.detection_run_id)
+        if det_run_id is None:
+            continue
+        c_meta = c.metadata if isinstance(c.metadata, Mapping) else {}
+        if c_meta.get("discovery_topic_uid") != uid:
+            continue
+        if detection_runs is not None:
+            det_run = _find_detection(detection_runs, det_run_id)
+            if det_run is None or getattr(det_run, "provenance_document_id", None) != clean_doc_id:
+                continue
+            det_meta = det_run.metadata if isinstance(det_run.metadata, Mapping) else {}
+            if det_meta.get("origin_flow") != "DISCOVERY_VERIFICATION":
+                continue
+            verified_disc = _clean_non_empty_str(det_meta.get("verified_discovery_run_id"))
+            if verified_disc is not None and verified_disc != clean_run_id:
+                continue
+        selected.append(c)
+    return tuple(selected)
+
+
+def has_unverifiable_verification_records(
+    consistency_results: Sequence[ConsistencyResult],
+    document_id: str,
+    discovery_run_id: str | None,
+    topic: DiscoveredTopic | None,
+    *,
+    detection_runs: Sequence[TopicDetectionResult] | None = None,
+) -> bool:
+    """
+    Rileva in modo fail-closed se esistono record `ConsistencyResult` riferiti a questo topic
+    che sono stati scartati perché privi di provenienza valida o compatibile (es. `discovery_run_id`
+    o `detection_run_id` mancanti, `document_id` incoerente a parità di run, `origin_flow` manuale
+    invece di `DISCOVERY_VERIFICATION`, o `verified_discovery_run_id` discordante).
+    Ignora i record legittimamente appartenenti ad altre esecuzioni di Discovery o ad altri topic.
+    """
+    clean_doc_id = _clean_non_empty_str(document_id)
+    if clean_doc_id is None or not isinstance(topic, DiscoveredTopic):
+        return False
+    clean_label = _clean_non_empty_str(topic.label)
+    if clean_label is None:
+        return False
+    target_key = clean_label.casefold()
+    clean_run_id = _clean_non_empty_str(discovery_run_id)
+    valid_set = set(
+        id(v)
+        for v in select_verification_results(
+            consistency_results,
+            clean_doc_id,
+            clean_run_id,
+            topic,
+            detection_runs=detection_runs,
+        )
+    )
+
+    for c in consistency_results:
+        if id(c) in valid_set:
+            continue
+        if _clean_non_empty_str(getattr(c, "topic_label", None)) is None:
+            continue
+        if c.topic_label.strip().casefold() != target_key:
+            continue
+        c_disc_id = _clean_non_empty_str(getattr(c, "discovery_run_id", None))
+        c_doc_id = _clean_non_empty_str(getattr(c, "document_id", None))
+
+        # Se il record dichiara esplicitamente un'ALTRA run di Discovery valida sullo stesso documento,
+        # appartiene a quell'altra run (es. due run Discovery distinte in sessione) e non è un errore di questa card.
+        if c_doc_id == clean_doc_id and c_disc_id is not None and clean_run_id is not None and c_disc_id != clean_run_id:
+            continue
+        # Se il record appartiene a un altro documento e non cita questa specifica run di Discovery, ignoralo.
+        if c_doc_id != clean_doc_id and (clean_run_id is None or c_disc_id != clean_run_id):
+            continue
+        # Se sulla stessa run esistono due topic omonimi distinti, un record valido per l'ALTRO omonimo
+        # ha UID valido diverso ma `origin_flow == DISCOVERY_VERIFICATION` e ID completi: non segnalarlo come corrotto.
+        if (
+            c_doc_id == clean_doc_id
+            and clean_run_id is not None
+            and c_disc_id == clean_run_id
+            and _clean_non_empty_str(getattr(c, "detection_run_id", None)) is not None
+        ):
+            c_meta = c.metadata if isinstance(c.metadata, Mapping) else {}
+            c_uid = _clean_non_empty_str(c_meta.get("discovery_topic_uid"))
+            expected_uid = compute_discovered_topic_uid(clean_run_id, topic)
+            if c_uid is not None and c_uid != expected_uid:
+                if detection_runs is None:
+                    continue
+                det_r = _find_detection(detection_runs, c.detection_run_id)
+                det_m = det_r.metadata if (det_r is not None and isinstance(det_r.metadata, Mapping)) else {}
+                if (
+                    det_r is not None
+                    and getattr(det_r, "provenance_document_id", None) == clean_doc_id
+                    and det_m.get("origin_flow") == "DISCOVERY_VERIFICATION"
+                    and _clean_non_empty_str(det_m.get("verified_discovery_run_id")) in (None, clean_run_id)
+                ):
+                    continue
+        return True
+    return False
+
+
+def build_manual_detection_correlation_note(
+    *,
+    document_id: str,
+    topic_label: str,
+    detection_runs: Sequence[TopicDetectionResult],
+    card_discovery_run_id: str | None,
+    topic_verifications: Sequence[ConsistencyResult] = (),
+) -> str | None:
+    """
+    Costruisce la nota di ancoraggio SOLO quando coesistono:
+    1. una verifica indipendente (`Prova del Nove`) effettiva e validata sulla card di Discovery corrente,
+       con `discovery_run_id` e `detection_run_id` non vuoti e compatibili con `card_discovery_run_id`
+       e `document_id` (`origin_flow == 'DISCOVERY_VERIFICATION'`);
+    2. una `Topic Detection` normale separata (`origin_flow == 'MANUAL_DETECTION'`) sullo stesso documento
+       e con la medesima etichetta tematica.
+
+    Non mostra MAI questo messaggio per una semplice Detection normale in assenza di una Prova del Nove
+    validata sulla card, e non inventa né sostituisce mai identificativi mancanti o incompatibili.
+    """
+    if not topic_verifications:
+        return None
+
+    clean_doc_id = _clean_non_empty_str(document_id)
+    clean_label = _clean_non_empty_str(topic_label)
+    clean_card_run_id = _clean_non_empty_str(card_discovery_run_id)
+    if clean_doc_id is None or clean_label is None or clean_card_run_id is None:
+        return None
+
+    latest_cons = topic_verifications[-1]
+    verif_disc_run_id = _clean_non_empty_str(getattr(latest_cons, "discovery_run_id", None))
+    verif_det_run_id = _clean_non_empty_str(getattr(latest_cons, "detection_run_id", None))
+    if (
+        getattr(latest_cons, "document_id", None) != clean_doc_id
+        or verif_disc_run_id is None
+        or verif_det_run_id is None
+        or verif_disc_run_id != clean_card_run_id
+    ):
+        return None
+
+    # La Detection della Prova del Nove deve esistere in sessione, appartenere al documento,
+    # avere `origin_flow == 'DISCOVERY_VERIFICATION'` ed essere compatibile con `verif_disc_run_id`.
+    verif_det = _find_detection(detection_runs, verif_det_run_id)
+    if verif_det is None or getattr(verif_det, "provenance_document_id", None) != clean_doc_id:
+        return None
+    v_meta = verif_det.metadata if isinstance(verif_det.metadata, Mapping) else {}
+    if v_meta.get("origin_flow") != "DISCOVERY_VERIFICATION":
+        return None
+    v_linked_disc = _clean_non_empty_str(v_meta.get("verified_discovery_run_id"))
+    if v_linked_disc is not None and v_linked_disc != verif_disc_run_id:
+        return None
+
+    target_key = clean_label.casefold()
+    manual_dets = [
+        r for r in detection_runs
+        if getattr(r, "provenance_document_id", None) == clean_doc_id
+        and isinstance(getattr(r, "metadata", None), Mapping)
+        and r.metadata.get("origin_flow") == "MANUAL_DETECTION"
+        and _clean_non_empty_str(r.metadata.get("run_id")) is not None
+        and _clean_non_empty_str(r.metadata.get("run_id")) != verif_det_run_id
+        and r.topic.label.strip().casefold() == target_key
+    ]
+    if not manual_dets:
+        return None
+
+    latest_m = manual_dets[-1]
+    m_meta = latest_m.metadata if isinstance(latest_m.metadata, Mapping) else {}
+    m_run_id = _clean_non_empty_str(m_meta.get("run_id"))
+    if m_run_id is None:
+        return None
+    m_mode = "Sola label" if m_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
+    m_decision = latest_m.decision.value if hasattr(latest_m.decision, "value") else str(latest_m.decision)
+
+    return (
+        f"📌 **Nota di correlazione indipendente**: Nella sessione esiste anche una Detection manuale per '{clean_label}' "
+        f"(Run `{m_run_id}`, input: {m_mode}) con esito **{m_decision}**. "
+        f"La verifica sopra visualizzata è ancorata unicamente alla specifica Discovery (Run `{verif_disc_run_id}`) "
+        "e non viene alterata da nuove inferenze indipendenti."
     )
 
 
@@ -218,8 +472,12 @@ def describe_verification_outcome(result: ConsistencyResult) -> VerificationOutc
 
 
 def _find_detection(runs: Sequence[TopicDetectionResult], run_id: str | None) -> TopicDetectionResult | None:
+    clean_run_id = _clean_non_empty_str(run_id)
+    if clean_run_id is None:
+        return None
     for r in runs:
-        if run_id and str(r.metadata.get("run_id", "")).strip() == str(run_id).strip():
+        meta = r.metadata if isinstance(r.metadata, Mapping) else {}
+        if _clean_non_empty_str(meta.get("run_id")) == clean_run_id:
             return r
     return None
 

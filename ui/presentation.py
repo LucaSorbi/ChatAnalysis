@@ -47,16 +47,23 @@ from ai.lmstudio import (
 from pathlib import Path
 
 from ai.models import TopicDecision, TopicDetectionResult, TopicDiscoveryResult
-from analysis.models import ConsistencyStatus, OperationalProfile, resolve_operational_profile
+from analysis.models import (
+    ConsistencyStatus,
+    InsufficientContextHeadroomError,
+    OperationalProfile,
+    resolve_operational_profile,
+)
 from analysis.export import SemanticVerificationExportError
 from analysis.verification import DocumentSnapshotMismatchError
 from ui.verification import (
     BLOCK_MESSAGES,
+    build_manual_detection_correlation_note,
     describe_export_error,
     describe_verification_outcome,
     evaluate_verification_preconditions,
     export_semantic_verification_json,
     find_discovery_run,
+    has_unverifiable_verification_records,
     select_verification_results,
 )
 from analysis.checkpoint import AnalysisCheckpointStore
@@ -95,7 +102,7 @@ from ui.models import (
     SourceFormat,
     TopicFilterDecision,
 )
-from typing import Any
+from typing import Any, Mapping
 from ai.chunking import profile_document_for_analysis
 from analysis.progress import AnalysisProgressEvent
 from ui.progress_view import build_progress_view
@@ -286,7 +293,7 @@ def render_overview() -> None:
         )
         col1, _ = st.columns([1, 2])
         with col1:
-            if st.button("🚀 Carica Dataset Dimostrativo", use_container_width=True):
+            if st.button("🚀 Carica Dataset Dimostrativo", width="stretch"):
                 state.load_demo_dataset()
                 st.rerun()
         return
@@ -429,7 +436,7 @@ def render_overview() -> None:
             curr_status = doc.metadata.get("multimodal_status")
             if curr_status in ("PARTIAL", "FAILED"):
                 btn_label = "🔁 Riprova elaborazione media"
-            if st.button(btn_label, use_container_width=True):
+            if st.button(btn_label, width="stretch"):
                 with st.spinner("Elaborazione multimediale locale in corso..."):
                     try:
                         registry = state.get_media_asset_registry(doc.document_id)
@@ -1024,7 +1031,7 @@ def render_discovery_diagnostics(
         if table_rows:
             import pandas as pd
             df_diag = pd.DataFrame(table_rows)
-            st.dataframe(df_diag, use_container_width=True, hide_index=True)
+            st.dataframe(df_diag, width="stretch", hide_index=True)
         else:
             if filter_failed:
                 st.info("Nessun blocco fallito presente.")
@@ -1275,13 +1282,16 @@ def render_topics() -> None:
 
                 st.info(f"**Motivazione AI (Rationale):** {last_det.rationale}")
 
-                mod_name = meta.get("model", "n/a")
+                mod_name = meta.get("model") or "n/a"
                 lat = meta.get("latency_seconds")
                 lat_str = f"{lat:.2f}s" if isinstance(lat, (int, float)) else "n/a"
-                run_id_val = meta.get("run_id", "n/a")
-                chunk_c = meta.get("chunk_count", 1)
-                comp_c = meta.get("completed_chunk_count", 1)
-                fail_c = meta.get("failed_chunk_count", 0)
+                raw_det_run_id = meta.get("run_id")
+                clean_det_run_id = raw_det_run_id.strip() if isinstance(raw_det_run_id, str) and raw_det_run_id.strip() else None
+                run_id_val = clean_det_run_id or "non disponibile"
+                det_widget_suffix = clean_det_run_id or f"idx_{len(state.get_detection_results())}"
+                chunk_c = meta.get("chunk_count") if meta.get("chunk_count") is not None else 1
+                comp_c = meta.get("completed_chunk_count") if meta.get("completed_chunk_count") is not None else 1
+                fail_c = meta.get("failed_chunk_count") if meta.get("failed_chunk_count") is not None else 0
 
                 st.caption(f"Run ID: `{run_id_val}` | Flusso: `{origin_flow_str}` | Input: `{input_mode_str}` | Provenance: `{last_det.provenance_document_id}`")
                 st.caption(f"Modello: `{mod_name}` | Latenza: `{lat_str}` | Chunk analizzati: `{comp_c}/{chunk_c}` (falliti: {fail_c})")
@@ -1317,7 +1327,7 @@ def render_topics() -> None:
                     redact_det = st.checkbox(
                         "🔒 Modalità privacy avanzata (oscura label, descrizioni e motivazioni)",
                         value=True,
-                        key=f"chk_privacy_det_{run_id_val}",
+                        key=f"chk_privacy_det_{det_widget_suffix}",
                     )
                 det_json_str, det_filename = export_topic_detection_json(
                     detection_result=last_det,
@@ -1331,23 +1341,29 @@ def render_topics() -> None:
                         data=det_json_str,
                         file_name=det_filename,
                         mime="application/json",
-                        key=f"btn_download_detection_json_{run_id_val}",
+                        key=f"btn_download_detection_json_{det_widget_suffix}",
                     )
 
                 # Controllo storico e correlazione inferenze precedenti per questo topic
                 doc_analysis = state.get_document_analysis_state(doc.document_id)
                 prior_runs = [
                     r for r in doc_analysis.detection_runs
-                    if r.topic.label.strip().casefold() == last_det.topic.label.strip().casefold()
-                    and r.metadata.get("run_id") != run_id_val
+                    if r is not last_det
+                    and getattr(r, "provenance_document_id", None) == doc.document_id
+                    and r.topic.label.strip().casefold() == last_det.topic.label.strip().casefold()
+                    and (
+                        clean_det_run_id is None
+                        or (r.metadata if isinstance(r.metadata, Mapping) else {}).get("run_id") != clean_det_run_id
+                    )
                 ]
                 if prior_runs:
                     with st.expander(f"📜 Storico inferenze per '{last_det.topic.label}' ({len(prior_runs)} precedenti in sessione)"):
                         for p_idx, prev_r in enumerate(reversed(prior_runs), start=1):
-                            p_meta = prev_r.metadata or {}
+                            p_meta = prev_r.metadata if isinstance(prev_r.metadata, Mapping) else {}
                             p_flow = "Discovery Verification" if p_meta.get("origin_flow") == "DISCOVERY_VERIFICATION" else "Detection Manuale"
                             p_mode = "Sola label" if p_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
-                            p_run_id_str = str(p_meta.get('run_id', 'n/a'))
+                            raw_p_run = p_meta.get("run_id")
+                            p_run_id_str = raw_p_run.strip() if isinstance(raw_p_run, str) and raw_p_run.strip() else "non disponibile"
                             st.markdown(
                                 f"- **Run #{p_idx}:** `{p_run_id_str}` | **Flusso:** {p_flow} | **Input:** {p_mode} | **Esito:** `{prev_r.decision.value}`"
                             )
@@ -1365,15 +1381,22 @@ def render_topics() -> None:
                                 key=f"btn_download_prior_detection_{p_run_id_str}_{p_idx}",
                             )
 
-                # Se presente una verifica da discovery con esito diverso, mostra chiarimento esplicito
-                disc_verifs = [r for r in prior_runs if r.metadata.get("origin_flow") == "DISCOVERY_VERIFICATION"]
-                if disc_verifs and origin_flow == "MANUAL_DETECTION":
+                # Se presente una verifica da discovery validata con esito diverso, mostra chiarimento esplicito
+                disc_verifs = [
+                    r for r in prior_runs
+                    if isinstance(r.metadata, Mapping)
+                    and r.metadata.get("origin_flow") == "DISCOVERY_VERIFICATION"
+                    and isinstance(r.metadata.get("run_id"), str)
+                    and r.metadata.get("run_id").strip()
+                ]
+                if disc_verifs and origin_flow == "MANUAL_DETECTION" and clean_det_run_id is not None:
                     last_v = disc_verifs[-1]
+                    last_v_run_id = last_v.metadata["run_id"].strip()
                     if last_v.decision != last_det.decision:
                         st.info(
-                            f"ℹ️ **Discrepanza tra inferenze indipendenti**: Una precedente verifica da Topic Discovery (Run `{last_v.metadata.get('run_id')}`) "
+                            f"ℹ️ **Discrepanza tra inferenze indipendenti**: Una precedente verifica da Topic Discovery (Run `{last_v_run_id}`) "
                             f"ha prodotto **{last_v.decision.value}** (utilizzando come input la descrizione estratta da Discovery), "
-                            f"mentre questa Detection manuale (Run `{run_id_val}`, input: {input_mode_str}) "
+                            f"mentre questa Detection manuale (Run `{clean_det_run_id}`, input: {input_mode_str}) "
                             f"ha prodotto **{last_det.decision.value}**. Ciascuna inferenza riflette fedelmente il proprio input e rimane immutabile."
                         )
 
@@ -1399,7 +1422,11 @@ def render_topics() -> None:
                 key="filter_existing_query",
             )
 
-        active_service = state.get_search_service() or service
+        active_service = state.get_search_service() or SearchService(
+            document=doc,
+            detection_results=state.get_detection_results(),
+            discovery_results=state.get_discovery_results(),
+        )
         try:
             det_results = search_topic_detections(
                 search_service=active_service,
@@ -1599,7 +1626,11 @@ def render_topics() -> None:
 
         query_disc = st.text_input("Cerca negli argomenti scoperti", placeholder="Es. logistica, contratti", key="disc_query_input")
 
-        active_service = state.get_search_service() or service
+        active_service = state.get_search_service() or SearchService(
+            document=doc,
+            detection_results=state.get_detection_results(),
+            discovery_results=state.get_discovery_results(),
+        )
         try:
             disc_results = search_topic_discoveries(
                 search_service=active_service,
@@ -1642,12 +1673,16 @@ def render_topics() -> None:
             with st.container(border=True):
                 st.markdown(f"### 💡 {hit.label}")
                 st.markdown(f"**Sintesi AI:** {hit.description}")
-                d_meta = hit.metadata or {}
-                d_run_id = d_meta.get("run_id", "n/a")
-                d_chunk_c = d_meta.get("chunk_count", 1)
-                d_comp_c = d_meta.get("completed_chunk_count", 1)
-                d_fail_c = d_meta.get("failed_chunk_count", 0)
-                d_prov = d_meta.get("provenance_document_id", "n/a")
+                d_meta = hit.metadata if isinstance(hit.metadata, Mapping) else {}
+                raw_run_id = d_meta.get("run_id")
+                card_run_id = raw_run_id.strip() if isinstance(raw_run_id, str) and raw_run_id.strip() else None
+                raw_prov = d_meta.get("provenance_document_id")
+                card_prov_id = raw_prov.strip() if isinstance(raw_prov, str) and raw_prov.strip() else None
+                d_run_id = card_run_id or "non disponibile"
+                d_chunk_c = d_meta.get("chunk_count") if d_meta.get("chunk_count") is not None else 1
+                d_comp_c = d_meta.get("completed_chunk_count") if d_meta.get("completed_chunk_count") is not None else 1
+                d_fail_c = d_meta.get("failed_chunk_count") if d_meta.get("failed_chunk_count") is not None else 0
+                d_prov = card_prov_id or "non disponibile"
                 st.caption(f"Discovery Run ID: `{d_run_id}` | Chunk analizzati: `{d_comp_c}/{d_chunk_c}` (falliti: {d_fail_c}) | Provenance: `{d_prov}`")
                 st.write(f"**Evidenze di supporto:** {len(hit.evidence_ids)} sezioni")
 
@@ -1666,14 +1701,17 @@ def render_topics() -> None:
                             )
 
                 # Verifica di consistenza semantica indipendente (decisioni e testi: ui/verification.py)
-                card_run_id = hit.metadata.get("run_id")
                 source_run = find_discovery_run(
                     card_run_id,
                     doc.document_id if doc is not None else "",
                     list(doc_analysis.discovery_runs) + list(state.get_discovery_results()),
                 )
                 pre = evaluate_verification_preconditions(
-                    doc, source_run, topic_provenance_document_id=hit.metadata.get("provenance_document_id")
+                    doc,
+                    source_run,
+                    topic_provenance_document_id=card_prov_id,
+                    topic_discovery_run_id=card_run_id,
+                    discovered_topic=hit.raw_result,
                 )
                 verify_col, _ = st.columns([2, 3])
                 with verify_col:
@@ -1696,11 +1734,12 @@ def render_topics() -> None:
                         st.error("Nessun documento di conversazione disponibile.")
                     elif not doc.all_evidence_sections:
                         st.error("Documento privo di evidenze forensi: impossibile avviare la Topic Detection.")
+                    elif not pre.can_verify or card_run_id is None or source_run is None:
+                        st.error(pre.block_message or BLOCK_MESSAGES["RUN_ID_MISSING"])
                     else:
-                        disc_prov_id = hit.metadata.get("provenance_document_id")
                         try:
                             validate_discovery_provenance(
-                                discovery_provenance_id=disc_prov_id,
+                                discovery_provenance_id=card_prov_id,
                                 active_document_id=doc.document_id,
                             )
                         except TopicProvenanceMismatchError as p_err:
@@ -1716,6 +1755,7 @@ def render_topics() -> None:
                                     det_res, consistency_res = execute_discovery_verification(
                                         document=doc,
                                         discovered_topic=hit.raw_result,
+                                        discovery_result=source_run,
                                         discovery_run_id=card_run_id,
                                         client=client,
                                         model_id=raw_model,
@@ -1756,10 +1796,16 @@ def render_topics() -> None:
                                 progress_placeholder.empty()
                                 st.error(f"Errore durante la verifica con Topic Detection: {type(exc).__name__}: {exc}")
 
-                # Esito della verifica di QUESTO topic in QUESTA run (identità: run + UID del topic, mai la label)
+                # Esito della verifica di QUESTO topic in QUESTA run (identità: run + UID del topic + provenienza Detection)
+                doc_analysis = state.get_document_analysis_state(doc.document_id)
+                cons_for_doc = state.get_consistency_results(doc.document_id) if doc is not None else ()
                 topic_verifications = (
                     select_verification_results(
-                        state.get_consistency_results(doc.document_id), doc.document_id, card_run_id, hit.raw_result
+                        cons_for_doc,
+                        doc.document_id,
+                        card_run_id,
+                        hit.raw_result,
+                        detection_runs=doc_analysis.detection_runs,
                     )
                     if doc is not None else ()
                 )
@@ -1807,24 +1853,29 @@ def render_topics() -> None:
                         st.caption(
                             "I risultati restano in memoria solo finché la sessione è attiva: esporta il JSON per conservare la verifica."
                         )
-
-                # Controllo correlazione se esiste una detection manuale separata per questo topic
-                doc_analysis = state.get_document_analysis_state(doc.document_id)
-                manual_dets = [
-                    r for r in doc_analysis.detection_runs
-                    if r.topic.label.strip().casefold() == hit.label.strip().casefold()
-                    and r.metadata.get("origin_flow") == "MANUAL_DETECTION"
-                ]
-                if manual_dets:
-                    latest_m = manual_dets[-1]
-                    m_meta = latest_m.metadata or {}
-                    m_mode = "Sola label" if m_meta.get("query_mode") == "LABEL_ONLY" else "Label + Descrizione"
-                    st.info(
-                        f"📌 **Nota di correlazione indipendente**: Nella sessione esiste anche una Detection manuale per '{hit.label}' "
-                        f"(Run `{m_meta.get('run_id')}`, input: {m_mode}) con esito **{latest_m.decision.value}**. "
-                        f"La verifica sopra visualizzata è ancorata unicamente alla specifica Discovery (Run `{target_run_id}`) "
-                        f"e non viene alterata da nuove inferenze indipendenti."
+                elif doc is not None and has_unverifiable_verification_records(
+                    cons_for_doc,
+                    doc.document_id,
+                    card_run_id,
+                    hit.raw_result,
+                    detection_runs=doc_analysis.detection_runs,
+                ):
+                    st.caption(
+                        "⚠️ Verifica non attestabile: record di consistenza privo di provenienza valida o compatibile "
+                        "(nessun esito di Prova del Nove mostrato)."
                     )
+
+                # Nota di ancoraggio: mostrata SOLO in presenza di una Prova del Nove effettiva e validata sulla card
+                # accompagnata da una Detection manuale separata sullo stesso documento.
+                correlation_note = build_manual_detection_correlation_note(
+                    document_id=doc.document_id,
+                    topic_label=hit.label,
+                    detection_runs=doc_analysis.detection_runs,
+                    card_discovery_run_id=card_run_id,
+                    topic_verifications=topic_verifications,
+                )
+                if correlation_note:
+                    st.info(correlation_note)
 
         # Sezione opzionale di riferimento per la modalità DEMO
         if state.get_dataset_mode() == DatasetMode.DEMO:
