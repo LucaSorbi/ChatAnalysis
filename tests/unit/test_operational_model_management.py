@@ -720,10 +720,15 @@ def test_40_no_amd_a8_hardcoded_in_system_status():
         assert "DEFERRED" not in str(val)
 
 
+def _system_status_page() -> None:
+    """Script AppTest: la schermata di stato non e' piu' nel menu, ma `render_system_status` resta disponibile."""
+    from ui import presentation
+
+    presentation.render_system_status()
+
+
 def test_41_no_hardware_block_in_system_status_page():
-    at = AppTest.from_file(APP_PATH, default_timeout=15)
-    at.run()
-    at.sidebar.radio[0].set_value("6. Sistema / Stato")
+    at = AppTest.from_function(_system_status_page, default_timeout=15)
     at.run()
     assert not at.exception
     subheaders = [sh.value for sh in at.subheader]
@@ -732,9 +737,7 @@ def test_41_no_hardware_block_in_system_status_page():
 
 
 def test_42_no_rinvio_benchmark_in_system_status_page():
-    at = AppTest.from_file(APP_PATH, default_timeout=15)
-    at.run()
-    at.sidebar.radio[0].set_value("6. Sistema / Stato")
+    at = AppTest.from_function(_system_status_page, default_timeout=15)
     at.run()
     all_text = " ".join([m.value for m in at.markdown] + [i.value for i in at.info] + [w.value for w in at.warning])
     assert "Nota Rinvio Benchmark" not in all_text

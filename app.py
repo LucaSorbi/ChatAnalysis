@@ -54,7 +54,6 @@ NAV_SECTIONS = [
     "3. Esplora conversazione",
     "4. Ricerca",
     "5. Analisi topic",
-    "6. Sistema / Stato",
 ]
 
 selected_page = st.sidebar.radio(
@@ -83,5 +82,3 @@ elif selected_page == "4. Ricerca":
     presentation.render_search()
 elif selected_page == "5. Analisi topic":
     presentation.render_topics()
-elif selected_page == "6. Sistema / Stato":
-    presentation.render_system_status()

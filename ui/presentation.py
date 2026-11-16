@@ -281,22 +281,98 @@ def render_backend_error_details(exc: Exception) -> None:
 
 
 
-def render_overview() -> None:
-    """Schermata Panoramica: riepilogo aggregato e metriche forensi."""
-    st.header("📊 Panoramica Documento")
+def render_home() -> None:
+    """Pagina iniziale: presentazione del sistema, stato rapido e primi passi.
 
-    if not state.is_dataset_loaded():
-        st.info("Nessun dataset attualmente caricato in memoria.")
+    Solo componenti nativi Streamlit (nessun unsafe_allow_html).
+    Nessuna connessione automatica: LM Studio viene interrogato solo su richiesta.
+    """
+    st.title("🔍 Forensic Chat Analysis & Search")
+    st.caption(
+        "Analisi semantica locale di conversazioni digitali: "
+        "Topic Discovery, Topic Detection e verifica indipendente."
+    )
+    st.markdown(
+        "Il sistema affianca l'analista nell'esplorazione di grandi acquisizioni di chat, "
+        "senza sostituirne il giudizio: ogni risultato è collegato alle evidenze da cui deriva."
+    )
+
+    # --- Stato rapido -------------------------------------------------------
+    s1, s2, s3 = st.columns(3)
+    with s1:
+        if state.is_dataset_loaded():
+            doc = state.get_conversation_document()
+            n_msg = len(doc.bundles) if doc else 0
+            st.metric("Dataset", state.get_dataset_mode().value, f"{n_msg} messaggi", delta_color="off")
+        else:
+            st.metric("Dataset", "Nessuno")
+    with s2:
+        lm = st.session_state.get("home_lm_status")
+        st.metric("LM Studio", "Non verificato" if lm is None else ("Disponibile" if lm[0] else "Non raggiungibile"))
+        if lm is not None and not lm[0] and lm[1]:
+            st.caption(lm[1])
+        if st.button("Verifica connessione", key="home_check_lm"):
+            ok, _models, err = check_lm_studio_status()
+            st.session_state["home_lm_status"] = (ok, err)
+            st.rerun()
+    with s3:
+        st.metric("Rete", "Solo locale")
+        st.caption("Nessuna telemetria, nessun servizio esterno.")
+
+    st.divider()
+
+    # --- Funzioni principali ------------------------------------------------
+    st.subheader("Cosa puoi fare")
+    f1, f2, f3 = st.columns(3)
+    with f1:
+        with st.container(border=True):
+            st.markdown("#### 🏷️ Topic Discovery")
+            st.write("Individua gli argomenti della conversazione senza un elenco predefinito, anche quando sono impliciti.")
+    with f2:
+        with st.container(border=True):
+            st.markdown("#### 🎯 Topic Detection")
+            st.write("Parte da un argomento indicato da te e restituisce `PRESENT`, `ABSENT` o `UNCERTAIN`, con le evidenze.")
+    with f3:
+        with st.container(border=True):
+            st.markdown("#### ✅ Verifica indipendente")
+            st.write("Sottopone un topic della Discovery a una nuova Detection e confronta i due risultati.")
+
+    st.divider()
+
+    # --- Come iniziare ------------------------------------------------------
+    st.subheader("Come iniziare")
+    g1, g2 = st.columns([2, 1])
+    with g1:
         st.markdown(
-            "Per esplorare le funzionalità del sistema locale, è possibile caricare il "
-            "**dataset dimostrativo sintetico** oppure importare un file reale nella sezione Importazione."
+            "1. **Importa** una chat nella sezione *2. Importazione* "
+            "(WhatsApp, Cellebrite UFED).\n"
+            "2. **Esplora** la conversazione nella sezione *3. Esplora conversazione*.\n"
+            "3. **Analizza** gli argomenti nella sezione *5. Analisi topic*."
         )
-        col1, _ = st.columns([1, 2])
-        with col1:
-            if st.button("🚀 Carica Dataset Dimostrativo", width="stretch"):
+    with g2:
+        with st.container(border=True):
+            st.caption("Vuoi solo provare il sistema?")
+            if st.button("🚀 Carica Dataset Dimostrativo", width="stretch", key="home_demo"):
                 state.load_demo_dataset()
                 st.rerun()
+
+    # --- Principi -----------------------------------------------------------
+    with st.expander("Principi di sicurezza e tracciabilità"):
+        st.markdown(
+            "- 🔒 **Esecuzione locale**: i modelli girano in LM Studio sul tuo computer.\n"
+            "- 📜 **Provenienza**: ogni evidenza ha un identificativo che risale al messaggio d'origine.\n"
+            "- 🧾 **Originale ≠ derivato**: trascrizioni, OCR e traduzioni restano separati dal dato originale.\n"
+            "- 🧑‍⚖️ **Supporto all'analista**: i risultati vanno verificati, non sono prove autonome."
+        )
+
+
+def render_overview() -> None:
+    """Schermata Panoramica: riepilogo aggregato e metriche forensi."""
+    if not state.is_dataset_loaded():
+        render_home()
         return
+
+    st.header("📊 Panoramica Documento")
 
     is_real_file = state.get_dataset_mode() == DatasetMode.FILE
     ing_summary = state.get_ingestion_summary()

@@ -689,7 +689,6 @@ class TestFullPipelineE2E:
             "3. Esplora conversazione",
             "4. Ricerca",
             "5. Analisi topic",
-            "6. Sistema / Stato",
         ]
         for p in pages:
             at.sidebar.radio[0].set_value(p)
@@ -742,7 +741,6 @@ class TestFullPipelineE2E:
             "3. Esplora conversazione",
             "4. Ricerca",
             "5. Analisi topic",
-            "6. Sistema / Stato",
         ]
         for p in pages:
             at.sidebar.radio[0].set_value(p)

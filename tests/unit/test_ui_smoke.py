@@ -42,6 +42,13 @@ from ui.models import (
 APP_PATH = str(Path(__file__).resolve().parents[2] / "app.py")
 
 
+def _system_status_page() -> None:
+    """Script AppTest: la schermata di stato non e' piu' nel menu, ma `render_system_status` resta disponibile."""
+    from ui import presentation
+
+    presentation.render_system_status()
+
+
 def _build_test_real_file_result() -> IngestionResult:
     msg1 = _create_synthetic_message("msg1", "1", "Ciao Mondo", "msgstore_db")
     msg2 = _create_synthetic_message("msg2", "2", "Come stai?", "msgstore_db")
@@ -129,7 +136,6 @@ class TestUiSmoke:
             "3. Esplora conversazione",
             "4. Ricerca",
             "5. Analisi topic",
-            "6. Sistema / Stato",
         ]
 
         for p in pages:
@@ -355,9 +361,7 @@ class TestUiSmoke:
 
     def test_system_status_page_portable_no_hardware_block(self):
         """Verifica che la pagina Sistema / Stato sia portabile, priva di vecchi hardware block e mostri LM Studio / Benchmark."""
-        at = AppTest.from_file(APP_PATH, default_timeout=15)
-        at.run()
-        at.sidebar.radio[0].set_value("6. Sistema / Stato")
+        at = AppTest.from_function(_system_status_page, default_timeout=15)
         at.run()
 
         assert not at.exception

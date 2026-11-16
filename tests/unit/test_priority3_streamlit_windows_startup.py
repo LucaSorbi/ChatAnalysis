@@ -79,7 +79,7 @@ class TestPriority3StreamlitWindowsStartup:
         assert any("Detection" in lbl for lbl in tab_labels), f"Scheda Detection non trovata in tabs: {tab_labels}"
 
         # 3. Naviga su tutte le altre sezioni per garantire assenza di crash
-        for page in ["1. Panoramica", "3. Esplora conversazione", "4. Ricerca", "6. Sistema / Stato"]:
+        for page in ["1. Panoramica", "3. Esplora conversazione", "4. Ricerca", "5. Analisi topic"]:
             at.sidebar.radio[0].set_value(page)
             at.run()
             assert not at.exception, f"Errore nella navigazione verso {page}: {at.exception}"
