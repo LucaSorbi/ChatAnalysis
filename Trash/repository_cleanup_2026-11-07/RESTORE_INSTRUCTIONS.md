@@ -20,10 +20,12 @@ python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix tests/
 python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --path RUNBOOK_UBUNTU.txt
 ```
 
-### Ripristinare la suite di test per sviluppatori (`tests/` e fixture `test_data/`)
+### Suite di test (`tests/`) e fixture (`test_data/`)
+> **Aggiornamento 2026-11-16**: la suite di test e i dati sintetici sono stati riportati nella radice con `git mv` (`tests/`, `test_data/`; `python -m pytest`).
+> In questa cartella restano solo 12 test che verificano file archiviati (richiedono `scripts/`, `docs/` e file della radice dell'archivio).
+> `--prefix tests/` ripristina esattamente quei 12 file in `tests/unit/`; `--prefix test_data/` non ha più nulla da ripristinare.
 ```powershell
-python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix tests/
-python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix test_data/
+python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix tests/ --dry-run
 ```
 
 ### Ripristinare integralmente tutti i file spostati

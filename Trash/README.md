@@ -20,6 +20,8 @@ che prima affollavano la radice del repository. Nulla è stato cancellato; la st
 | `Materiale_Obsoleto/` | script di prova (`scratch/`) non più usati |
 | `Privato_Locale/` | **solo sul tuo PC**, ignorata da git (tranne il suo README) |
 | `inventory/` | inventario SHA-256 di tutti i file tracciati PRIMA e DOPO l'intervento |
+| `repository_cleanup_2026-11-07/` | file non operativi della pulizia del 7/11 (runbook, `scripts/`, benchmark, `docs/`) e i 12 test che li verificano; manifest e `restore_from_trash.py` |
+| `quarantena_dati_sensibili_2026-11-16/` | artefatti di esecuzione potenzialmente derivati da chat reali, spostati dalla radice il 16/11 (elenco e SHA-256 in `LEGGIMI_QUARANTENA.md`) |
 | `MANIFEST.csv` | per ogni file: `MOVED` (hash verificato), `KEPT`, `PRIVATE_NOT_MOVED`, `UNKNOWN_NOT_MOVED` |
 
 ## Come consultare
@@ -38,9 +40,21 @@ successivi. Un file di hash non prova la propria integrità: la prova indipenden
 (57 voci `R100`). Dettagli in `inventory/README.md`. Gli script storici `scripts/create_*_archive.py` sono documentati come
 non eseguibili in `scripts/HISTORICAL_ARCHIVE_BUILDERS.md`.
 
+## Aggiornamento del 2026-11-16
+
+- I file elencati in `MANIFEST.csv` come `PRIVATE_NOT_MOVED` / `UNKNOWN_NOT_MOVED` per i checkpoint di backup, `scratch/`,
+  `scratch_call_385_request_body.json` e `chat-20261021T182727Z-1-001.zip` sono stati **spostati** in
+  `quarantena_dati_sensibili_2026-11-16/` con `git mv`. `MANIFEST.csv` è un registro storico e non è stato modificato:
+  per quei file riporta ancora il vecchio percorso in radice.
+- La suite di test è stata riportata in `tests/` (nella radice); in `repository_cleanup_2026-11-07/tests/` restano solo i 12 test
+  che verificano file archiviati. Il test di integrità descritto sotto è tra questi e **non fa più parte della suite**:
+  se lo si ripristina, `test_trash_contains_no_databases_archives_or_wal_files_outside_private_area` e
+  `test_suspicious_versioned_files_are_listed_as_exceptions_not_moved` falliscono perché la quarantena contiene `.db` e `.zip`
+  tracciati e perché quei file non sono più in radice. Fallisce inoltre il controllo dell'impronta di `run_benchmark.sh`: il file archiviato non ha più l'impronta congelata (il contenuto è cambiato dopo il commit `6461512`, non solo le fine riga). Sono incoerenze note e documentate, non difetti del codice.
+
 ## Verifica
 
-`tests/unit/test_trash_archive_integrity.py` controlla che ogni file `MOVED` esista al nuovo percorso con lo stesso
+`repository_cleanup_2026-11-07/tests/unit/test_trash_archive_integrity.py` (archiviato, vedi sopra) controlla che ogni file `MOVED` esista al nuovo percorso con lo stesso
 SHA-256, che il vecchio percorso sia assente, che nessun codice runtime/test/packaging citi i vecchi percorsi, che
 `.gitignore` ignori solo `Trash/Privato_Locale/` e che in `Trash/` non siano tracciati database, zip o file WAL.
 
