@@ -639,8 +639,12 @@ def test_18_frozen_scientific_benchmark_integrity():
     frozen_expectations = {
         repo_root / "ai" / "experiment.py": "91100C0A84CB4A8B7C2EEF34A06CFF9EC21AA6E6EEC14FFD09CE6FEA8BCEE845",
         repo_root / "ai" / "benchmark.py": "DC57081DBCE3463A8017AA26BB4E4A18889AF0A3296853FE40968561D6D44D36",
-        repo_root / "run_benchmark.sh": "7F9CAE97DF2FAE1BC3B5964E639B9F80E3AC5A388EC9C3E20305FF64D48044A7",
     }
+    # run_benchmark.sh e' stato archiviato in Trash/ (non fa piu' parte della radice del progetto):
+    # se un checkout lo ripristina nella radice, resta soggetto al congelamento.
+    benchmark_script = repo_root / "run_benchmark.sh"
+    if benchmark_script.exists():
+        frozen_expectations[benchmark_script] = "7F9CAE97DF2FAE1BC3B5964E639B9F80E3AC5A388EC9C3E20305FF64D48044A7"
 
     for file_path, expected_hash in frozen_expectations.items():
         assert file_path.exists(), f"File scientifico mancante: {file_path}"

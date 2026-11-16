@@ -178,6 +178,7 @@ class TestFasterWhisperTranscriberUnit:
 
     def test_global_model_load_failure_raises_audio_model_load_error(self, monkeypatch):
         """Se l'inizializzazione del modello fallisce a livello globale, deve sollevare AudioModelLoadError."""
+        pytest.importorskip("faster_whisper", reason="dipendenza opzionale (extra 'stt') non installata")
         from multimodal.transcriber import AudioModelLoadError
         import unittest.mock as mock
 
