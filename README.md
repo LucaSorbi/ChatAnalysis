@@ -124,16 +124,21 @@ ChatAnalysis/
 ├── ui/                           # Logica applicativa, stato sessione, dataset DEMO e pagine Streamlit
 ├── unified/                      # Costruzione dei messaggi unificati con catena di provenienza
 ├── validation/                   # Validazione strutturale non distruttiva dei record grezzi
-├── test_data/
+├── tests/                        # Suite Pytest (`python -m pytest`): unit, integration, smoke, fixtures, conftest.py
+├── test_data/                    # SOLO dati sintetici (vedi test_data/README.md)
 │   ├── cloud_e2e/                # Asset sintetici congelati referenziati da ai/cloud_experiment.py
-│   └── synthetic_smoke/          # Chat sintetiche non sensibili (.txt e .zip) per test post-installazione
+│   ├── synthetic_smoke/          # Chat sintetiche non sensibili (.txt e .zip) per test post-installazione
+│   ├── whatsapp_export/          # msgstore.db, wa.db e allegati finti (WhatsApp Images/Audio/Video) usati dai test
+│   ├── cellebrite_export/        # messages.csv, messages.json, report.xml sintetici usati dai test
+│   ├── fixtures/lmstudio/        # Risposte JSON di esempio dell'API LM Studio usate dai test
+│   └── synthetic_large/          # Chat sintetica di grandi dimensioni (test di scalabilità)
 ├── output/
 │   └── .gitkeep                  # Cartella predefinita per report del modulo CLI profiler (ignorata da Git)
 ├── .checkpoints/                 # Creata/usata a runtime per il database SQLite checkpoints.db (ignorata da Git)
-└── Trash/                        # Archivio NON operativo (storico tesi + repository_cleanup_2026-11-07/)
+└── Trash/                        # Archivio NON operativo (storico tesi, repository_cleanup_2026-11-07/, quarantena_dati_sensibili_2026-11-16/)
 ```
 
-> **Natura della cartella `Trash/`**: `Trash/` **non** è mai letta né utilizzata dall'applicazione durante l'installazione o l'esecuzione. Conserva in modo reversibile la documentazione storica di sviluppo e, nella sottocartella `Trash/repository_cleanup_2026-11-07/`, tutti i file non essenziali all'operatività (vecchi runbook, script di debug, artefatti temporanei e suite di test per sviluppatori) corredati da `manifest_cleanup.tsv`, `manifest_cleanup.json` e istruzioni di ripristino non distruttivo.
+> **Natura della cartella `Trash/`**: `Trash/` **non** è mai letta né utilizzata dall'applicazione durante l'installazione o l'esecuzione. Conserva in modo reversibile la documentazione storica di sviluppo e, nella sottocartella `Trash/repository_cleanup_2026-11-07/`, i file non essenziali all'operatività (vecchi runbook, script di debug e di rilascio, artefatti temporanei e i soli test che verificano questi file archiviati) corredati da `manifest_cleanup.tsv`, `manifest_cleanup.json` e istruzioni di ripristino non distruttivo. La suite di test che verifica il codice dell'applicazione **non** è più in `Trash/`: è in `tests/` (Sezione 18.4). La sottocartella `Trash/quarantena_dati_sensibili_2026-11-16/` contiene artefatti di esecuzione che possono derivare da conversazioni reali (Sezione 17, punto 5).
 
 ---
 
@@ -1070,6 +1075,10 @@ Quando utilizzi l'applicazione su conversazioni reali (che possono contenere dat
 4. **Integrità e tracciabilità (SHA-256) e limiti dell'automazione**:
    - Ogni file importato viene sottoposto a calcolo **SHA-256** in streaming (visibile in `1. Panoramica` e `2. Importazione`) senza modificare neppure un byte del file originale.
    - L'analisi AI è soggetta ai limiti intrinseci dei modelli linguistici (possibili omissioni di linguaggio allusivo/ironico o interpretazioni imprecise): verifica sempre ogni affermazione risalendo tramite `Evidence ID` al messaggio originale.
+5. **Artefatti di esecuzione e repository Git**:
+   - Database di checkpoint, copie di backup, cartelle di prova (`scratch/`), corpi di richieste al modello (`scratch_call_*.json`) e archivi di chat (`chat-*.zip`) possono contenere testo o risultati derivati da conversazioni reali. Non vanno mai committati: il `.gitignore` esclude `.checkpoints/`, `forensic_provenance_audit_backup_*/`, `scratch/`, `scratch_call_*.json` e `chat-*-001.zip`.
+   - Gli artefatti di questo tipo già presenti nel repository sono stati spostati in `Trash/quarantena_dati_sensibili_2026-11-16/` (elenco con SHA-256 in `LEGGIMI_QUARANTENA.md`). **Spostarli non li elimina da Git**: `Trash/` è tracciata e, se il repository è pubblico, il contenuto e la cronologia restano consultabili. Per rimuoverli davvero servono un repository privato oppure la riscrittura della cronologia (`git filter-repo` e push forzato).
+   - `test_data/` contiene esclusivamente dati sintetici (`Contatto_001`, numeri a zeri, testi «Messaggio di test sintetico NN»): non sostituirli mai con estrazioni reali.
 
 ---
 
@@ -1099,28 +1108,41 @@ Non eliminare né spostare:
 - `.git/` (cronologia e integrità del repository Git);
 - `app.py`, `pyproject.toml`, `MANIFEST.in`, `.streamlit/config.toml`, `scripts/run_streamlit_windows.ps1`;
 - le 12 cartelle dei pacchetti Python (`ai/`, `analysis/`, `core/`, `entity_resolution/`, `importer/`, `multimodal/`, `normalization/`, `profiler/`, `search/`, `ui/`, `unified/`, `validation/`);
-- `test_data/cloud_e2e/` e `test_data/synthetic_smoke/`;
+- `test_data/cloud_e2e/` e `test_data/synthetic_smoke/` (necessari alla verifica post-installazione e al runner sperimentale); `tests/` e il resto di `test_data/` servono solo agli sviluppatori e ai test (Sezione 18.4);
 - `.checkpoints/` mentre desideri conservare la possibilità di riprendere analisi già svolte.
 
-### 18.4 Ripristino non distruttivo dalla cartella `Trash/repository_cleanup_2026-11-07/` e suite di test per sviluppatori
-Durante la pulizia del repository nessun file è stato cancellato: tutti i file non richiesti dall'installazione e dall'uso operativo (inclusi i vecchi runbook di sviluppo, gli script ausiliari e **la suite di test automatici `tests/` con le relative fixture di collaudo `test_data/`**, che **non fanno parte della distribuzione operativa minima**) sono conservati intatti in:
-- `Trash/repository_cleanup_2026-11-07/`
+### 18.4 Suite di test (`tests/`) e ripristino non distruttivo dalla cartella `Trash/`
+La suite Pytest per sviluppatori è in **`tests/`** (con i dati sintetici in `test_data/`) e **non fa parte del pacchetto distribuito** (`MANIFEST.in` esclude `tests` e `test_data`). Non serve per usare l'applicazione. Per eseguirla, dalla root del progetto:
+- Windows (PowerShell):
+  ```powershell
+  .\.venv\Scripts\python.exe -m pip install -e ".[dev,ui,ocr,stt,image]"
+  .\.venv\Scripts\python.exe -m pytest
+  ```
+- Ubuntu (bash):
+  ```bash
+  ./.venv/bin/python -m pip install -e ".[dev,ui,ocr,stt,image]"
+  ./.venv/bin/python -m pytest
+  ```
 
-All'interno di quella sottocartella trovi:
-- `manifest_cleanup.tsv` e `manifest_cleanup.json`: elenco completo di ogni file spostato con percorso originario, percorso in `Trash`, motivazione, dimensione e **hash SHA-256 verificato prima e dopo lo spostamento**;
+`python -m pytest` esegue unit e integration test; i test marcati `smoke` (che richiedono modelli o servizi reali) sono esclusi per impostazione predefinita e si lanciano con `python -m pytest -m smoke`. Dettagli in `tests/README.md`.
+
+> **Test che dipendono dall'ambiente** (non indicano un difetto dell'applicazione): i moduli basati su `streamlit.testing` richiedono l'extra `ui` e, se Streamlit non è installato, vengono **saltati con un avviso** (`tests/conftest.py`) invece di far fallire la raccolta; i test su OCR e trascrizione richiedono Tesseract e Faster-Whisper (extra `ocr` e `stt`, più il binario nativo, vedi Sezione 8) e si saltano se mancano. I database WhatsApp sintetici `test_data/whatsapp_export/msgstore.db` e `wa.db` sono versionati. Il controllo SHA-256 congelato del codice scientifico verifica `ai/experiment.py` e `ai/benchmark.py`; `run_benchmark.sh` viene verificato solo se è presente nella radice del progetto (è archiviato in `Trash/`).
+
+**Cosa è rimasto in `Trash/repository_cleanup_2026-11-07/`**: documentazione storica, runbook, script di debug e di rilascio (`scripts/`, tranne `scripts/run_streamlit_windows.ps1`), file di benchmark e 12 test che verificano proprio questi file archiviati (`test_packaging_release`, `test_detection_ui_and_discovery_minor_fixes`, `test_checkpoint_preflight_resume`, `test_runbook_smoke`, `test_smoke_operational_ai`, `test_model_resolution_audit`, `test_verify_package_manifest`, `test_analysis_export`, `test_audit_rebuild_blockers_20261024`, `test_checkpoint_safe_diagnostics`, `test_sanitize_dataset`, `test_trash_archive_integrity`). Nulla è stato cancellato: nella sottocartella trovi
+- `manifest_cleanup.tsv` e `manifest_cleanup.json`: elenco di ogni file spostato con percorso originario, percorso in `Trash`, motivazione, dimensione e **hash SHA-256 verificato prima e dopo lo spostamento** (la colonna `source_rel_path` riporta anche i test e i dati che oggi sono stati riportati in `tests/` e `test_data/`: per quelli non serve alcun ripristino);
 - `RESTORE_INSTRUCTIONS.md` e lo script `restore_from_trash.py`, che ripristina file singoli o intere cartelle verificando l'hash SHA-256 e **rifiutando qualsiasi sovrascrittura accidentale**.
 
 **Esempi pratici di ripristino (dalla root del progetto)**:
-- **Vedere in anteprima (`--dry-run`) cosa verrebbe ripristinato senza toccare alcun file**:
+- **Anteprima (`--dry-run`) senza toccare alcun file**:
   - Windows (PowerShell):
     ```powershell
-    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix tests/ --dry-run
+    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix scripts/ --dry-run
     ```
   - Ubuntu (bash):
     ```bash
-    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix tests/ --dry-run
+    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix scripts/ --dry-run
     ```
-- **Ripristinare un singolo file specifico** (sostituendo `<PERCORSO_RELATIVO>` con un valore della colonna `source_rel_path` di `manifest_cleanup.tsv`):
+- **Ripristinare un singolo file** (sostituendo `<PERCORSO_RELATIVO>` con un valore della colonna `source_rel_path` di `manifest_cleanup.tsv`):
   - Windows (PowerShell):
     ```powershell
     .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --path "<PERCORSO_RELATIVO>"
@@ -1129,29 +1151,9 @@ All'interno di quella sottocartella trovi:
     ```bash
     ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --path "<PERCORSO_RELATIVO>"
     ```
-- **Per sviluppatori — ripristinare la suite di test Pytest (`tests/` e fixture `test_data/`) ed eseguirla**:
-  - Windows (PowerShell):
-    ```powershell
-    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix tests/
-    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix test_data/
-    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix scripts/
-    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix docs/
-    .\.venv\Scripts\python.exe -m pip install -e ".[dev,ui,ocr,stt,image]"
-    .\.venv\Scripts\python.exe -m pytest -q
-    ```
-  - Ubuntu (bash):
-    ```bash
-    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix tests/
-    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix test_data/
-    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix scripts/
-    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix docs/
-    ./.venv/bin/python -m pip install -e ".[dev,ui,ocr,stt,image]"
-    ./.venv/bin/python -m pytest -q
-    ```
+- **Eseguire anche i 12 test archiviati**: servono `scripts/`, `docs/` e alcuni file della radice dell'archivio (i runbook `*.md` e `RUNBOOK_UBUNTU.txt`, i `benchmark_*.json`, `run_benchmark.sh`, `compute_manifest.py` e simili). Ripristinali con `--prefix scripts/`, `--prefix docs/` e `--path <nome file>`, oppure usa `--all` (sempre senza sovrascrivere i file esistenti), poi copia i 12 file `test_*.py` da `Trash/repository_cleanup_2026-11-07/tests/unit/` in `tests/unit/`. Ripristinare `scripts/` riporta nella radice molti file che l'applicazione non usa: fallo solo se serve davvero.
 
-> **Perché servono anche `scripts/` e `docs/`**: molti test importano moduli da `scripts/` e leggono file di documentazione o di benchmark che dopo la pulizia si trovano solo in `Trash/`. Ripristinando soltanto `tests/` e `test_data/`, questi test falliscono con `ModuleNotFoundError` o `FileNotFoundError`. Servono inoltre alcuni file nella radice di `Trash/repository_cleanup_2026-11-07/` (i runbook `*.md` e `RUNBOOK_UBUNTU.txt`, i `benchmark_*.json` e le misure di scalabilità `*_scalability_measurements.json`, `large_file_benchmark_results.json`, `benchmark_frozen_sha256.txt`, `run_benchmark.sh`, `requirements_audit.txt`, `compute_manifest.py`): ripristinali uno per uno con `--path <nome file>` oppure ripristina tutto con `restore_from_trash.py --all` (sempre in modo non distruttivo e senza sovrascrivere i file esistenti).
->
-> **Test che dipendono dall'ambiente** (non indicano un difetto dell'applicazione): quelli basati su `streamlit.testing` richiedono l'extra `ui`; quelli su OCR e trascrizione richiedono Tesseract e Faster-Whisper (extra `ocr` e `stt`, più il binario nativo, vedi Sezione 8); il test sull'impronta SHA-256 congelata di `run_benchmark.sh` può fallire per le differenze di fine riga (CRLF su Windows, LF su Linux); quelli sui database WhatsApp (`msgstore.db`, `wa.db`) richiedono fixture che vanno rigenerate con `scripts/sanitize_synthetic_dataset.py` se mancano. Se `pytest` segnala errori di raccolta su un file, controlla prima che le dipendenze della riga di installazione siano presenti.
+I file spostati in `Trash/quarantena_dati_sensibili_2026-11-16/` si rimettono al loro posto con i comandi `git mv` elencati in `LEGGIMI_QUARANTENA.md` (non hanno un manifest di `restore_from_trash.py`).
 
 ### 18.5 Come segnalare un problema in sicurezza
 Se devi segnalare un errore tecnico a uno sviluppatore o relatore:
@@ -1179,6 +1181,8 @@ Per il massimo rigore metodologico, la tabella seguente distingue ciò che è st
 | **Suddivisione microchunk, checkpoint SQLite e export `SAFE_REDACTED`** | Split multi-microchunk (`20` messaggi → `3` microchunk), salvataggio e ripresa da SQLite (`0` chiamate LLM ripetute al secondo passaggio) ed esportazione JSON `SAFE_REDACTED` | **Verificato e superato**. |
 | **Interfaccia utente Streamlit (6 pagine al momento della verifica) e server HTTP** | Rendering programmatico `AppTest` di tutte le sezioni della sidebar allora presenti (sei; la voce `6. Sistema / Stato` è stata poi rimossa dal menu e le sezioni attuali sono cinque) + avvio reale `streamlit run app.py` con verifica HTTP `200 ok` su `/_stcore/health` + CLI `python -m profiler` | **Verificato e superato su Windows**. |
 
+**Verifica successiva (2026-11-16, intervento di pulizia dei dati sensibili e ripristino dei test)**: eseguita in un ambiente **Linux isolato (Python 3.13), non su Windows**, senza Streamlit reale, `ijson` reale, Faster-Whisper e Tesseract (per `ijson` è stata usata un'emulazione basata sul modulo `json`, solo per la verifica). Esito: `2023` test passati, `2` saltati, `5` esclusi perché marcati `smoke`; i `12` moduli che richiedono `streamlit.testing` non sono stati eseguiti. Il diff rispetto allo stato precedente non contiene modifiche al codice dell'applicazione (`ai/`, `analysis/`, `core/`, `entity_resolution/`, `importer/`, `multimodal/`, `normalization/`, `profiler/`, `search/`, `ui/`, `unified/`, `validation/`, `app.py`, `pyproject.toml`); la compilazione e l'import di tutti i moduli sono riusciti. I test dell'interfaccia vanno rieseguiti sulla macchina di lavoro con `python -m pytest` (Sezione 18.4). Il numero totale di test non è confrontabile con la baseline `2.614` della tabella, che includeva anche i test degli script oggi archiviati.
+
 ### 19.2 Prove NON eseguite in questa sessione e limiti noti
 
 1. **Installazione ed esecuzione nativa su Ubuntu**: tutta la procedura Ubuntu (Sezioni 6, 7.1, 8.1, 10.2) è stata redatta verificando puntualmente i vincoli reali di `pyproject.toml` (`Python >= 3.12`), dei pacchetti `apt` (`tesseract-ocr`, `tesseract-ocr-ita`, `libfuse2t64`/`libfuse2`) e dei moduli Python multipiattaforma, ma **non è stata eseguita su una macchina o VM Ubuntu durante questa sessione** (svolta interamente su host Windows).
@@ -1190,6 +1194,6 @@ Per il massimo rigore metodologico, la tabella seguente distingue ciò che è st
    - Nessuna indicizzazione semantica tramite embedding / database vettoriali (la sezione `4. Ricerca` è intenzionalmente deterministica e lessicale per garantire riproducibilità forense).
 
 ### 19.3 Ambienti hardware e software registrati
-- **Host Ubuntu (test iniziali e benchmark di ottobre 2026)**: Ubuntu 22.04.5 LTS, Intel Core i5-9600K (6 core), 31 GB di RAM, NVIDIA GeForce GTX TITAN X (12 GB di VRAM, driver 580), Python 3.12.4. I rapporti `hardware_and_environment.txt` di ogni esecuzione sono conservati nell'archivio `chat-20261021T182727Z-1-001.zip` nella radice del repository.
+- **Host Ubuntu (test iniziali e benchmark di ottobre 2026)**: Ubuntu 22.04.5 LTS, Intel Core i5-9600K (6 core), 31 GB di RAM, NVIDIA GeForce GTX TITAN X (12 GB di VRAM, driver 580), Python 3.12.4. I rapporti `hardware_and_environment.txt` di ogni esecuzione sono conservati nell'archivio `chat-20261021T182727Z-1-001.zip`, ora in `Trash/quarantena_dati_sensibili_2026-11-16/` (era nella radice del repository).
 - **Host Windows 11 (sessione di pulizia e verifiche del §19.1)**: l'hardware di questo computer **non è registrato** nei file del repository. I benchmark di sola persistenza dei checkpoint (`benchmark_checkpoint_persistence_results.json`, archiviato in `Trash/repository_cleanup_2026-11-07/`) riportano Windows 11 e Python 3.14.7: non coinvolgono STT né CTranslate2, quindi non contraddicono la raccomandazione di usare Python 3.12 per l'uso operativo.
 - **Conseguenza metodologica**: le misure di tempo di due esecuzioni sono confrontabili solo se eseguite sulla stessa macchina e con la stessa configurazione di LM Studio.
