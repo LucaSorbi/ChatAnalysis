@@ -143,7 +143,7 @@ La tabella seguente distingue i **requisiti minimi verificati nel codice/ambient
 
 | Componente | Minimo verificato / richiesto dal codice | Configurazione consigliata (orientativa) | Note tecniche |
 | :--- | :--- | :--- | :--- |
-| **Sistema Operativo** | **Windows 10 / 11 (64-bit)** *(verificato)*; **Ubuntu 24.04 LTS / 22.04 LTS (x86_64)** *(procedura prevista)* | Windows 11 64-bit o Ubuntu 24.04 LTS Desktop 64-bit | Ubuntu 24.04 LTS include nativamente Python 3.12; su Ubuntu 22.04 LTS Python 3.12 va installato a parte. |
+| **Sistema Operativo** | **Windows 10 / 11 (64-bit)** *(verificato)*; **Ubuntu 24.04 LTS / 22.04 LTS (x86_64)** *(24.04: procedura prevista; 22.04.5: usata per i test iniziali e i benchmark, vedi Sezione 19.3)* | Windows 11 64-bit o Ubuntu 24.04 LTS Desktop 64-bit | Ubuntu 24.04 LTS include nativamente Python 3.12; su Ubuntu 22.04 LTS Python 3.12 va installato a parte. |
 | **Python** | **`>= 3.12`** (vincolo in `pyproject.toml`) | **Python 3.12.x (64-bit)** *(verificato con 3.12.10)* | Preferire **Python 3.12** rispetto a versioni sperimentali più recenti (es. 3.14/3.15) per avere wheel precompilate di `av`, `ctranslate2` e `faster-whisper`. |
 | **CPU** | x86_64 multi-core con supporto **AVX2** | 8+ core moderni (Intel Core i7 / AMD Ryzen 7 o superiore) | Le istruzioni AVX2 sono richieste da LM Studio (`llama.cpp`) e CTranslate2 su PC x86_64. |
 | **RAM di sistema** | **4 GB** (solo consultazione/ricerca senza LLM); **8–12 GB** con LLM 7B su sola CPU | **16 GB – 32 GB RAM** | Il modello `Qwen2.5-7B-Instruct` `Q4_K_M` con contesto `8192` occupa da solo circa **5,5 – 6,5 GB** tra pesi e KV cache, oltre a sistema operativo, browser e Python. |
@@ -236,7 +236,7 @@ Risultato atteso: `Installazione Python Windows OK`. Prosegui ora con le sezioni
 
 ## 6. Installazione su Ubuntu da zero (Terminale bash)
 
-> **Stato di verifica**: la procedura seguente è conforme alle dipendenze reali dichiarate in `pyproject.toml` e nel codice sorgente, ma **è una procedura prevista e non eseguita direttamente in questa sessione di lavoro** (svolta su host Windows 11).
+> **Stato di verifica**: la procedura seguente è conforme alle dipendenze reali dichiarate in `pyproject.toml` e nel codice sorgente, ma **non è stata eseguita direttamente in questa sessione di lavoro** (svolta su host Windows 11). I test iniziali sui modelli e i benchmark di ottobre 2026 sono invece stati eseguiti su un host Ubuntu 22.04.5 LTS (dettagli nella Sezione 19.3).
 
 ### Release Ubuntu e versione Python richiesta
 Il file `pyproject.toml` richiede tassativamente **`Python >= 3.12`**:
@@ -544,13 +544,14 @@ Questi valori sono costanti architetturali definite nei moduli Python e **non po
 
 ## 11. Guida all'uso dettagliata passo per passo
 
-Una volta aperta l'interfaccia nel browser su **`http://127.0.0.1:8501`**, sulla sinistra trovi il menu laterale **`Navigazione`** articolato in sei sezioni numerate:
+Una volta aperta l'interfaccia nel browser su **`http://127.0.0.1:8501`**, sulla sinistra trovi il menu laterale **`Navigazione`** articolato in cinque sezioni numerate:
 1. **`1. Panoramica`**
 2. **`2. Importazione`**
 3. **`3. Esplora conversazione`**
 4. **`4. Ricerca`**
 5. **`5. Analisi topic`**
-6. **`6. Sistema / Stato`**
+
+Se nessun dataset è caricato, `1. Panoramica` mostra la **pagina iniziale**: una breve presentazione del sistema, lo stato rapido (dataset, LM Studio, rete), i primi passi e il pulsante **`🚀 Carica Dataset Dimostrativo`**. LM Studio viene interrogato solo quando premi **`Verifica connessione`**: l'applicazione non si collega in automatico.
 
 Di seguito trovi il flusso operativo completo nell'ordine raccomandato.
 
@@ -990,6 +991,69 @@ Non confondere mai un malfunzionamento informatico con un esito epistemico prude
 
 ---
 
+### 16.14 «Elaborazione multimediale precedente non riuscita (motori non disponibili o errore)»
+- **Sintomo**: in `1. Panoramica` o `3. Esplora conversazione`, nella sezione `🎬 Elaborazione Multimediale Locale (On-Demand)`, compare uno di questi messaggi:
+  - `❌ Elaborazione multimediale precedente non riuscita (motori non disponibili o errore). È possibile riprovare.`
+  - dopo il clic: `Elaborazione non riuscita: nessun media estratto con successo (motori non disponibili).`
+  - dopo il clic: `Errore elaborazione media: <dettaglio>` (in questo caso il dettaglio indica la causa).
+  - `⚠️ Elaborazione multimediale parziale…`: alcuni allegati sono riusciti e altri no (non è un errore dei motori: vedi il punto 4 delle cause).
+- **Che cosa significa**: lo stato è `FAILED`, cioè nessun allegato è stato elaborato con successo. Il pulsante `🔁 Riprova elaborazione media` ripete l'operazione dall'inizio, ma se il motivo non è stato rimosso fallirà di nuovo.
+- **Cause plausibili, dalla più frequente**:
+  1. **Tesseract non trovato** nel `PATH` (OCR) o senza le lingue `ita` ed `eng`. Nella metrica `OCR (Immagini)` compare `Non installato`.
+  2. **`pytesseract` non installato**, oppure **Faster-Whisper / CTranslate2 non importabili** (STT). Nella metrica `Speech-to-Text (Audio)` compare `Non installato`.
+  3. **Streamlit avviato prima di una modifica al `PATH`**: il terminale già aperto non vede il nuovo percorso di Tesseract.
+  4. **La chat è stata importata senza i file multimediali** (ad esempio solo il `.txt`): i messaggi citano allegati, ma i file non sono disponibili. Reimporta l'archivio `.zip` esportato da WhatsApp **con media**. Questo vale anche per il **dataset dimostrativo**, i cui allegati sono solo simulati: l'elaborazione multimediale non è significativa su quel dataset.
+  5. **Primo uso di Faster-Whisper senza connessione**: il modello `base` viene scaricato al primo utilizzo (Sezione 8.2).
+- **Diagnosi rapida (devono stampare `True` entrambe le righe)**:
+  - Windows (PowerShell):
+    ```powershell
+    .\.venv\Scripts\python.exe -c "from multimodal.ocr import TesseractImageTextExtractor; from multimodal.transcriber import FasterWhisperTranscriber; print('OCR disponibile:', TesseractImageTextExtractor.is_available()); print('STT disponibile:', FasterWhisperTranscriber.is_available())"
+    ```
+  - Ubuntu (bash):
+    ```bash
+    source .venv/bin/activate
+    python -c "from multimodal.ocr import TesseractImageTextExtractor; from multimodal.transcriber import FasterWhisperTranscriber; print('OCR disponibile:', TesseractImageTextExtractor.is_available()); print('STT disponibile:', FasterWhisperTranscriber.is_available())"
+    ```
+- **Rimedio per l'OCR (Tesseract)**:
+  - Windows (PowerShell):
+    ```powershell
+    Get-Command tesseract -ErrorAction SilentlyContinue
+    Test-Path "C:\Program Files\Tesseract-OCR\tesseract.exe"
+    # Se il file esiste ma il comando non viene trovato, aggiungi il percorso SOLO a questa finestra:
+    $env:PATH = "C:\Program Files\Tesseract-OCR;" + $env:PATH
+    tesseract --list-langs
+    .\.venv\Scripts\python.exe -c "import pytesseract; print(pytesseract.get_tesseract_version())"
+    ```
+    Poi avvia Streamlit **da questa stessa finestra** (Sezione 10.1). Per rendere la modifica permanente usa i comandi del Passo 3 della Sezione 8.1 e riapri PowerShell. Se `tesseract --list-langs` non mostra `ita`, rilancia l'installer UB Mannheim e spunta `Italian`.
+  - Ubuntu (bash):
+    ```bash
+    sudo apt update && sudo apt install -y tesseract-ocr tesseract-ocr-ita tesseract-ocr-eng
+    tesseract --list-langs
+    source .venv/bin/activate
+    python -c "import pytesseract; print(pytesseract.get_tesseract_version())"
+    ```
+- **Rimedio per l'audio (Faster-Whisper)**:
+  - Windows (PowerShell):
+    ```powershell
+    .\.venv\Scripts\python.exe -m pip install -e ".[ui,ocr,stt,image]"
+    .\.venv\Scripts\python.exe -c "import ctranslate2, faster_whisper; print('faster-whisper pronto')"
+    .\.venv\Scripts\python.exe -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8'); print('Modello STT base pronto in cache locale')"
+    ```
+  - Ubuntu (bash):
+    ```bash
+    source .venv/bin/activate
+    pip install -e ".[ui,ocr,stt,image]"
+    python -c "import ctranslate2, faster_whisper; print('faster-whisper pronto')"
+    python -c "from faster_whisper import WhisperModel; WhisperModel('base', device='cpu', compute_type='int8'); print('Modello STT base pronto in cache locale')"
+    lscpu | grep -i avx2
+    ```
+    L'ultimo comando deve mostrare `avx2`: senza di esso CTranslate2 non funziona (vedi Sezione 16.4).
+- **Dopo aver sistemato i motori**:
+  1. Se hai fermato Streamlit, riavvialo e **reimporta la chat**: il documento in sessione non viene conservato, mentre i checkpoint SQLite già salvati restano su disco.
+  2. Apri `3. Esplora conversazione` e premi **`🔁 Riprova elaborazione media`** (o `🔁 Riprova elaborazione media parziale`).
+  3. Esegui sempre l'OCR e la trascrizione **prima** di `Topic Discovery` (Sezione 11, Passo 3): modificano l'impronta del documento e invalidano i checkpoint creati prima.
+- **Se dopo la diagnosi entrambi i motori risultano `True` ma l'errore persiste**: verifica di aver importato l'archivio `.zip` con i media (causa 4) e leggi il messaggio `Errore elaborazione media: …` mostrato dopo il clic, che contiene la causa tecnica.
+
 ## 17. Privacy e sicurezza operativa
 
 Quando utilizzi l'applicazione su conversazioni reali (che possono contenere dati personali, sensibili, sanitari o giudiziari di terzi), tieni presenti sia le protezioni implementate nel codice sia le responsabilità dell'ambiente operativo:
@@ -1070,16 +1134,24 @@ All'interno di quella sottocartella trovi:
     ```powershell
     .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix tests/
     .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix test_data/
-    .\.venv\Scripts\python.exe -m pip install -e ".[dev]"
+    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix scripts/
+    .\.venv\Scripts\python.exe Trash\repository_cleanup_2026-11-07\restore_from_trash.py --prefix docs/
+    .\.venv\Scripts\python.exe -m pip install -e ".[dev,ui,ocr,stt,image]"
     .\.venv\Scripts\python.exe -m pytest -q
     ```
   - Ubuntu (bash):
     ```bash
     ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix tests/
     ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix test_data/
-    ./.venv/bin/python -m pip install -e ".[dev]"
+    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix scripts/
+    ./.venv/bin/python Trash/repository_cleanup_2026-11-07/restore_from_trash.py --prefix docs/
+    ./.venv/bin/python -m pip install -e ".[dev,ui,ocr,stt,image]"
     ./.venv/bin/python -m pytest -q
     ```
+
+> **Perché servono anche `scripts/` e `docs/`**: molti test importano moduli da `scripts/` e leggono file di documentazione o di benchmark che dopo la pulizia si trovano solo in `Trash/`. Ripristinando soltanto `tests/` e `test_data/`, questi test falliscono con `ModuleNotFoundError` o `FileNotFoundError`. Servono inoltre alcuni file nella radice di `Trash/repository_cleanup_2026-11-07/` (i runbook `*.md` e `RUNBOOK_UBUNTU.txt`, i `benchmark_*.json` e le misure di scalabilità `*_scalability_measurements.json`, `large_file_benchmark_results.json`, `benchmark_frozen_sha256.txt`, `run_benchmark.sh`, `requirements_audit.txt`, `compute_manifest.py`): ripristinali uno per uno con `--path <nome file>` oppure ripristina tutto con `restore_from_trash.py --all` (sempre in modo non distruttivo e senza sovrascrivere i file esistenti).
+>
+> **Test che dipendono dall'ambiente** (non indicano un difetto dell'applicazione): quelli basati su `streamlit.testing` richiedono l'extra `ui`; quelli su OCR e trascrizione richiedono Tesseract e Faster-Whisper (extra `ocr` e `stt`, più il binario nativo, vedi Sezione 8); il test sull'impronta SHA-256 congelata di `run_benchmark.sh` può fallire per le differenze di fine riga (CRLF su Windows, LF su Linux); quelli sui database WhatsApp (`msgstore.db`, `wa.db`) richiedono fixture che vanno rigenerate con `scripts/sanitize_synthetic_dataset.py` se mancano. Se `pytest` segnala errori di raccolta su un file, controlla prima che le dipendenze della riga di installazione siano presenti.
 
 ### 18.5 Come segnalare un problema in sicurezza
 Se devi segnalare un errore tecnico a uno sviluppatore o relatore:
@@ -1105,7 +1177,7 @@ Per il massimo rigore metodologico, la tabella seguente distingue ciò che è st
 | **Trascrizione audio STT (Faster-Whisper + PyAV + CTranslate2)** | Verifica `FasterWhisperTranscriber.is_available() == True` ed esecuzione reale end-to-end del motore Faster-Whisper + PyAV su allegato `.wav` dentro `.zip` WhatsApp usando il modello locale già in cache (`Systran/faster-whisper-tiny`) | **Verificato su Windows** *(vedi nota sotto sul modello `base`)*. |
 | **Topic Discovery, Topic Detection e Verifica di consistenza («Prova del Nove») — LIVE con LM Studio** | Esecuzione **LIVE reale** contro **LM Studio (`http://127.0.0.1:1234`)** con modello **`qwen2.5-7b-instruct`** caricato su `test_data/synthetic_smoke/synthetic_whatsapp_chat.txt`: Discovery (`COMPLETE`), Verifica di consistenza indipendente (`CONSISTENT`), Detection positiva (`PRESENT`) e negativa (`ABSENT`) | **Verificato LIVE su Windows con LM Studio reale**. |
 | **Suddivisione microchunk, checkpoint SQLite e export `SAFE_REDACTED`** | Split multi-microchunk (`20` messaggi → `3` microchunk), salvataggio e ripresa da SQLite (`0` chiamate LLM ripetute al secondo passaggio) ed esportazione JSON `SAFE_REDACTED` | **Verificato e superato**. |
-| **Interfaccia utente Streamlit (6 pagine) e server HTTP** | Rendering programmatico `AppTest` di tutte le 6 sezioni della sidebar + avvio reale `streamlit run app.py` con verifica HTTP `200 ok` su `/_stcore/health` + CLI `python -m profiler` | **Verificato e superato su Windows**. |
+| **Interfaccia utente Streamlit (6 pagine al momento della verifica) e server HTTP** | Rendering programmatico `AppTest` di tutte le sezioni della sidebar allora presenti (sei; la voce `6. Sistema / Stato` è stata poi rimossa dal menu e le sezioni attuali sono cinque) + avvio reale `streamlit run app.py` con verifica HTTP `200 ok` su `/_stcore/health` + CLI `python -m profiler` | **Verificato e superato su Windows**. |
 
 ### 19.2 Prove NON eseguite in questa sessione e limiti noti
 
@@ -1116,3 +1188,8 @@ Per il massimo rigore metodologico, la tabella seguente distingue ciò che è st
    - Nessuna decifrazione di backup WhatsApp cifrati (`.crypt12`, `.crypt14`, `.crypt15`);
    - Nessun modello Vision attivo per descrivere scene fotografiche prive di testo (solo OCR tramite Tesseract);
    - Nessuna indicizzazione semantica tramite embedding / database vettoriali (la sezione `4. Ricerca` è intenzionalmente deterministica e lessicale per garantire riproducibilità forense).
+
+### 19.3 Ambienti hardware e software registrati
+- **Host Ubuntu (test iniziali e benchmark di ottobre 2026)**: Ubuntu 22.04.5 LTS, Intel Core i5-9600K (6 core), 31 GB di RAM, NVIDIA GeForce GTX TITAN X (12 GB di VRAM, driver 580), Python 3.12.4. I rapporti `hardware_and_environment.txt` di ogni esecuzione sono conservati nell'archivio `chat-20261021T182727Z-1-001.zip` nella radice del repository.
+- **Host Windows 11 (sessione di pulizia e verifiche del §19.1)**: l'hardware di questo computer **non è registrato** nei file del repository. I benchmark di sola persistenza dei checkpoint (`benchmark_checkpoint_persistence_results.json`, archiviato in `Trash/repository_cleanup_2026-11-07/`) riportano Windows 11 e Python 3.14.7: non coinvolgono STT né CTranslate2, quindi non contraddicono la raccomandazione di usare Python 3.12 per l'uso operativo.
+- **Conseguenza metodologica**: le misure di tempo di due esecuzioni sono confrontabili solo se eseguite sulla stessa macchina e con la stessa configurazione di LM Studio.
