@@ -201,3 +201,8 @@ MANIFEST_SHA256.txt
 # =============================================================================
 Trash/Privato_Locale/*
 !Trash/Privato_Locale/README.md
+
+# Artefatti di esecuzione che possono contenere dati derivati da conversazioni reali (vedi Trash/quarantena_dati_sensibili_2026-11-16/)
+/forensic_provenance_audit_backup_*/
+/scratch_call_*.json
+/chat-*-001.zip
